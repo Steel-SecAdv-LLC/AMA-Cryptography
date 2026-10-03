@@ -341,7 +341,10 @@ class TestFileScopedSuppressionsAreRefused:
         Same spelling, different position — so a position-blind pattern would
         break every justified suppression in the tree.
         """
-        source = "def f() -> None:\n    x = 1  # type: ignore[assignment]  -- why (TAG-001)\n"
+        source = (
+            "def f() -> None:\n"
+            "    x = 1  # type: ignore[assignment]  -- narrowed on purpose (TAG-001)\n"
+        )
         assert gate.check_source("pkg/mod.py", source) == []
 
     def test_prose_about_a_directive_is_not_a_directive(self, gate: ModuleType) -> None:
@@ -455,7 +458,9 @@ class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
         self, gate: ModuleType
     ) -> None:
         """The boundary is strict: ON the first statement's line mypy scopes it to that line."""
-        source = _HEADER + "import os  # type: ignore[import-untyped]  -- why (TAG-001)\n"
+        source = _HEADER + (
+            "import os  # type: ignore[import-untyped]  -- untyped on purpose (TAG-001)\n"
+        )
         assert gate.check_source("pkg/mod.py", source) == []
 
     def test_a_type_ignore_between_a_decorator_and_its_def_is_not_file_scoped(
@@ -633,3 +638,312 @@ def test_the_real_tree_carries_none() -> None:
         assert "diagnostic ignored" not in (REPO_ROOT / "src" / "c" / unit).read_text(
             encoding="utf-8"
         ), f"{unit} hides a warning behind a pragma again"
+
+
+# --------------------------------------------------------------------------
+# A justification has to give a reason (INVARIANT-13 condition 3)
+#
+# The separator check alone accepted ``-- (CB-001)``: a separator, a tag, and
+# nothing between them.  Measured at c6326b4, 32 trailing markers in the tree
+# passed that way, including markers a review had reported as having lost
+# their inline reason.  The reason rule refuses an absent reason; it does not
+# grade a present one.
+# --------------------------------------------------------------------------
+
+
+class TestAJustificationGivesAReason:
+    REFUSED: ClassVar[dict[str, str]] = {
+        "tag only": "import os  # noqa: F401 -- (CB-001)\n",
+        "tag after a fmt directive": "import os  # fmt: skip  # noqa: F401 -- (CB-001)\n",
+        "fmt directive after the tag": "import os  # noqa: F401 -- (CB-001)  # fmt: skip\n",
+        "one word": "x = f(y)  # type: ignore[arg-type]  # cast (PQC-002)\n",
+        "same": "import os  # noqa: E402 -- same (KF-003)\n",
+        "ditto": "import os  # noqa: E402 -- ditto (KF-003)\n",
+        "a pointer": "import os  # noqa: E402 -- see the note above (KF-003)\n",
+        # Natural-English paraphrases of the pointers, measured past the
+        # original eleven-word set: a morphological variant ('noted') or one
+        # filler word of three letters ('one', 'too', 'reason') defeated the
+        # all-pointer test while the forms they paraphrase were refused.
+        "a pointer, inflected": "import os  # noqa: E402 -- as noted above (KF-003)\n",
+        "a pointer plus filler": "import os  # noqa: E402 -- same as the one above (KF-003)\n",
+        "a pointer plus 'too'": "import os  # noqa: E402 -- see the note above too (KF-003)\n",
+        "a pointer to a reason": "import os  # noqa: E402 -- same reason here (KF-003)\n",
+        "type-ignore tag only": "import os  # type: ignore[import-not-found]  # (MON-001)\n",
+    }
+    ACCEPTED: ClassVar[dict[str, str]] = {
+        "two words": "import subprocess  # nosec B404 -- fixed argv (AB-001)\n",
+        "type-ignore reason": "x = f(y)  # type: ignore[arg-type]  # bad arity (CAP-003)\n",
+        # The noqa marker borrows the nosec marker's reason on the same line.
+        "stacked markers": "r = Req(u)  # noqa: S310  # nosec B310 -- HTTPS fetch (HF-001)\n",
+        # The rule counts words, not ASCII: two Cyrillic words of nine and
+        # seven letters satisfy it.  The ASCII-only pattern this pins against
+        # refused both of these as giving no reason, shredding the accented
+        # one into fragments its diagnostic then printed (['rifi']).
+        "a reason in Cyrillic": (
+            "import os  # noqa: E402 -- \u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u043e"
+            " \u0432\u0440\u0443\u0447\u043d\u0443\u044e (KM-001)\n"
+        ),
+        "a reason with accents": (
+            "import os  # noqa: E402 -- d\u00e9j\u00e0 v\u00e9rifi\u00e9 (KM-001)\n"
+        ),
+    }
+
+    @pytest.mark.parametrize("label", sorted(REFUSED))
+    def test_an_absent_reason_is_refused(self, gate: ModuleType, label: str) -> None:
+        found = gate.check_source("pkg/mod.py", self.REFUSED[label])
+        assert any("gives no reason" in v for v in found), (label, found)
+
+    @pytest.mark.parametrize("label", sorted(ACCEPTED))
+    def test_a_stated_reason_is_accepted(self, gate: ModuleType, label: str) -> None:
+        assert gate.check_source("pkg/mod.py", self.ACCEPTED[label]) == [], label
+
+    def test_the_words_counted_exclude_tags_codes_and_directives(self, gate: ModuleType) -> None:
+        rest = ": S310  # nosec B310 -- HTTPS fetch (HF-001)  # fmt: skip"
+        assert gate.justification_words(rest) == ["HTTPS", "fetch"]
+
+    def test_the_words_counted_are_unicode_words(self, gate: ModuleType) -> None:
+        """Accented words come back whole, not as their ASCII fragments."""
+        rest = ": E402 -- d\u00e9j\u00e0 v\u00e9rifi\u00e9 (KM-001)"
+        assert gate.justification_words(rest) == ["d\u00e9j\u00e0", "v\u00e9rifi\u00e9"]
+
+
+# --------------------------------------------------------------------------
+# A marker opening a comment-only line
+#
+# The gate skipped every comment-only line as prose.  bandit does not: it
+# applies a ``# nosec`` written on its own line inside a multi-line statement
+# to that statement (the premise test below measures it).  semgrep honours a
+# comment-only ``# nosemgrep`` when its finding starts on the next line and
+# ignores one placed any further above or on a non-first span line (measured,
+# 1.179.0; corrected per AGENTS.md section 6.6 -- this said semgrep ignores
+# the line-before form), so the form is a live suppression the justification
+# rules never examine, or a dead marker that claims one.
+# --------------------------------------------------------------------------
+
+
+class TestAMarkerOnACommentOnlyLine:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            (
+                "def f(\n    pw: str = (\n        # nosec B107 -- default, not a secret (X-001)\n"
+                '        "x"\n    ),\n) -> None:\n    pass\n'
+            ),
+            "# nosemgrep: non-constant-time-comparison -- public label (X-001)\nok = a == b\n",
+            "# nosec-justification: the hash below is SHA-2 only\nx = 1\n",
+        ],
+    )
+    def test_it_is_refused(self, gate: ModuleType, source: str) -> None:
+        found = gate.check_source("pkg/mod.py", source)
+        assert any("comment-only line" in v for v in found), found
+
+    def test_prose_that_mentions_a_marker_is_not_one(self, gate: ModuleType) -> None:
+        source = "# A justified finding carries an inline ``# nosec B105``.\nx = 1\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_bandit_really_applies_a_comment_only_nosec(self, tmp_path: Path) -> None:
+        """The premise, measured: the comment-only marker silences bandit.
+
+        ``f`` carries the marker on its own line inside the signature; ``g``
+        is the unsuppressed control.  If bandit stopped honouring the form,
+        ``f`` would be reported too and this would fail, rather than leave the
+        gate refusing a line that suppresses nothing.
+        """
+        pytest.importorskip("bandit")
+        target = tmp_path / "mod.py"
+        target.write_text(
+            "def f(\n    password: str = (\n        # nosec B107\n"
+            '        "hunter2"\n    ),\n) -> None:\n    pass\n\n\n'
+            'def g(password: str = "hunter2") -> None:\n    pass\n',
+            encoding="utf-8",
+        )
+        run = _subprocess.run(
+            [sys.executable, "-m", "bandit", "-q", "-f", "json", str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        import json
+
+        control_line = (
+            target.read_text(encoding="utf-8")
+            .splitlines()
+            .index('def g(password: str = "hunter2") -> None:')
+        )
+        lines = sorted(r["line_number"] for r in json.loads(run.stdout)["results"])
+        assert lines == [control_line + 1], f"expected only the unsuppressed g(): {lines}"
+
+
+# --------------------------------------------------------------------------
+# A marker HIDDEN in a comment-only line (the marker-first rule defeated)
+#
+# bandit matches its marker with ``search`` over the whole comment token
+# (``NOSEC_COMMENT``, 1.9.4), and attributes a finding to its node's FULL
+# span, bodies included (``linerange``/``get_nosec``).  So one character of
+# leading prose -- or a second ``#`` -- before ``nosec`` defeats the
+# marker-first rule above while leaving the suppression fully live, anywhere
+# inside any multi-line node.  Outside every such span bandit has nothing to
+# attribute, so a module-level prose mention stays prose; the premise test
+# below measures both sides.
+# --------------------------------------------------------------------------
+
+
+class TestAMarkerHiddenInACommentOnlyLine:
+    SIGNATURE = (
+        "def f(\n    pw: str = (\n        {comment}\n" '        "x"\n    ),\n) -> None:\n    pass\n'
+    )
+    BODY = 'def f(pw: str = "x") -> None:\n    y = 1\n    {comment}\n    return y\n'
+
+    REFUSED: ClassVar[dict[str, str]] = {
+        "prose then marker, in a signature": SIGNATURE.format(
+            comment="# default sentinel, not a credential  # nosec B107"
+        ),
+        "a second hash, in a signature": SIGNATURE.format(comment="## nosec B107"),
+        "bare blanket after prose": SIGNATURE.format(comment="# see module docs  # nosec"),
+        "prose then marker, deep in a body": BODY.format(
+            comment="# measured against the control  # nosec"
+        ),
+    }
+    #: semgrep's previous-line rule reads a comment-only line whose first
+    #: alphanumeric run begins ``nosem`` -- case-insensitive, extra hashes
+    #: and punctuation before it allowed, no space required -- as a nosemgrep
+    #: for a finding starting on the next line (measured, semgrep 1.179.0 and
+    #: CI's pinned 1.74.0 agreeing; the premise test below re-measures it
+    #: where semgrep is installed).  Position does not matter to the gate:
+    #: either a matchable line sits below, and the line is a live suppression
+    #: the justification rules never examine, or none does and it is a dead
+    #: marker claiming one.
+    SEMGREP_REFUSED: ClassVar[dict[str, str]] = {
+        "a second hash": "## nosemgrep: non-constant-time-comparison\nok = a == b\n",
+        "a hash, spaces, a hash": "#  # nosemgrep\nok = a == b\n",
+        "upper case": "# NOSEMGREP\nok = a == b\n",
+        "the short form": "# nosem\nok = a == b\n",
+        "a word merely starting with nosem": "# nosemantic cleanup\nok = a == b\n",
+    }
+    PROSE: ClassVar[dict[str, str]] = {
+        "mention without a hash, in a signature": SIGNATURE.format(
+            comment="# bandit honours a nosec written here"
+        ),
+        "prose then marker, at module level": (
+            "# default sentinel, not a credential  # nosec B107\nx = 1\n"
+        ),
+        "a second hash, at module level": "## nosec B107\nx = 1\n",
+        "prose before a nosemgrep": "# see docs  # nosemgrep\nok = a == b\n",
+        "a word before the nosem run": "# a bare ``# nosemgrep`` suppresses\nok = a == b\n",
+    }
+
+    @pytest.mark.parametrize("label", sorted(REFUSED))
+    def test_a_live_hidden_marker_is_refused(self, gate: ModuleType, label: str) -> None:
+        found = gate.check_source("pkg/mod.py", self.REFUSED[label])
+        assert any("live bandit suppression" in v for v in found), (label, found)
+
+    @pytest.mark.parametrize("label", sorted(SEMGREP_REFUSED))
+    def test_a_live_semgrep_shape_is_refused(self, gate: ModuleType, label: str) -> None:
+        found = gate.check_source("pkg/mod.py", self.SEMGREP_REFUSED[label])
+        assert any("live semgrep suppression" in v for v in found), (label, found)
+
+    @pytest.mark.parametrize("label", sorted(PROSE))
+    def test_what_bandit_cannot_read_stays_prose(self, gate: ModuleType, label: str) -> None:
+        assert gate.check_source("pkg/mod.py", self.PROSE[label]) == [], label
+
+    def test_the_span_is_every_multiline_node(self, gate: ModuleType) -> None:
+        """The boundary itself: in a body it is live, between functions not."""
+        spanned = gate.multiline_spanned_lines(
+            "def f() -> int:\n    return 1\n\n\ndef g() -> int:\n    return 2\n"
+        )
+        assert {1, 2, 5, 6} <= spanned and 3 not in spanned and 4 not in spanned
+
+    def test_bandit_really_applies_a_hidden_marker(self, tmp_path: Path) -> None:
+        """The premise, measured, both sides of the boundary.
+
+        ``f`` carries prose-then-marker deep in its BODY; bandit 1.9.4 still
+        suppresses the signature's B107, because the finding's linerange is
+        the whole function.  The identical comment at module level, between
+        ``f`` and the control ``g``, suppresses nothing -- so if this fails
+        with BOTH functions reported, bandit stopped honouring the hidden
+        form and the gate's rule is refusing prose; if it fails with NEITHER
+        reported, bandit widened further and the module-level PROSE cases
+        above are the ones to revisit.
+        """
+        pytest.importorskip("bandit")
+        target = tmp_path / "mod.py"
+        target.write_text(
+            'def f(password: str = "hunter2") -> None:\n'
+            "    y = 1\n"
+            "    # measured against the control  # nosec\n"
+            "    del y\n\n\n"
+            "# measured against the control  # nosec\n\n\n"
+            'def g(password: str = "hunter2") -> None:\n    pass\n',
+            encoding="utf-8",
+        )
+        run = _subprocess.run(
+            [sys.executable, "-m", "bandit", "-q", "-f", "json", str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        import json
+
+        control_line = (
+            target.read_text(encoding="utf-8")
+            .splitlines()
+            .index('def g(password: str = "hunter2") -> None:')
+        )
+        lines = sorted(r["line_number"] for r in json.loads(run.stdout)["results"])
+        assert lines == [control_line + 1], f"expected only the unsuppressed g(): {lines}"
+
+    @pytest.mark.skipif(
+        _shutil.which("semgrep") is None,
+        reason="semgrep is not installed (no `semgrep` on PATH)",
+    )
+    def test_semgrep_really_honours_the_measured_boundary(self, tmp_path: Path) -> None:
+        """The premise, measured against semgrep itself, on both sides.
+
+        One run over three files with a ``$A == $B`` rule: a hidden
+        ``## nosemgrep`` directly above the match suppresses it, as does the
+        prose-shaped ``# nosemantic cleanup`` (its first alphanumeric run
+        begins ``nosem``); the same marker with a line between itself and the
+        match suppresses nothing.  If a semgrep release narrows the boundary,
+        the first two files report and this fails rather than leave the gate
+        refusing prose; if it widens past a leading word, the control in
+        ``PROSE`` is the place to revisit.
+        """
+        (tmp_path / "rule.yml").write_text(
+            "rules:\n"
+            "- id: eq-rule\n"
+            "  patterns:\n"
+            "    - pattern: $A == $B\n"
+            "  message: eq\n"
+            "  languages: [python]\n"
+            "  severity: WARNING\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "hidden.py").write_text(
+            "## nosemgrep: eq-rule\nok = a == b\n", encoding="utf-8"
+        )
+        (tmp_path / "prefix_word.py").write_text(
+            "# nosemantic cleanup\nok = a == b\n", encoding="utf-8"
+        )
+        (tmp_path / "further_above.py").write_text(
+            "## nosemgrep: eq-rule\n\nok = a == b\n", encoding="utf-8"
+        )
+        run = _subprocess.run(
+            [
+                _shutil.which("semgrep") or "semgrep",
+                "--config",
+                str(tmp_path / "rule.yml"),
+                "--json",
+                "--disable-version-check",
+                "--metrics=off",
+                str(tmp_path / "hidden.py"),
+                str(tmp_path / "prefix_word.py"),
+                str(tmp_path / "further_above.py"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        import json
+
+        reported = sorted(Path(r["path"]).name for r in json.loads(run.stdout)["results"])
+        assert reported == ["further_above.py"], reported

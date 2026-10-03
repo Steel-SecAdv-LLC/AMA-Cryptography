@@ -50,7 +50,8 @@ class TestCreateCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package
 
         with pytest.raises(TypeError, match="bytes"):
-            create_crypto_package("string")  # type: ignore[arg-type]  # wrong type to verify TypeError contract (CPL-001)
+            # wrong type to verify TypeError contract (CPL-001)
+            create_crypto_package("string")  # type: ignore[arg-type]  # wrong type test (CPL-001)
 
     def test_hmac_key_preserved(self) -> None:
         _skip_if_no_backends()

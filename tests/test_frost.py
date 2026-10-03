@@ -851,6 +851,36 @@ class TestFROSTShareVerification:
             is False
         )
 
+    def test_verify_share_answers_false_for_its_own_non_canonical_commitment(self) -> None:
+        """A share whose own commitment row is non-canonical is an invalid share.
+
+        ``D_1`` is re-spelled with y = p + 2 (a y >= p is refused by the strict
+        decoder).  Until 2026-09-26 the C entry point built the group
+        commitment before admitting its own row, the decoder's refusal came
+        back as AMA_ERROR_INVALID_PARAM, and this wrapper raised
+        "could not run" -- where the header, and aggregation, say the share
+        simply fails verification.  tests/c/test_frost.c Test 11e pins the C
+        return code; this pins what a Python caller sees.
+        """
+        from ama_cryptography.pqc_backends import frost_verify_share
+
+        ctx = self._signed()
+        non_canonical_y = bytes([0xED + 2]) + b"\xff" * 30 + b"\x7f"
+        commitments = non_canonical_y + ctx["commitments"][32:]
+        assert (
+            frost_verify_share(
+                sig_share=ctx["sig_shares"][0],
+                participant_index=1,
+                participant_public_share=ctx["shares"][0][32:64],
+                commitments=commitments,
+                signer_indices=ctx["signer_indices"],
+                num_signers=ctx["threshold"],
+                message=ctx["message"],
+                group_public_key=ctx["gpk"],
+            )
+            is False
+        )
+
     @pytest.mark.parametrize("culprit", [1, 2])
     def test_aggregate_rejects_and_attributes_a_corrupted_share(self, culprit: int) -> None:
         """The exact input that used to return rc=0 and an invalid signature."""

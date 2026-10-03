@@ -272,10 +272,12 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     Only module-level ``NAME = <literal>`` and ``NAME: ann = <literal>`` forms
     are collected, and ``ann`` must be a builtin type expression (see
     :func:`_inert_annotation`): an annotation is evaluated when the module
-    runs, so an arbitrary one is code even when the value is a literal.  Anything else in the file — imports, functions, conditionals
-    — is a shape the generator never emits, and is rejected rather than skipped:
-    silently ignoring it would let an attacker hide the real assignment behind a
-    construct this reader does not model.
+    runs, so an arbitrary one is code even when the value is a
+    literal.  Anything else in the file -- imports, functions,
+    conditionals -- is a shape the generator never emits, and is
+    rejected rather than skipped: silently ignoring it would let
+    an attacker hide the real assignment behind a construct this
+    reader does not model.
     """
     path = artefact_path(package_dir)
     text = _read_artefact_text(path)

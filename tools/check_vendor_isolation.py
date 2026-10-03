@@ -152,16 +152,15 @@ Exit codes
 ----------
 ``0``  every selected check passed
 ``1``  a violation was found, or a requested check could not be performed
-``2``  usage error
+``2``  usage error, or the container recipes could not be listed: git cannot
+       list the checkout, or ``tools._repo`` cannot be imported
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import fnmatch
 import json
-import os
 import re
 import struct
 import subprocess
@@ -395,8 +394,8 @@ def _put_repo_on_path() -> None:
     """Make ``tools.<sibling>`` importable when run as ``python tools/check_…py``.
 
     Only ``tools/`` is on ``sys.path`` then, not the repository root — the
-    convention ``tools/_repo.py`` documents.  The sibling import itself is
-    made inside :func:`_dynamic_source_violations`, after this runs.
+    convention ``tools/_repo.py`` documents.  Each sibling import is made
+    after this runs, inside the function that needs it.
     """
     repo = str(Path(__file__).resolve().parent.parent)
     if repo not in sys.path:
@@ -1208,16 +1207,30 @@ def _pip_requirement_names(rest: str) -> list[str]:
 
 
 def _container_recipes(repo_root: Path) -> list[Path]:
-    """Every container recipe under ``repo_root``, skipping generated trees."""
-    found: list[Path] = []
-    for directory, subdirectories, files in os.walk(repo_root):
-        subdirectories[:] = sorted(d for d in subdirectories if d not in _BUILD_CONFIG_SKIP_DIRS)
-        for name in sorted(files):
-            if any(fnmatch.fnmatchcase(name, pattern) for pattern in _CONTAINER_NAME_PATTERNS):
-                path = Path(directory) / name
-                if path.is_file():
-                    found.append(path)
-    return found
+    """Every container recipe under ``repo_root``, skipping generated trees.
+
+    In a checkout, the recipes git tracks, so worktrees and sparse checkouts
+    are respected; outside one (no ``.git``), a walk that does not enter
+    ``_BUILD_CONFIG_SKIP_DIRS`` (``tools._repo.worktree_names``).  A ``.git``
+    git cannot list raises ``tools._repo.TrackedFilesError``; ``main`` exits 2
+    on that and on an import of ``tools._repo`` that fails.  This used to
+    catch an ``ImportError`` of ``tools._repo`` and walk the directory
+    instead, checkout or not, so an import that failed inside a checkout
+    changed what was scanned without a word: untracked recipes were read and
+    tracked ones under a skipped directory were not.  Measured: with another
+    project's ``tools`` package imported first, a tracked ``build/Dockerfile``
+    installing ``libssl-dev`` passed.  The walk now lives in ``tools._repo``,
+    so an import that fails is an error in both modes.
+    """
+    _put_repo_on_path()
+    from tools._repo import worktree_names
+
+    names = worktree_names(
+        repo_root,
+        *(f":(glob)**/{pattern}" for pattern in _CONTAINER_NAME_PATTERNS),
+        walk_skip_dirs=_BUILD_CONFIG_SKIP_DIRS,
+    )
+    return sorted(repo_root / name for name in names)
 
 
 #: Package-name affixes a distribution adds around the library it wraps:
@@ -2164,7 +2177,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if selected_build_config:
         violations += check_build_config(repo_root)
         ran.append("build config (CMake / setup.py link lines)")
-        violations += check_container_recipes(repo_root)
+        # No recipe was examined in either case: exit 2 (module docstring).
+        _put_repo_on_path()
+        try:
+            from tools._repo import TrackedFilesError
+        except ImportError as exc:
+            print(f"FATAL: cannot list the container recipes to check: {exc}", file=sys.stderr)
+            return 2
+        try:
+            violations += check_container_recipes(repo_root)
+        except TrackedFilesError as exc:
+            print(f"FATAL: cannot list the container recipes to check: {exc}", file=sys.stderr)
+            return 2
         ran.append("container recipes (Dockerfile package installs)")
     if selected_runtime:
         violations += check_runtime(repo_root)

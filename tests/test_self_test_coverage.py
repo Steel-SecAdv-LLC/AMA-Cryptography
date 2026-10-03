@@ -13,6 +13,7 @@ AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +29,10 @@ NATIVE_AVAILABLE = _native_lib is not None
 skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
 skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
+
+# Tests here drive the state machine and POST into failure; the fixture puts
+# every piece of POST state back afterwards.
+pytestmark = pytest.mark.usefixtures("post_state_restored")
 
 
 # ===========================================================================
@@ -278,7 +283,7 @@ class TestModuleIntegrity:
                 # ``pkg`` is a runtime ``sys.modules`` lookup typed as
                 # ``ModuleType``, so mypy cannot see the dynamic
                 # ``_integrity_signature`` attribute we are restoring.
-                pkg._integrity_signature = cached_attr  # type: ignore[attr-defined]  # dynamic submodule restore after forced-ImportError window (STC-001)
+                cast(Any, pkg)._integrity_signature = cached_attr
 
         assert not ok
         assert "no signed-integrity artefact" in detail

@@ -57,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- import follows the repo-root sys.path insert above (NISTP-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- sys.path insert above (NISTP-001)
 
 pytestmark = pytest.mark.skipif(
     not pb._NISTP_NATIVE_AVAILABLE, reason="native NIST prime-curve backend not built"
@@ -1041,7 +1041,7 @@ def test_keys_and_signatures_do_not_cross_curves() -> None:
 def test_unknown_curve_names_are_rejected() -> None:
     for bad in ("P-192", "secp256k1", "Ed25519", 3, -1, True, "", None):
         with pytest.raises((ValueError, TypeError)):
-            pb.native_nistp_keypair(bad)  # type: ignore[arg-type]  # deliberately wrong type/value — this test asserts the curve-selector boundary check fires (NISTP-002)
+            pb.native_nistp_keypair(bad)  # type: ignore[arg-type]  # wrong type (NISTP-002)
 
 
 def test_curve_aliases_resolve() -> None:

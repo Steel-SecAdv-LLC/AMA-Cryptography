@@ -158,7 +158,7 @@ def test_capability_names_are_the_ones_the_record_reports() -> None:
 def test_the_capability_table_is_immutable() -> None:
     """A mutable table would let a caller silence the gate's premise at runtime."""
     with pytest.raises(TypeError):
-        RFC3161_CAPABILITIES["tsa_signature"] = True  # type: ignore[index]  # deliberately writing to a read-only mapping — this test asserts the immutability holds at runtime (RFC-001)
+        RFC3161_CAPABILITIES["tsa_signature"] = True  # type: ignore[index]  # must raise (RFC-001)
 
 
 # ---------------------------------------------------------------------------

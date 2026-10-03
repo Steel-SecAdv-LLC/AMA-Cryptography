@@ -166,6 +166,10 @@ def _scratch_repo(tmp_path: Path) -> Path:
     working copy is not that tree.  ``newline=""`` on every write keeps the
     copies byte-identical to the originals on every platform, so a test that
     mutates one cell is testing that cell and not the line endings.
+
+    It is a git checkout with the copies staged, because the gate reads the
+    pages git tracks (``check_overhead_bounds``); a page a test adds is
+    tracked with :func:`_track`.
     """
     scratch = tmp_path / "scratch_repo"
     for relative in _SCRATCH_REPO_FILES:
@@ -174,7 +178,14 @@ def _scratch_repo(tmp_path: Path) -> Path:
         destination = scratch / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="")
+    subprocess.run(["git", "init", "-q"], cwd=scratch, check=True)
+    _track(scratch, *_SCRATCH_REPO_FILES)
     return scratch
+
+
+def _track(repo: Path, *relative: str) -> None:
+    """Stage ``relative`` in the scratch checkout, so git lists it as tracked."""
+    subprocess.run(["git", "add", "--", *relative], cwd=repo, check=True)
 
 
 #: A workflow line that runs one of the gate scripts, optionally behind leading
@@ -1089,6 +1100,74 @@ class TestCryptoConstructionDocs:
                 "ClusterFuzzLite runs them nightly on OSS-Fuzz's infrastructure with a",
                 "GitHub-hosted runners",
             ),
+            ("Long-term guarantee: 50+ years post-quantum security", "security lifetime"),
+            (
+                "in a hybrid scheme, providing a 50+ year security horizon.",
+                "security lifetime",
+            ),
+            (
+                "| T1.5 | ML-DSA-65 lattice hardness \u2014 192-bit quantum security | "
+                "**IMPLEMENTED** |",
+                "security category",
+            ),
+            (
+                "| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit quantum) |",
+                "security category",
+            ),
+            (
+                "- quantum \u2286 Dilithium (2\u207b\u00b9\u2079\u00b2 quantum security)",
+                "security category",
+            ),
+            ("Category 3 is not a claim of 2^192 quantum work.", "security category"),
+            ("| Quantum Security | ~2^256 operations |", "security category"),
+            (
+                "- Quantum attack cost: ~2^190 operations (Grover-accelerated BKZ)",
+                "security category",
+            ),
+            (
+                "and one quantum-resistant forgery (2^190 quantum operations).",
+                "security category",
+            ),
+            (
+                "| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | "
+                "Negligible (2^190 ops) | CRITICAL | **LOW** |",
+                "security category",
+            ),
+            (
+                "| T1.8 | ML-KEM-1024 decapsulation | KEM layer | Negligible (2^254 ops) "
+                "| HIGH | **LOW** |",
+                "security category",
+            ),
+            ("| Quantum Attacks | Lattice sieving + Grover: ~2^190 |", "security category"),
+            ("implementing NIST FIPS 204 at security Level 3.", "not a level"),
+            ("Generate CRYSTALS-Dilithium key pair (Level 3).", "not a level"),
+            ("SPHINCS+-SHA2-256f-simple key pair (Level 5).", "not a level"),
+            ("- **Best performance** at NIST Level 3", "not a level"),
+            # The four the adversarial review of 1ef0c93 found passing every
+            # rule, and a fifth the widened rule found: the figure after its
+            # subject, glossed or parenthesised, or qualified as "PQ",
+            # "post-quantum" or plain "security".
+            ("- Quantum security: ~192-bit (Dilithium)", "security category"),
+            (
+                "3. **Hybrid Ed25519 + ML-DSA-65 Signature** \u2014 Combined classical "
+                "(128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204) digital "
+                "signature",
+                "security category",
+            ),
+            ('"ML-DSA-65 (Dilithium) provides 192-bit security"', "security category"),
+            (
+                "ML-DSA-65 (Dilithium) provides 192-bit security against both classical "
+                "and quantum attacks",
+                "security category",
+            ),
+            (
+                'detail="FIPS 186-5 + FIPS 204 \u2022 128-bit classical + 192-bit PQ security",',
+                "security category",
+            ),
+            (
+                "- Security: 256-bit post-quantum (hash-based, no lattice assumptions)",
+                "security category",
+            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -1127,11 +1206,236 @@ class TestCryptoConstructionDocs:
             "The 64-byte `seed || A` key is a layout, not a cache.\n\n"
             "No speed-up ratio is published for the Cython math engine.\n\n"
             "Ed25519's AVX2 unit is `ama_ed25519_select_avx2.c`.\n\n"
-            "ClusterFuzzLite runs them nightly on GitHub-hosted runners.\n",
+            "ClusterFuzzLite runs them nightly on GitHub-hosted runners.\n\n"
+            "No security lifetime is claimed; ML-DSA-65 is NIST category 3 (FIPS 204).\n\n"
+            "| ML-KEM-1024 | NIST security category 5 | FIPS 203 |\n\n"
+            "| T1.7 | AES-256-GCM (SP 800-38D) \u2014 128-bit quantum security |\n\n"
+            "Category 3 is defined by a key search on AES-192.\n\n"
+            "| Security category | NIST category 5 (at least as hard as a key search on "
+            "AES-256) |\n\n"
+            "An Ed25519 forgery costs about 2^128 classical operations.\n\n"
+            "AES-256 keeps quantum security ~2^128 under Grover.\n\n"
+            "| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | "
+            "Negligible (NIST category 3, FIPS 204) | CRITICAL | **LOW** |\n\n"
+            "| T1.6 | HKDF key recovery | Key derivation | Negligible (2^128 quantum) |\n\n"
+            "- Key search: 2^256 classical operations for a 256-bit key; about 2^128 "
+            "under Grover's algorithm\n\n"
+            "ML-DSA-65 is implemented at security category 3.\n\n"
+            "Store ML-KEM-1024 master secrets in an HSM validated to FIPS 140-3 Level 3.\n\n"
+            "- Quantum security: NIST security category 3 (ML-DSA-65, FIPS 204), where\n"
+            "  the verifier requires the ML-DSA layer\n\n"
+            "3. **Hybrid Ed25519 + ML-DSA-65 Signature** \u2014 Combined classical "
+            "(128-bit, RFC 8032) and quantum-resistant (NIST security category 3, "
+            "FIPS 204) digital signature\n\n"
+            '"ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break"\n\n'
+            'detail="FIPS 186-5 + FIPS 204 \u2022 128-bit classical + NIST category 3 '
+            'post-quantum",\n\n'
+            "- Security: NIST security category 5 (FIPS 205); hash-based, no lattice "
+            "assumptions\n\n"
+            "Security: 256-bit classical / 128-bit quantum (NIST security category 5)\n\n"
+            'desc="Quantum-resistant 256-bit hash of canonical data",\n',
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
         assert completed.returncode == 0, completed.stderr
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Quantum attack cost: 2**190 operations.",
+            "Quantum attack cost: 2^{190} operations.",
+            "Quantum attack cost: 2\u00b9\u2079\u2070 operations.",
+            "Forgery probability 2^-192 against a quantum adversary.",
+            "Forgery probability 2\u207b\u00b9\u2079\u00b2 against a quantum adversary.",
+            "Lattice sieving with Grover: ~2^129",
+            "Kyber decapsulation: 2^200",
+            "Dilithium forgery: 2^200",
+            "SPHINCS+ forgery: 2^200",
+            "ML-KEM-1024 decapsulation: 2^200",
+            "ML-DSA-65 forgery: 2^200",
+            "SLH-DSA forgery: 2^200",
+        ],
+    )
+    def test_a_quantum_work_factor_is_read_in_every_notation(self, sentence: str) -> None:
+        """Every notation the tree has published a work factor in, every
+        subject that makes it a quantum or post-quantum claim, and the first
+        exponent above Grover's AES-256 bound."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_work_factor(sentence, None), sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "AES-256 keeps quantum security ~2^128 under Grover.",
+            "X25519 works over GF(2^255 - 19) and is not quantum-resistant.",
+            "X25519 works over GF(2^255-19) and is not quantum-resistant.",
+            "SHA3-256 has 2^256 outputs. A quantum adversary is out of scope here.",
+            "Key search: 2^256 classical operations; about 2^128 under Grover.",
+            "HKDF key recovery costs 2^256 operations.",
+        ],
+    )
+    def test_what_is_not_a_quantum_work_factor_passes(self, sentence: str) -> None:
+        """Grover's AES-256 bound itself, a modulus, a figure in another
+        sentence, and a figure with no quantum subject."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_work_factor(sentence, None) is None, sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "- Quantum security: ~192-bit (Dilithium)",
+            "Combined classical (128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204)",
+            '"ML-DSA-65 (Dilithium) provides 192-bit security"',
+            "FIPS 186-5 + FIPS 204 \u2022 128-bit classical + 192-bit PQ security",
+            "- Security: 256-bit post-quantum (hash-based, no lattice assumptions)",
+            "128-bit classical + 192-bit PQ security",
+            "PQC signatures: 192-bit",
+            "192-bit PQC security for ML-DSA-65",
+            "FIPS 204 signature: 192-bit security",
+            "NIST category 3 (192-bit)",
+            "ML-DSA-65: 192 bits of quantum security",
+            "SLH-DSA-SHA2-256f: 256-bit strength",
+            "| ML-KEM-1024 | Key Encapsulation | 256-bit | FIPS 203 |",
+            "Kyber-1024 gives 256 bits.",
+            "Quantum resistance at 192-bit: yes",
+            "ML-DSA-65: 192\u2011bit security",
+            "Dilithium3 is quantum-safe at the 192-bit level",
+            "ML-DSA-65 provides 192-bit classical and quantum security",
+            "ML-DSA-65 provides 192-bit classical & quantum security",
+            "ML-DSA-65 provides 192-bit classical + quantum security",
+            "ML-DSA-65 provides 192-bit classical/quantum security",
+            "ML-DSA-65 \u2014 192-bit \u2014 FIPS 204",
+            "ML-DSA-65 \u2013 192-bit \u2013 FIPS 204",
+            "FIPS 204 \u2022 192-bit \u2022 lattice-based",
+            "Quantum security: **192-bit**",
+            "Quantum security: `192-bit`",
+            'label = "ML-DSA-65: 192-bit"',
+            "label = 'ML-DSA-65: 192-bit'",
+            "\u201cML-DSA-65: 192-bit\u201d",
+            "\u2018ML-DSA-65: 192-bit\u2019",
+            "PQ security (**192-bit**)",
+            "Quantum security: ~192-bit for ML-DSA-65",
+            "Post-quantum security (192 bits) for ML-DSA-65",
+            "ML-DSA-65 strength: 192 bits against quantum attack",
+            "ML-DSA-65 quantum security is 192 bits for every key",
+            "ML-DSA-65 quantum security of 192 bits against Grover",
+            "ML-DSA-65 quantum security at 192 bits for every key",
+            "ML-KEM-1024 shared secret: 256-bit quantum security",
+        ],
+    )
+    def test_a_quantum_bit_strength_is_read_in_every_shape(self, sentence: str) -> None:
+        """The four shipped survivors and SLH-DSA's, then one sentence per
+        shape the rule reads: each subject it adds to the work-factor rule's,
+        each word that makes a figure a strength, each way a clause ends
+        after an unqualified figure, a gloss, a closing bracket, "bits", a
+        non-breaking hyphen, each mark that closes around a figure (a string
+        literal ending with it among them), and a figure that is the value of
+        the strength before it and has a preposition after it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_bit_strength(sentence, None), sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "AES-256 keeps 128-bit quantum security under Grover.",
+            "Security: 256-bit classical / 128-bit quantum (NIST security category 5)",
+            'desc="Quantum-resistant 256-bit hash of canonical data",',
+            (
+                "Key search: 2^256 classical operations for a 256-bit key; about 2^128 under "
+                "Grover's algorithm"
+            ),
+            (
+                "| AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | "
+                "SP 800-38D |"
+            ),
+            "ML-KEM-1024's shared secret is 32 bytes (256 bits).",
+            (
+                "A quantum computer running Shor's algorithm breaks RSA at every size, even "
+                "15,360-bit."
+            ),
+            "The quantum test group is ML_KEM_1024BIT.",
+            "P-384 gives 192-bit security. ML-DSA-65 is NIST security category 3.",
+            (
+                "ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break "
+                "as a key search on AES-192"
+            ),
+            "ML-KEM-1024 shared secret: 256 bits",
+            "| ML-KEM-1024 | Shared secret | 256-bit |",
+            "ML-DSA-65 key generation takes a seed (256-bit).",
+            "ML-KEM-1024's shared secret is 256 bits.",
+            "ML-KEM-1024 shared secrets are 256 bits.",
+            "ML-DSA-65 takes a seed of 256 bits.",
+            "ML-DSA-65 public key: 15616 bits",
+            "SLH-DSA-SHA2-256f hash: 256 bits",
+            "ML-DSA-65 message digest: 512 bits",
+            "ML-KEM-1024 SHAKE256 output: 256 bits",
+            "ML-KEM-1024 shared secret size: 256 bits",
+            "ML-DSA-65 seed length: 256 bits",
+            "ML-KEM-1024 derives 256 bits for the session key",
+            "Post-quantum security relies on 256 bits from the CSPRNG",
+            "ML-DSA-65 derives its keys from a 256-bit seed",
+            "ML-DSA-65 hashes with SHA3-256; P-256 and secp256k1 are not quantum-resistant.",
+            "ML-DSA-65 key generation takes a 32-byte seed.",
+        ],
+    )
+    def test_what_is_not_a_quantum_bit_strength_passes(self, sentence: str) -> None:
+        """Grover's AES-256 bound itself, a figure qualified as classical or as
+        a size (four of them lines the tree carries), a size restated in bits,
+        a figure that is part of a longer number or a name, a strength in
+        another sentence, and the chart footer's correction.  Then a figure
+        that is the value of a size it follows, one per size noun and linking
+        word; a figure before a preposition that follows no strength; and the
+        names and sizes the rule must never read as a figure (SHA3-256, P-256,
+        secp256k1, a 32-byte seed)."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_bit_strength(sentence, None) is None, sentence
+
+    def test_a_build_s_untracked_output_is_not_read(self, tmp_path: Path) -> None:
+        """Cython writes each ``.pyx`` docstring into a generated, untracked
+        ``src/cython/*.c``; once C was scanned the gate read that copy, so a
+        corrected docstring still failed until a rebuild."""
+        gate = _load(CONSTRUCTION_DOCS)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        (tmp_path / "src" / "cython").mkdir(parents=True)
+        (tmp_path / "src" / "cython" / "binding.pyx").write_text("x\n", encoding="utf-8")
+        (tmp_path / "src" / "cython" / "binding.c").write_text("x\n", encoding="utf-8")
+        _track(tmp_path, "src/cython/binding.pyx")
+        scanned = {path.relative_to(tmp_path).as_posix() for path in gate.scanned_files(tmp_path)}
+        assert scanned == {"src/cython/binding.pyx"}, scanned
+
+    def test_an_unlistable_tree_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gate that cannot list what to read has read nothing, and must not
+        report green on it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        from tools._repo import TrackedFilesError
+
+        def unlistable(repo: Path) -> list[Path]:
+            raise TrackedFilesError(f"git failed in {repo}")
+
+        monkeypatch.setattr(gate, "scanned_files", unlistable)
+        assert gate.main(["--repo", str(REPO_ROOT)]) == 2
+
+    def test_c_sources_and_headers_are_in_the_tree_scan(self, tmp_path: Path) -> None:
+        """``--file`` reads what it is given; the tree scan reads by suffix.
+        C sources and headers must be in that suffix set, or a C comment is
+        read only when someone thinks to name it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        for name in ("ama_fixture.c", "ama_fixture.h", "page.md"):
+            (tmp_path / name).write_text("x\n", encoding="utf-8")
+        scanned = {path.name for path in gate.scanned_files(tmp_path)}
+        assert {"ama_fixture.c", "ama_fixture.h", "page.md"} <= scanned, scanned
+
+    def test_c_source_comments_are_read(self, tmp_path: Path) -> None:
+        """``ama_dilithium.c``'s header said "~192-bit quantum security" after
+        every page and docstring had been corrected: no rule read C."""
+        fixture = tmp_path / "ama_fixture.c"
+        fixture.write_text(
+            "/*\n * - Security level: NIST Level 3 (~192-bit quantum security)\n */\n",
+            encoding="utf-8",
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "security category" in completed.stderr.lower()
 
     def test_the_waiver_is_explicit_and_scoped(self, tmp_path: Path) -> None:
         """A correction note may quote what it retires — but only with the marker."""
@@ -1830,6 +2134,114 @@ class TestBenchmarkClaims:
         provenance = record["provenance"]
         for key, _why in gate.REQUIRED_PROVENANCE:
             assert provenance.get(key), f"{gate.RESULTS_JSON} lacks provenance.{key}"
+
+    def test_a_record_without_its_build_configuration_is_refused(self) -> None:
+        """AGENTS.md 8.7: no figure without its build flags.  The record the
+        documentation quotes must name how the measured library was built,
+        and a runner's "not recorded" is not a configuration."""
+        gate = _load(BENCHMARK_CLAIMS)
+        record = json.loads((REPO_ROOT / gate.RESULTS_JSON).read_text(encoding="utf-8"))
+        clean = gate.Report()
+        gate.check_provenance(clean, record)
+        assert not clean.failures, clean.failures
+        absent = object()
+        # JSON null, a number and a list are not a configuration: str() on
+        # them is non-empty ("None", "0", "['GNU']") and must not pass for one.
+        for value in (
+            absent,
+            "",
+            "not recorded: no CMake build tree searched",
+            None,
+            0,
+            ["GNU 13.3.0"],
+            # Present but not a configuration: no compiler version, no
+            # configure line, or the runner's old placeholder.
+            "compiler unidentified; cmake -DCMAKE_BUILD_TYPE=Release",
+            "GNU; cmake -DCMAKE_BUILD_TYPE=Release",
+            "GNU 13.3.0",
+        ):
+            provenance = dict(record["provenance"])
+            if value is absent:
+                provenance.pop("build_configuration", None)
+            else:
+                provenance["build_configuration"] = value
+            report = gate.Report()
+            gate.check_provenance(report, dict(record, provenance=provenance))
+            assert any("'build_configuration'" in f for f in report.failures), (
+                value,
+                report.failures,
+            )
+        assert gate.NOT_RECORDED_PREFIX == "not recorded"
+
+    @pytest.mark.parametrize(
+        ("page", "expected"),
+        [
+            ("**Performance**: <0.5% overhead per monitored operation\n", ["<0.5%"]),
+            ("- **Monitoring overhead:** < 2% on typical workloads\n", ["< 2%"]),
+            ("Recursion: O(n log n), under 1% overhead.\n", ["under 1%"]),
+            ("Overhead is at most 3 ms on the reference host.\n", ["at most 3 ms"]),
+            ("The layer's overhead stays below 2\u00d7 the native call.\n", ["below 2\u00d7"]),
+            # A measured value on a named host is not a bound.
+            ("Overhead per package: 0.66-0.72% on the same host.\n", []),
+            # A bound that is not an overhead: a latency target in a table.
+            ("| Package Creation | < 5 ms | 0.538 |\n", []),
+            # A correction note quoting the wording it retires, marker above it.
+            (
+                "<!-- claim-check: quoting-retired-wording -->\n"
+                'This page used to state "<0.01 ms overhead".\n',
+                [],
+            ),
+            # The marker waives its paragraph only: a blank line closes it.
+            (
+                "<!-- claim-check: quoting-retired-wording -->\n"
+                'It said "<4% overhead".\n\nOverhead: < 1% in practice.\n',
+                ["< 1%"],
+            ),
+            # Prose that mentions the marker does not waive anything.
+            (
+                "Mark it <!-- claim-check: quoting-retired-wording --> inline,\n"
+                "and the <1% overhead on the next line is still read.\n",
+                ["<1%"],
+            ),
+        ],
+    )
+    def test_an_overhead_published_as_a_bound_fails(self, page: str, expected: list[str]) -> None:
+        """MONITORING.md published "<0.5% overhead per monitored operation" and
+        "<1% overhead" under a section saying no overhead had been measured,
+        and the wiki "< 2% on typical workloads" (INVARIANT-53, kind 4)."""
+        gate = _load(BENCHMARK_CLAIMS)
+        found = [bound for _line, bound, _sentence in gate.unmeasured_overhead_bounds(page)]
+        assert found == expected, (page, found)
+
+    def test_the_overhead_rule_reads_every_tracked_page_but_the_record(
+        self, tmp_path: Path
+    ) -> None:
+        """A page in any directory is read, because the list is git's; the
+        historical record may quote what it retired; and the shipped tree
+        states no overhead as a bound."""
+        gate = _load(BENCHMARK_CLAIMS)
+        clean = gate.Report()
+        gate.check_overhead_bounds(clean, REPO_ROOT)
+        assert not clean.failures, clean.failures
+
+        scratch = _scratch_repo(tmp_path)
+        (scratch / "CHANGELOG.md").write_text(
+            "- Removed the unmeasured <0.5% overhead claim.\n", encoding="utf-8"
+        )
+        _track(scratch, "CHANGELOG.md")
+        passed = io.StringIO()
+        with contextlib.redirect_stderr(passed), contextlib.redirect_stdout(io.StringIO()):
+            assert gate.main(["--repo", str(scratch)]) == 0, passed.getvalue()
+
+        (scratch / "docs").mkdir()
+        (scratch / "docs" / "tuning.md").write_text(
+            "# Tuning\n\nThe monitor adds <0.5% overhead.\n", encoding="utf-8"
+        )
+        _track(scratch, "docs/tuning.md")
+        failed = io.StringIO()
+        with contextlib.redirect_stderr(failed), contextlib.redirect_stdout(io.StringIO()):
+            assert gate.main(["--repo", str(scratch)]) == 1
+        assert "docs/tuning.md:3 states an overhead as a bound ('<0.5%')" in failed.getvalue()
 
     def test_a_hand_edited_generated_cell_fails(self, tmp_path: Path) -> None:
         """The 4.20 ms defect, reintroduced into the generated block.

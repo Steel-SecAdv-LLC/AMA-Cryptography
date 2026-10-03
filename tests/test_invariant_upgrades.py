@@ -354,8 +354,8 @@ class TestSuppressionHygiene:
     #:
     #: The class carried its own copy, and it had already drifted: the gate
     #: matches ``nosemgrep`` and the copy did not, so
-    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed a
-    #: ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
+    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed
+    #: a ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
     #: while ``tools/check_suppression_hygiene.py`` reported it.  Same defect
     #: as ``_scan_violations`` above, one attribute further down.
     @staticmethod
@@ -645,7 +645,8 @@ class TestSuppressionScanPrecision:
     def test_both_targeted_nosec_spellings_are_accepted(self, marker: str) -> None:
         from tools.check_suppression_hygiene import check_source
 
-        assert check_source("a.py", f"PW = 'x'  {marker} -- placeholder (AB-001)\n") == []
+        line = f"PW = 'x'  {marker} -- placeholder, not a secret (AB-001)\n"
+        assert check_source("a.py", line) == []
 
     def test_a_bare_noqa_is_reported_even_when_fully_justified(self) -> None:
         """ruff treats a bare ``# noqa`` as every rule on the line."""
@@ -657,7 +658,7 @@ class TestSuppressionScanPrecision:
     def test_a_targeted_noqa_is_accepted(self) -> None:
         from tools.check_suppression_hygiene import check_source
 
-        assert check_source("a.py", "import os  # noqa: F401 -- reason (AB-001)\n") == []
+        assert check_source("a.py", "import os  # noqa: F401 -- re-exported name (AB-001)\n") == []
 
     def test_the_repositorys_own_stacked_marker_form_is_accepted(self) -> None:
         """``# fmt: skip  # noqa: S311 # nosec B311 -- reason (NM-010)``.

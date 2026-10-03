@@ -473,7 +473,9 @@ def create_performance_dashboard() -> None:
         missing_artefact(
             ax,
             "Regression: Measured vs Baseline",
-            "python benchmarks/benchmark_runner.py\n         --output benchmarks/regression_results.json",
+            "python benchmarks/benchmark_runner.py\n"
+            "         --output benchmarks/"
+            "regression_results.json",
         )
     else:
         reg = regression["results"]
@@ -767,11 +769,17 @@ def create_performance_dashboard() -> None:
         f"  SHA3-256:        {ops['sha3_256']['ops_per_sec']:>12,.0f} ops/s\n"
         f"  Ed25519 Sign:    {ops['ed25519_sign']['ops_per_sec']:>12,.0f} ops/s\n"
         f"  ML-DSA-65 Sign:  {ops['dilithium_sign']['ops_per_sec']:>12,.0f} ops/s\n"
-        f"  Package Create:  {bench['dna_operations']['package_creation']['ops_per_sec']:>12,.0f} ops/s\n"
-        f"  Package Verify:  {bench['dna_operations']['package_verification']['ops_per_sec']:>12,.0f} ops/s\n\n"
+        "  Package Create:  "
+        f"{bench['dna_operations']['package_creation']['ops_per_sec']:>12,.0f}"
+        " ops/s\n"
+        "  Package Verify:  "
+        f"{bench['dna_operations']['package_verification']['ops_per_sec']:>12,.0f}"
+        " ops/s\n\n"
         f"  Regression:      {_summary_line(regression)}\n"
         f"  Validation:      {_summary_line(validation)}\n"
-        f"  Ethical Overhead: {bench['ethical_integration']['ethical_overhead']['overhead_pct']:.1f}%\n\n"
+        "  Ethical Overhead: "
+        f"{bench['ethical_integration']['ethical_overhead']['overhead_pct']:.1f}"
+        "%\n\n"
         f"  All timings measured on benchmark run\n"
         f"  {bench['benchmark_start'][:10]}"
     )
@@ -862,7 +870,7 @@ def create_defense_layers() -> None:
             name="Layer 3: Ed25519 + ML-DSA-65 Dual Signatures",
             color="#ff6b6b",
             desc="Classical + post-quantum hybrid signature scheme",
-            detail="FIPS 186-5 + FIPS 204 • 128-bit classical + 192-bit PQ security",
+            detail="FIPS 186-5 + FIPS 204 • 128-bit classical + NIST category 3 post-quantum",
             y=4.2,
         ),
         _DefenseLayer(

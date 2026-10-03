@@ -99,7 +99,6 @@ from __future__ import annotations
 import argparse
 import io
 import re
-import subprocess
 import sys
 import tokenize
 from pathlib import Path
@@ -273,31 +272,15 @@ def claims_in(numbered: Iterable[tuple[int, str]]) -> list[tuple[int, str, str]]
 
 
 def _candidate_files(repo: Path) -> list[str]:
-    """Every file to consider, relative to ``repo``: what git tracks when
-    ``repo`` is a work-tree top, otherwise a walk of the tree."""
-    try:
-        top = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError):
-        top = None
-    if (
-        top is not None
-        and top.returncode == 0
-        and Path(top.stdout.strip()).resolve() == (repo.resolve())
-    ):
-        root = str(Path(__file__).resolve().parent.parent)
-        if root not in sys.path:
-            sys.path.insert(0, root)
-        from tools._repo import tracked_names
+    """Every file to consider, relative to ``repo``: in a checkout what git
+    tracks, outside one a walk (``tools._repo.worktree_names``).  A ``.git``
+    git cannot read raises instead of falling back to the walk."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import worktree_names
 
-        return tracked_names(repo)
-    return [path.relative_to(repo).as_posix() for path in repo.rglob("*") if path.is_file()]
+    return worktree_names(repo)
 
 
 def _selected(repo: Path, keep: Callable[[str, str], bool]) -> list[Path]:

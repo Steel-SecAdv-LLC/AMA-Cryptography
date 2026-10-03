@@ -48,6 +48,43 @@
  * types rather than relying on include order at each consumer. */
 #include "ama_cryptography.h"
 
+/* --- Test CSPRNG hooks (internal/ama_test_csprng.h) --------------------- */
+
+/**
+ * The per-file CSPRNG overrides AMA_TEST_CSPRNG defines, each NULL until a
+ * test sets it: a test that installs one replays a KAT seed, or fails the
+ * draw to reach a fail-closed exit (tests/c/test_csprng_failure_residue.c,
+ * test_input_guards.c, test_frost.c, test_kat.c).  Declared here so the
+ * tests compile against the one prototype instead of restating it by hand.
+ * Unconditional, like every declaration in this header: the tests that use
+ * them are compiled without AMA_TESTING_MODE and link the archive that was.
+ */
+extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
+
+/* --- src/c/ama_slhdsa.c ------------------------------------------------- */
+
+/**
+ * SLH-DSA's hash-failure hook, NULL until a test sets it.  Consulted once per
+ * hash call, after that call has computed its output, never once per absorbed
+ * segment: in the SHA2 family by PRF_msg and H_msg only; in the SHAKE family
+ * by every SHAKE-256 hash (F, H, T_l, PRF, PRF_msg, H_msg), in shake_finish
+ * after the squeeze.  A call whose HMAC or sponge step has already failed
+ * does not consult it.  A nonzero return makes the call return -1: the caller
+ * stops on a failed PRF_msg or H_msg (AMA_ERROR_MEMORY) and ignores a failed
+ * F, H, T_l or PRF.  Counted in call order while it is set, signing consults
+ * it for PRF_msg first and H_msg second; SHAKE-128s key generation, signing
+ * and verification also consult it once per F, H, T_l and PRF.
+ * tests/c/test_slhdsa_fault_residue.c selects the failure exits no input
+ * reaches by that position and scans what they leave behind.  Defined under
+ * AMA_TESTING_MODE; the shipped object is byte-identical without it.
+ */
+extern int (*ama_slhdsa_hash_fault_hook)(void);
+
 /* --- src/c/ama_frost.c -------------------------------------------------- */
 
 /**
@@ -259,6 +296,23 @@ void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
  */
 void ama_dilithium_test_invntt_bound_reset(void);
 int32_t ama_dilithium_test_invntt_bound_get(void);
+
+/**
+ * MakeHint (FIPS 204 Algorithm 39) for tests.
+ *
+ * `ama_dilithium_test_make_hint` evaluates the predicate itself for a
+ * parameter set (-1 for an unknown one), so its boundary can be tested at
+ * exact values.  `..._edge_arm(1)` clears and arms a thread-local counter of
+ * coefficients in the most recent hint computation that met a0 == -gamma2
+ * with a1 == 0 -- the clause an honest signature reaches only for particular
+ * messages -- and `..._edge_hits()` reads it, so a test pinning such a
+ * message can confirm it still reaches the clause.  Disarmed by default (see
+ * the dudect note on the invntt accumulator above); `..._edge_arm(0)`
+ * disarms.  Testing archive only.
+ */
+int ama_dilithium_test_make_hint(ama_ml_dsa_param_set_t ps, int32_t a0, int32_t a1);
+void ama_dilithium_test_make_hint_edge_arm(int armed);
+unsigned int ama_dilithium_test_make_hint_edge_hits(void);
 
 /* --- src/c/ama_slhdsa.c -------------------------------------------------- */
 

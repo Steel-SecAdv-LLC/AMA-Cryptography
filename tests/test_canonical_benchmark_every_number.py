@@ -40,11 +40,18 @@ def tree(tmp_path: Path) -> Path:
 
 
 def _edit(tree: Path, old: str, new: str) -> None:
+    """Replace ``old`` INSIDE the pinned region, never an earlier copy of it.
+
+    README can print the same words above the region ("in 5 of 5 process
+    starts" appears in both places); ``str.replace`` over the whole file
+    would edit that earlier copy, which the gate never reads.
+    """
     readme = tree / gate.README
     text = readme.read_text(encoding="utf-8")
     region = gate.extract_region(text)
     assert region is not None and region.count(old) == 1, old
-    readme.write_text(text.replace(old, new, 1), encoding="utf-8")
+    start = text.index(gate.BEGIN_MARKER) + len(gate.BEGIN_MARKER)
+    readme.write_text(text[:start] + text[start:].replace(old, new, 1), encoding="utf-8")
 
 
 def _run(tree: Path) -> int:
@@ -63,8 +70,8 @@ class TestNumbersWithoutAnAdjacentUnit:
                 "measured 2026-09-25; median of five runs, min–max KeyGen 3,402",
             ),
             ("Python 3.11.15", "Python 3.12.1"),
-            ("over 60,000 samples", "over 90,000 samples"),
-            ("**|t| = 0.29**", "**|t| = 0.09**"),
+            ("(3,199–3,880)", "(3,199–3,980)"),
+            ("~12,465 →", "~12,965 →"),
         ],
     )
     def test_an_edited_figure_fails(self, tree: Path, old: str, new: str) -> None:
@@ -128,8 +135,32 @@ class TestNumbersWithoutAnAdjacentUnit:
         assert _run(tree) == 1
 
     def test_deleting_one_of_two_identical_figures_fails(self, tree: Path) -> None:
-        """The comb sentence's "256 doublings + 256 additions" is two figures, one key."""
-        _edit(tree, "256 doublings + 256 additions", "256 doublings + additions")
+        """The host note's "in 5 of 5 process starts" is two figures under ONE key.
+
+        The gate's key is (heading, row label, approx, value, unit), so two
+        figures share a key only when the same row prints the same value
+        twice. In the region that happens once: the host note's "5 of 5",
+        a prose line under the Core Primitives heading. The table's per-row
+        dates do not qualify -- each row's label differs -- so deleting one of
+        them fails under set comparison too and pins nothing about counting.
+
+        Dropping one "5" leaves the key present on both sides; only the
+        count differs. Mutation-checked: with ``check_measurements`` comparing
+        ``Counter(set(...))`` on both sides, this edit passes the gate.
+        """
+        assert _run(tree) == 0
+        region = gate.extract_region((tree / gate.README).read_text(encoding="utf-8"))
+        assert region is not None
+        keys = [gate._key(entry) for entry in gate.extract_measurements(region)]
+        five = (
+            "Core Cryptographic Primitives (Python API via ctypes)",
+            "(prose)",
+            False,
+            "5",
+            "",
+        )
+        assert keys.count(five) == 2, "the duplicate key this test deletes one of is gone"
+        _edit(tree, "in 5 of 5 process starts", "in 5 process starts")
         assert _run(tree) == 1
 
 

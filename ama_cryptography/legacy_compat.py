@@ -48,15 +48,6 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from ama_cryptography.monitor import AmaCryptographyMonitor
 
-_logger = logging.getLogger(__name__)
-
-
-# os.fdopen guard: when os.open() returns an fd and os.fdopen() is called
-# immediately after, an exception inside os.fdopen() (before the with-block
-# takes over) would leak the raw fd.  Guard with try/except BaseException and
-# close the fd explicitly on failure — matching the pattern in crypto_api.py.
-
-
 # ---------------------------------------------------------------------------
 # Re-imports from ama_cryptography sub-modules so that monkeypatch targets
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
@@ -84,6 +75,14 @@ from ama_cryptography.rfc3161_timestamp import (
     verify_token_binding,
 )
 from ama_cryptography.secure_memory import constant_time_compare, lengths_match, secure_memzero
+
+_logger = logging.getLogger(__name__)
+
+
+# os.fdopen guard: when os.open() returns an fd and os.fdopen() is called
+# immediately after, an exception inside os.fdopen() (before the with-block
+# takes over) would leak the raw fd.  Guard with try/except BaseException and
+# close the fd explicitly on failure — matching the pattern in crypto_api.py.
 
 
 # ---------------------------------------------------------------------------
@@ -1035,7 +1034,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordinating all crypto/KMS/RFC3161 operations (LC-005)
+def create_crypto_package(  # noqa: C901 -- McCabe complexity (LC-005)
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,

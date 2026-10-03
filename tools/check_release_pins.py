@@ -232,7 +232,9 @@ _RELEASE_RE = re.compile(r"^v?(\d+(?:\.\d+)*)")
 _BUILD_SYSTEM_RE = re.compile(r"^\[build-system\][ \t]*$(?P<body>.*?)(?=^\[|\Z)", re.M | re.S)
 _REQUIRES_LIST_RE = re.compile(r"^requires\s*=\s*\[(?P<items>.*?)\]", re.M | re.S)
 _FLOOR_ITEM_RE = re.compile(
-    rf"""["'](?P<name>{_NAME_RE})\s*(?P<op>===|==|~=|!=|<=|>=|<|>)\s*(?P<version>[0-9][0-9A-Za-z.]*)["']"""
+    rf"""["'](?P<name>{_NAME_RE})\s*"""
+    rf"""(?P<op>===|==|~=|!=|<=|>=|<|>)\s*"""
+    rf"""(?P<version>[0-9][0-9A-Za-z.]*)["']"""
 )
 _SETUP_BUILD_REQS_RE = re.compile(r"^_BUILD_REQS\s*=\s*\{(?P<body>.*?)^\}", re.M | re.S)
 _SETUP_FLOOR_RE = re.compile(

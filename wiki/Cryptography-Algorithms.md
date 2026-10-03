@@ -10,11 +10,11 @@ Complete reference for all cryptographic algorithms used in AMA Cryptography, th
 
 ## Algorithm Summary
 
-| Algorithm | Type | Security Level | Standard | C Source | Status |
+| Algorithm | Type | Security category | Standard | C Source | Status |
 |-----------|------|---------------|----------|----------|--------|
-| ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit quantum) | FIPS 204 | `ama_dilithium.c` | Primary PQC |
-| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit quantum) | FIPS 203 | `ama_kyber.c` | Available |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit quantum) | FIPS 205 | `ama_slhdsa.c` | Available |
+| ML-DSA-65 (Dilithium) | Digital Signature | NIST category 3 | FIPS 204 | `ama_dilithium.c` | Primary PQC |
+| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST category 5 | FIPS 203 | `ama_kyber.c` | Available |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST category 5 | FIPS 205 | `ama_slhdsa.c` | Available |
 | Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | `ama_ed25519.c` | Classical + Hybrid |
 | AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | SP 800-38D | `ama_aes_gcm.c` | Full |
 | ChaCha20-Poly1305 | Authenticated Encryption | 256-bit key / 128-bit security | RFC 8439 | `ama_chacha20poly1305.c` | Full |
@@ -36,9 +36,7 @@ The **primary post-quantum signature algorithm** in AMA Cryptography.
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 204 (2024) |
-| Security Level | NIST Level 3 |
-| Classical Security | ~2^170 operations |
-| Quantum Security | ~2^190 operations (Grover-BKZ) |
+| Security category | NIST category 3 (at least as hard as a key search on AES-192) |
 | Public Key | 1,952 bytes |
 | Secret Key | 4,032 bytes |
 | Signature | 3,309 bytes |
@@ -73,8 +71,7 @@ assert dilithium_verify(b"message", sig, kp.public_key)
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 203 (2024) |
-| Security Level | NIST Level 5 |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Public Key | 1,568 bytes |
 | Secret Key | 3,168 bytes |
 | Ciphertext | 1,568 bytes |
@@ -106,8 +103,7 @@ assert recovered == enc.shared_secret
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 205 (2024) |
-| Security Level | NIST Level 5 |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Public Key | 64 bytes |
 | Secret Key | 128 bytes |
 | Signature | 49,856 bytes |

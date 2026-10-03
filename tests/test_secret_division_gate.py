@@ -19,6 +19,7 @@ stays reproducible without a rebuild.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -424,6 +425,30 @@ def test_every_allowlist_entry_states_why_its_operands_are_public(gate: ModuleTy
         assert any(
             token in reason for token in (".c:", ".c ", "RFC")
         ), f"{symbol}'s justification cites no source location or standard"
+
+
+def test_every_allowlist_citation_resolves_against_the_source(gate: ModuleType) -> None:
+    """A justification quotes the code it vouches for; the quote must still be there.
+
+    Two entries cited ``ama_dilithium.c:1562`` and ``ama_dilithium.c:2714``
+    after the file had grown past both, so each pointed at unrelated code,
+    and the quoted ``nonces[f] = ...`` had since gained a ``(uint16_t)``
+    cast; three more line citations had drifted the same way.  Entries now
+    cite the file and the function, and this holds each of them to it: no
+    line number, which moves whenever anything above it does; every cited
+    file exists under ``src/c``; and every backticked fragment appears
+    verbatim in a file the entry cites.
+    """
+    source = REPO_ROOT / "src" / "c"
+    for symbol, (_count, reason) in gate.ALLOWED.items():
+        assert not re.search(r"\.[ch]:\d", reason), f"{symbol} cites a line number: {reason}"
+        cited = [source / name for name in re.findall(r"(?<![\w/])([\w/]+\.[ch])\b", reason)]
+        assert cited, f"{symbol}'s justification names no source file"
+        absent = [str(path) for path in cited if not path.is_file()]
+        assert not absent, f"{symbol} cites files that do not exist: {absent}"
+        text = "\n".join(path.read_text(encoding="utf-8") for path in cited)
+        for fragment in re.findall(r"`([^`]+)`", reason):
+            assert fragment in text, f"{symbol} quotes `{fragment}`, which no cited file contains"
 
 
 def test_ml_kem_is_required_to_be_divide_free(gate: ModuleType) -> None:

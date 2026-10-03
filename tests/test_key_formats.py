@@ -70,10 +70,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.key_formats as kf  # noqa: E402 -- import follows the repo-root sys.path insert above (KF-003)
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KF-003)
-import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
-from ama_cryptography._asn1 import (  # noqa: E402 -- same (KF-003)
+import ama_cryptography.key_formats as kf  # noqa: E402 -- sys.path insert above (KF-003)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- sys.path insert above (KF-003)
+import tests.ref_keyformat as ref  # noqa: E402 -- sys.path insert above (KF-003)
+from ama_cryptography._asn1 import (  # noqa: E402 -- sys.path insert above (KF-003)
     cbor_decode_canonical,
     cbor_encode_canonical,
     der_bit_string,
@@ -84,7 +84,7 @@ from ama_cryptography._asn1 import (  # noqa: E402 -- same (KF-003)
     oid_from_string,
     oid_to_string,
 )
-from ama_cryptography.exceptions import (  # noqa: E402 -- same (KF-003)
+from ama_cryptography.exceptions import (  # noqa: E402 -- sys.path insert above (KF-003)
     KeyFormatError,
     UnsupportedKeyFormatError,
 )

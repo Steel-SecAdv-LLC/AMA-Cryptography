@@ -19,7 +19,8 @@ download was pinned to a release tag, ``v1.1.0.42``, and to nothing else:
   compare the on-disk bytes with upstream could not have matched them.
 
 So the attestation could say ``v1.1.0.42`` while the harness ran against bytes
-nobody had identified. This module fixes the bytes, not just the name. It lives under tools/ rather than
+nobody had identified. This module fixes the bytes, not just the name.
+It lives under tools/ rather than
 nist_vectors/ because INVARIANT-36 keeps every digest implementation out of the
 vector generators' directory: a generator transcribes published values and computes
 nothing, and this module is a checker, not a generator.

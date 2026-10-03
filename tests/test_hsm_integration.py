@@ -78,7 +78,7 @@ def _build_hsm(
     mock_pkcs11: MagicMock,
     hsm_type: str = "softhsm",
     library_path: str = "/usr/lib/softhsm/libsofthsm2.so",
-    token_label: str = "AmaCryptography",  # noqa: S107 -- test fixture label, not a production secret (HSM-001)
+    token_label: str = "AmaCryptography",  # noqa: S107 -- test fixture label (HSM-001)
     pin: str = "1234",
     slot_index: Optional[int] = None,
 ) -> HSMKeyStorage:
@@ -289,6 +289,35 @@ class TestSlotSelection:
                 HSMKeyStorage(
                     library_path="/lib.so",
                     token_label="NonExistent",
+                    pin="1234",
+                )
+
+    def test_a_surrogate_label_gets_the_designed_diagnostic(self) -> None:
+        """A label that UTF-8 cannot encode matches nothing, with the same error.
+
+        ``os.environ`` decodes a non-UTF-8 byte with ``surrogateescape``, so a
+        label sourced from one can carry a lone surrogate.  Encoding it inside
+        the comparison loop raised ``UnicodeEncodeError`` out of the
+        constructor on the first slot; the string comparison the loop replaced
+        fell through to the ``RuntimeError`` naming the available tokens, and
+        that diagnostic is the contract.
+        """
+        mock = _make_mock_pkcs11()
+        lib_inst = mock.PyKCS11Lib.return_value
+        lib_inst.getSlotList.return_value = [0]
+
+        other_token = MagicMock()
+        other_token.label = "OtherToken               "
+        lib_inst.getTokenInfo.return_value = other_token
+
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
+            with pytest.raises(RuntimeError, match=r"not found.*OtherToken"):
+                HSMKeyStorage(
+                    library_path="/lib.so",
+                    token_label="Bad\udcfflabel",
                     pin="1234",
                 )
 

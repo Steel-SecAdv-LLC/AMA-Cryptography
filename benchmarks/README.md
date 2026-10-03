@@ -211,8 +211,8 @@ The VAES + VPCLMULQDQ AES-GCM path targets **YMM (256-bit), not
 ZMM**. Zen 3+ / Ice Lake+ CPUs execute these without the AVX-512
 ZMM frequency penalty documented for Skylake-SP / Cascade Lake.
 Cloud VM variance on shared hosts is still the dominant noise
-source; published throughput numbers are from bare-metal runs, not
-CI. The regression baseline tracked in
+source; the published throughput numbers are from the canonical bench
+host, a VM (README, Performance Metrics), not from CI. The regression baseline tracked in
 [`baseline.json`](baseline.json) continues to target the AVX2
 AES-NI + PCLMULQDQ path shipped in #253 / #254 / #260 / #261, and
 the VAES kernel will only be promoted to the published throughput

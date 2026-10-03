@@ -54,6 +54,13 @@ from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
 # module" finding while still letting tests flip the backend selection.
 _SM_BACKEND_PATH = "ama_cryptography.secure_memory.SECURE_MEMZERO_BACKEND"
 
+# Several tests here run POST with a KAT forced to skip or fail and put back
+# only the state flag.  The fixture restores the whole POST state -- the
+# result table above all -- so the forced run's rows do not reach later
+# modules: a leftover skip row made test_trust_anchor_pinning's
+# ``fully_verified`` read False in a full run.
+pytestmark = pytest.mark.usefixtures("post_state_restored")
+
 
 # =============================================================================
 # Items 1 & 2 — AES-GCM per-encrypt persistence (multi-process safe)

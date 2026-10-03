@@ -1455,7 +1455,8 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
     condition and fail on a skip that condition does not expect — accepting
     exactly the skips their schedule- and dispatch-only lanes, or a pull
     request their ``changes`` job found irrelevant, produce by design, and
-    failing a lane that ran when it should have skipped.  This docstring used to say every gate "already fails on a
+    failing a lane that ran when it should have skipped.
+    This docstring used to say every gate "already fails on a
     ``skipped`` need"; those two do not, deliberately, and
     ``tests/test_workflow_command_checks.py`` pins which gates are which.
     Either way the skip is seen and judged; it is never counted as work done.

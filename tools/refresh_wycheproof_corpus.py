@@ -286,7 +286,9 @@ def main(argv: list[str] | None = None) -> int:
     problems = verify_offline(manifest)
     if not problems:
         print(
-            f"  ok  {len(manifest['files'])} files, {manifest['totalVectors']} vectors, digests + counts match"
+            f"  ok  {len(manifest['files'])} files, "
+            f"{manifest['totalVectors']} vectors, "
+            "digests + counts match"
         )
 
     if not args.offline:

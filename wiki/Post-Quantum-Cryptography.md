@@ -10,7 +10,7 @@ Classical asymmetric cryptography (RSA, ECDSA, ECDH) relies on problems believed
 
 **Timeline:** Large-scale quantum computers capable of breaking RSA-2048 or ECC-256 are projected within 5–15 years. "Harvest Now, Decrypt Later" (HNDL) attacks make it prudent to deploy quantum-resistant cryptography **today** to protect data with long-term sensitivity.
 
-**AMA Cryptography's response:** Implement NIST-approved post-quantum algorithms natively in C11 alongside classical algorithms in a hybrid scheme, providing a 50+ year security horizon.
+**AMA Cryptography's response:** Implement NIST-approved post-quantum algorithms natively in C11 alongside classical algorithms in a hybrid scheme. No security lifetime is claimed; the standards define security categories instead: ML-DSA-65 is NIST category 3 (FIPS 204) and ML-KEM-1024 category 5 (FIPS 203).
 
 ---
 
@@ -32,19 +32,16 @@ All three are fully implemented natively in AMA Cryptography's C library.
 
 ### Overview
 
-ML-DSA-65 is AMA Cryptography's **primary post-quantum signature algorithm**, implementing NIST FIPS 204 at security Level 3. It is based on the Module Learning With Errors (MLWE) hardness assumption over module lattices.
+ML-DSA-65 is AMA Cryptography's **primary post-quantum signature algorithm**, implementing NIST FIPS 204 at security category 3. It is based on the Module Learning With Errors (MLWE) hardness assumption over module lattices.
 
 ### Security Properties
 
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 204 (August 2024) |
-| Security Level | NIST Level 3 |
-| Classical Security | ~2^170 bit operations |
-| Quantum Security | ~2^190 operations (Grover-accelerated BKZ) |
+| Security category | NIST category 3 (at least as hard as a key search on AES-192) |
 | Hardness Assumption | Module-LWE (MLWE), Module-SIS |
 | Security Model | EUF-CMA in the Quantum Random Oracle Model (QROM) |
-| Quantum Attacks | Lattice sieving + Grover: ~2^190 |
 
 ### Key and Signature Sizes
 
@@ -126,16 +123,14 @@ print(f"Tampered: {is_tampered}")  # False
 
 ### Overview
 
-ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared secrets. It is implemented at NIST Level 5 (highest security tier).
+ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared secrets. It is FIPS 203's NIST security category 5 parameter set, the highest category.
 
 ### Security Properties
 
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 203 (August 2024) |
-| Security Level | NIST Level 5 |
-| Classical Security | ~2^256 operations |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Hardness Assumption | Module-LWE (MLWE) |
 | Security Model | IND-CCA2 in QROM |
 | Transformation | Fujisaki-Okamoto (IND-CPA → IND-CCA2) |
@@ -202,8 +197,7 @@ SPHINCS+ is a **stateless hash-based signature scheme** whose security relies on
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 205 (August 2024) |
-| Security Level | NIST Level 5 |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Hardness Assumption | SHA-256 collision and preimage resistance |
 | State | **Stateless** (unlike XMSS/LMS) |
 | Assumptions | Minimal — only hash function security |
@@ -346,7 +340,7 @@ Test vectors are located in `tests/test_pqc_kat.py` and `tests/test_nist_kat.py`
 
 | Scenario | Recommended Algorithm | Rationale |
 |----------|----------------------|-----------|
-| Primary signatures | ML-DSA-65 | Best performance at NIST Level 3 |
+| Primary signatures | ML-DSA-65 | Best performance at NIST category 3 |
 | Key exchange | ML-KEM-1024 + X25519 hybrid | Strongest hybrid security |
 | Conservative fallback | SPHINCS+-SHA2-256f | No lattice assumptions |
 | Short-term classical-only | Ed25519 | Compatible with legacy verifiers |

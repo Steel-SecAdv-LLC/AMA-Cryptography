@@ -86,7 +86,7 @@ REPO_ROOT = VECTORS_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ama_cryptography.pqc_backends import (  # noqa: E402 -- import follows the repo-root sys.path insert above (WP-001)
+from ama_cryptography.pqc_backends import (  # noqa: E402 -- path setup above (RW-001)
     native_aes256_gcm_decrypt,
     native_chacha20poly1305_decrypt,
     native_ed25519_verify,
@@ -386,7 +386,7 @@ def drive_ecdsa_verify(c: Case) -> tuple[bool, str]:
     pub = bytes.fromhex(c.group["publicKey"]["uncompressed"])
     if pub[:1] != b"\x04" or len(pub) != 1 + 2 * field:
         return False, "public key is not an uncompressed SEC 1 point"
-    # nosec-justification: `sha` cannot name a weak algorithm.  It is the
+    # Why B324 is suppressed below: `sha` cannot name a weak algorithm.  It is the
     # value side of _ECDSA_HASHES, which lists only sha256/sha384/sha512, and
     # the `sha is None` guard six lines up returns before this point for any
     # label not in that table.  bandit reports B324 because the argument is a

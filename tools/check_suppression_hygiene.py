@@ -24,11 +24,11 @@ from typing import Optional
 
 # Suppression tokens to scan for.
 #
-# ``nosemgrep`` is included here because INVARIANT-13 is worded "any
+# The ``nosemgrep`` marker is included because INVARIANT-13 is worded "any
 # equivalent suppression marker"; semgrep is part of the same defence-in-
 # depth stack as bandit/ruff/mypy and the same tracking-ID + justification
-# requirements apply.  Devin reviews #19/#20/#21/#22 (PR #277) caught four
-# ``nosemgrep`` markers that lacked tracking IDs; extending the scanner is
+# requirements apply.  Devin reviews #19/#20/#21/#22 (PR #277) caught
+# four ``nosemgrep`` markers that lacked tracking IDs; extending the scanner is
 # the regression check that would have caught those at PR-review time.
 #
 # Two-stage matching:
@@ -37,8 +37,8 @@ from typing import Optional
 #      flagged for the tracking-ID + justification pass.
 #   2. For the ``nosemgrep`` family specifically, ``_NOSEMGREP_STRICT_RE``
 #      then asserts the line-targeted form ``# nosemgrep: <rule_id>``
-#      (Copilot review @ tools/check_suppression_hygiene.py:34).  Bare
-#      ``# nosemgrep`` blanket-suppresses every rule on the line, which
+#      (Copilot review @ tools/check_suppression_hygiene.py:34).  A
+#      bare ``# nosemgrep`` blanket-suppresses every rule on the line, which
 #      is exactly the kind of catch-all the INVARIANT-13 audit trail is
 #      meant to prevent.  Semgrep itself accepts both forms; this repo
 #      requires the colon + rule id form so reviewers can verify *which*
@@ -260,6 +260,155 @@ _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
 # rejects em-dashes inside the ``# type: ignore[code]`` directive.
 _JUSTIFICATION_RE = re.compile(r"[\u2014\u2013]|--|#\s*\S")
 
+#: What a justification has to SAY, not only how it is punctuated.
+#:
+#: ``_JUSTIFICATION_RE`` checks for a separator, so ``noqa: F401 -- (CB-001)``
+#: (spelled without its hash, as above, so ruff does not read it) passed: the
+#: separator was there and the tracking tag satisfied the other check, with no
+#: reason between them.  INVARIANT-13 asks for a "human-readable
+#: justification".  Measured on the tree at c6326b4, 32 trailing markers passed
+#: this gate with no reason at all, a single word ("McCabe", "cast", "fake",
+#: "rng"), or only a pointer to other prose ("same", "ditto", "see the note
+#: above") -- including markers a code review had already reported as having
+#: lost their inline reason.
+#:
+#: The rule: the text after the separator, with tracking tags, ``fmt:``
+#: directives, further suppression markers and their rule codes removed, must
+#: hold at least two words of three or more letters, and not only words that
+#: point elsewhere.  It cannot tell a good reason from a bad one; it refuses a
+#: reason that is absent.
+_REASON_NOISE_RE = re.compile(
+    r"\([A-Z]+-\d+\)"  # tracking tags
+    r"|#\s*fmt:\s*\w+"  # formatter directives
+    r"|#\s*(?:noqa|nosec|nosemgrep)\b:?\s*(?:[A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*|[\w.]+(?:-[\w.]+)*)?"
+    r"|\[[^\]]*\]"  # a type: ignore[...] code list
+)
+#: A "word" is any run of three or more letters, in any script: the rule
+#: stated above is about words, not about ASCII.  Measured with the ASCII-only
+#: pattern this used to be, a justification written as two Cyrillic words was
+#: refused as giving no reason, and an accented one was shredded into the
+#: fragments the diagnostic then printed (``déjà vérifié`` became ``['rifi']``).
+#: ``[^\W\d_]`` is a letter under Unicode matching.
+_REASON_WORD_RE = re.compile(r"[^\W\d_]{3,}")
+#: Words that point at a reason stated elsewhere, plus the connective filler
+#: that glues such pointers into natural English.  :func:`states_a_reason`
+#: refuses a justification only when EVERY word is in this set, so adding
+#: filler here cannot refuse a justification holding one real content word.
+#: The variants are measured defeats of the original eleven-word set:
+#: ``as noted above``, ``same as the one above``, ``see the note above too``
+#: and ``same reason here`` each passed it, while the forms they paraphrase
+#: (``see the note above``, ``same``, ``ditto``) were refused.
+_POINTER_WORDS = frozenset(
+    {"see", "the", "note", "notes", "noted", "noting", "above", "below"}
+    | {"same", "ditto", "idem", "likewise", "elsewhere", "comment", "comments"}
+    | {"here", "there", "this", "that", "these", "those", "one", "ones"}
+    | {"previous", "previously", "prior", "earlier", "preceding"}
+    | {"aforementioned", "refer", "refers", "referred", "referenced"}
+    | {"and", "but", "for", "with", "per", "via", "too", "also"}
+    | {"reason", "reasons"}
+)
+
+
+def justification_words(rest: str) -> list[str]:
+    """The words of a marker's justification, without tags, codes or directives."""
+    m = _JUSTIFICATION_RE.search(rest)
+    if m is None:
+        return []
+    text = _REASON_NOISE_RE.sub(" ", rest[m.start() :])
+    return _REASON_WORD_RE.findall(text)
+
+
+def states_a_reason(rest: str) -> bool:
+    """True when the justification gives a reason rather than a tag or a pointer."""
+    words = justification_words(rest)
+    return len(words) >= 2 and not all(w.lower() in _POINTER_WORDS for w in words)
+
+
+#: A suppression marker that OPENS a comment-only line.  The gate used to skip
+#: every comment-only line as prose, on the stated ground that the scanners
+#: anchor a suppression to the line of the finding.  Measured, that is half
+#: true: bandit 1.9.4 applies ``# nosec B107`` written on its own line inside a
+#: multi-line statement to that whole statement (a hardcoded-password default
+#: was suppressed by it, its unsuppressed twin reported), and semgrep 1.179.0
+#: honours a ``# nosemgrep`` on its own line when the finding STARTS on the
+#: next line, while ignoring one that sits any further above, or on a
+#: non-first line of the finding's span.  (Corrected, AGENTS.md section 6.6:
+#: this said semgrep "ignores a nosemgrep on the line before its finding".
+#: Re-measured against semgrep 1.179.0, the directly-above comment-only form
+#: suppresses -- zero findings -- including inside a multi-line statement;
+#: the two ``key_management.py`` markers were dead because one sat two lines
+#: below its finding's first line and the other had a line between itself and
+#: the match, not because the position class is dead.)  So such a line is
+#: either a live suppression this gate's justification machinery never
+#: examines, or a dead one that tells a reviewer something is suppressed when
+#: it is not; both are refused.  Prose that MENTIONS a marker
+#: does not start with one and stays out of this pattern -- but it does not
+#: always stay prose.  bandit matches its marker with ``search`` over the
+#: whole comment token, so ``# default sentinel, not a credential  # nosec``
+#: and ``## nosec B107`` are nosec comments to bandit wherever the ``#``
+#: falls (measured, bandit 1.9.4: on its own line inside a multi-line
+#: statement, each suppressed the same hardcoded-password default the
+#: marker-first form suppresses), while prose mentioning ``nosec`` with no
+#: ``#`` directly before it is not.  :data:`_BANDIT_LIVE_NOSEC_RE` and
+#: :func:`multiline_spanned_lines` refuse that form exactly where bandit can
+#: read it; see :func:`check_source`.
+_STANDALONE_MARKER_RE = re.compile(r"^#\s*(?:noqa|nosec|nosemgrep)\b")
+
+#: bandit's own marker shape (``bandit.core.manager.NOSEC_COMMENT``, 1.9.4:
+#: ``#\s*nosec:?\s*(?P<tests>[^#]+)?#?``, applied with ``search`` to each
+#: comment token).  Only the ``#\s*nosec`` prefix decides whether a comment
+#: IS a nosec comment; the remainder merely parses test ids, and a remainder
+#: yielding none suppresses every test.  Searched from index 1, so a
+#: comment-only line that OPENS with a marker stays with
+#: :data:`_STANDALONE_MARKER_RE` and its message.
+_BANDIT_LIVE_NOSEC_RE = re.compile(r"#\s*nosec")
+
+#: semgrep's previous-line rule, measured rather than read from its Python
+#: constants (1.179.0 filters in its core engine): a comment-only line
+#: suppresses a finding starting on the NEXT line whenever its first
+#: alphanumeric run begins ``nosem``, case-insensitively, with any
+#: punctuation -- more hashes included -- before it and no space required.
+#: Measured live above a ``$A == $B`` finding: the plain ``# nosemgrep``,
+#: then ``## nosemgrep``, ``#  # nosemgrep``, ``# NOSEMGREP``, ``# nosem``,
+#: also ``#nosemgrep``, ``## nosemgrep: <rule-id>`` and even the prose
+#: line ``# nosemantic cleanup`` (zero findings each); measured dead:
+#: the form ``# see docs  # nosemgrep`` (prose before the marker).  semgrep 1.74.0,
+#: the version CI pins, agrees on every form.  Like the marker-first rule,
+#: the refusal is positional-independent: below such a line there is either
+#: a suppressable finding, making it a live suppression the justification
+#: rules never examine, or nothing, making it a dead marker that claims one.
+_SEMGREP_LIVE_NOSEM_RE = re.compile(r"^[^a-zA-Z0-9]*nosem", re.IGNORECASE)
+
+
+def multiline_spanned_lines(source: str) -> set[int]:
+    """Every line lying within an AST node that spans more than one line.
+
+    bandit attributes a finding to ``linerange(node)`` --
+    ``range(node.lineno, node.end_lineno + 1)``, the node's FULL span, bodies
+    included -- and honours a nosec comment token on ANY line of that range
+    (``bandit.core.utils.get_nosec``, 1.9.4).  Measured: a prose-then-marker
+    comment on its own line deep inside a function body suppressed the
+    signature's hardcoded-password default, while the same comment at module
+    level between two functions suppressed nothing.  This union runs over
+    every node where bandit consults only the nodes its registered tests
+    visit: a superset, so the boundary cannot silently narrow when a bandit
+    release or a plugin registers tests on new node types.  An unparseable
+    file yields nothing -- :func:`check_source` refuses one outright before
+    this is consulted.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    spanned: set[int] = set()
+    for node in ast.walk(tree):
+        lineno = getattr(node, "lineno", None)
+        end = getattr(node, "end_lineno", None)
+        if lineno is not None and end is not None and end > lineno:
+            spanned.update(range(lineno, end + 1))
+    return spanned
+
+
 # Forbidden directories: suppressions are absolutely prohibited here
 _FORBIDDEN_DIRS: tuple[str, ...] = (
     "src/c/",
@@ -286,9 +435,13 @@ def effective_suppressions(source: str) -> list[tuple[int, str]]:
     exact thing tokenizing was supposed to rule out. The comment token's own
     text is used here instead.
 
-    **Trailing comments only.** ``bandit``, ``ruff`` and ``mypy`` all anchor a
-    suppression to the line of the finding, so a full-line comment suppresses
-    nothing; it is prose. That distinction never mattered while the scan
+    **Trailing comments only.** ``ruff`` and ``mypy`` anchor a suppression to
+    the line of the finding, so for them a full-line comment suppresses
+    nothing; it is prose.  (Corrected, AGENTS.md section 6.6: this said
+    ``bandit`` too.  bandit 1.9.4 applies a comment-only ``# nosec`` inside a
+    multi-line statement to that statement, so a comment-only line that OPENS
+    with a marker is reported by :func:`check_source` on its own rule; see
+    ``_STANDALONE_MARKER_RE``.) That distinction never mattered while the scan
     covered only ``ama_cryptography/`` and ``tests/``, where nothing discusses
     markers in a comment. It matters immediately in ``tools/``, where the
     checkers *document their own subject matter*: eight comments explaining
@@ -340,7 +493,43 @@ def check_source(filepath: str, source: str) -> list[str]:
             f"INVARIANT-13 requires line-scoped suppressions; move it to the "
             f"lines it applies to and justify each one"
         )
+    spanned: Optional[set[int]] = None
     for lineno, comment, trailing in scanned[0]:
+        if not trailing and lineno not in scoped:
+            stripped = comment.strip()
+            if _STANDALONE_MARKER_RE.match(stripped):
+                violations.append(
+                    f"{filepath}:{lineno}: '{stripped[:40]}' is a suppression marker on "
+                    f"a comment-only line: bandit applies it to a multi-line statement that "
+                    f"spans the line, semgrep honours it only directly above its finding, "
+                    f"and this gate's justification rules examine neither form; put "
+                    f"the marker on the line it suppresses"
+                )
+                continue
+            if _SEMGREP_LIVE_NOSEM_RE.match(stripped):
+                violations.append(
+                    f"{filepath}:{lineno}: '{stripped[:40]}' is a live semgrep "
+                    f"suppression on a comment-only line: semgrep reads any such "
+                    f"line whose first word starts with 'nosem' as a nosemgrep "
+                    f"for the next line's finding; move it to the line it "
+                    f"suppresses as a justified trailing marker, or put a word "
+                    f"before the marker so semgrep cannot read it"
+                )
+                continue
+            if _BANDIT_LIVE_NOSEC_RE.search(stripped, 1):
+                # Lazily: almost no file has a mid-comment marker shape at all.
+                if spanned is None:
+                    spanned = multiline_spanned_lines(source)
+                if lineno in spanned:
+                    violations.append(
+                        f"{filepath}:{lineno}: '{stripped[:40]}' is a live bandit "
+                        f"suppression on a comment-only line: bandit matches its marker "
+                        f"anywhere in the comment and applies it to every finding of "
+                        f"any node whose span covers this line; move it to the line it "
+                        f"suppresses as a justified trailing marker, or reword the "
+                        f"prose so bandit cannot read it"
+                    )
+                    continue
         if not trailing or lineno in scoped:
             continue  # prose, or already reported as file-scoped
         for m in _SUPPRESSION_RE.finditer(comment):
@@ -386,6 +575,13 @@ def check_source(filepath: str, source: str) -> list[str]:
                 violations.append(
                     f"{tag}: suppression '{m.group()}' missing tracking ID "
                     f"(expected e.g. (KM-001))"
+                )
+            elif not states_a_reason(rest):
+                violations.append(
+                    f"{tag}: suppression '{m.group()}' gives no reason: its justification "
+                    f"needs at least two words saying why the finding does not apply, "
+                    f"not only a tag, one word or a pointer such as 'same' "
+                    f"(found {justification_words(rest)})"
                 )
     return violations
 

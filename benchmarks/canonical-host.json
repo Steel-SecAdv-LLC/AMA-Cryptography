@@ -12,23 +12,8 @@
       "measured": "2026-09-24, five consecutive rounds on an otherwise idle host, each pinned with taskset -c 0; published figure = median of five, range = min-max. Per round: 3,435 / 3,199 / 3,360 / 3,880 / 3,356 ops/sec.",
       "command": "taskset -c 0 build/bin/benchmark_c_raw --json (row \"ML-DSA-65 Sign\")"
     },
-    "sandbox-host": {
-      "description": "The secp256k1 fixed-base comb measurement host, raw C, reported alongside the Welch t-test in docs/BENCHMARK_HISTORY.md.",
-      "measured": "2026-07-29",
-      "command": "build/bin/benchmark_c_raw --json"
-    },
-    "comb-table-size": {
-      "description": "Not a measurement of a machine: the 4-block fixed-base comb table is a compile-time constant, 16 entries, sized from the generator table in src/c/ama_secp256k1.c.",
-      "measured": "2026-07-29",
-      "command": "sizeof the comb table in src/c/ama_secp256k1.c"
-    },
-    "literature": {
-      "description": "Reported by OpenSSL (crypto/ec/asm/x25519-x86_64.pl) and BoringSSL (fiat-crypto MULX/ADX), not measured by this repository. Recorded so the citation cannot drift into reading as an AMA measurement (INVARIANT-36).",
-      "measured": "n/a - cited, not measured",
-      "command": "see the cited upstream sources"
-    },
     "cited-specification": {
-      "description": "Not a measurement: a number the region prints because a specification defines it — the FIPS 203/204 and RFC 3161/8032 document numbers, the ML-DSA modulus q = 8380417 (FIPS 204 Table 1), the CPUID.(EAX=7,ECX=0):EBX bit indices of BMI2 (8) and ADX (19) (Intel SDM Vol. 2A, CPUID), and dudect's |t| decision threshold of 4.5. Pinned so that every number in the region is accounted for.",
+      "description": "Not a measurement: a number the region prints because a specification defines it — the FIPS 203/204 and RFC 3161/8032 document numbers, the ML-DSA modulus q = 8380417 (FIPS 204 Table 1), and the CPUID.(EAX=7,ECX=0):EBX bit indices of BMI2 (8) and ADX (19) (Intel SDM Vol. 2A, CPUID). Pinned so that every number in the region is accounted for.",
       "measured": "n/a - defined by the cited specification, not measured",
       "command": "read from the cited specification"
     },
@@ -123,7 +108,7 @@
       "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
       "label": "(prose)",
       "approx": false,
-      "value": "11,444",
+      "value": "11,443",
       "unit": "ops/sec",
       "source": "canonical-bench-host"
     },
@@ -243,7 +228,7 @@
       "heading": "ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)",
       "label": "**Encapsulate**",
       "approx": false,
-      "value": "17,985",
+      "value": "17,984",
       "unit": "ops/sec",
       "source": "canonical-bench-host"
     },
@@ -627,14 +612,6 @@
       "heading": "Core Cryptographic Primitives (Python API via ctypes)",
       "label": "(prose)",
       "approx": false,
-      "value": "2.2",
-      "unit": "×",
-      "source": "literature"
-    },
-    {
-      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
-      "label": "(prose)",
-      "approx": false,
       "value": "8032",
       "unit": "",
       "source": "cited-specification"
@@ -694,14 +671,6 @@
       "value": "12,465",
       "unit": "",
       "source": "canonical-bench-host"
-    },
-    {
-      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "1.8",
-      "unit": "",
-      "source": "literature"
     },
     {
       "heading": "Core Cryptographic Primitives (Python API via ctypes)",
@@ -814,134 +783,6 @@
       "value": "2026",
       "unit": "",
       "source": "canonical-bench-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(heading)",
-      "approx": false,
-      "value": "2026-07-29",
-      "unit": "",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": true,
-      "value": "1.9",
-      "unit": "KB",
-      "source": "comb-table-size"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "16",
-      "unit": "",
-      "source": "comb-table-size"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "256",
-      "unit": "",
-      "source": "comb-table-size"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "256",
-      "unit": "",
-      "source": "comb-table-size"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "64",
-      "unit": "",
-      "source": "comb-table-size"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "354.97",
-      "unit": "µs",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "83.36",
-      "unit": "µs",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "4.26",
-      "unit": "×",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "392.94",
-      "unit": "µs",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "125.54",
-      "unit": "µs",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "3.13",
-      "unit": "×",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "60,000",
-      "unit": "",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "0.29",
-      "unit": "",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "1.03",
-      "unit": "",
-      "source": "sandbox-host"
-    },
-    {
-      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "4.5",
-      "unit": "",
-      "source": "cited-specification"
     }
   ]
 }

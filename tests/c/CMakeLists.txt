@@ -21,9 +21,16 @@ endmacro()
 # no stack protector because the defect only exists in optimized code and the
 # probe's frame arithmetic assumes a plain prologue; 77 is the skip under a
 # sanitizer that moves or instruments the read (see the TUs).
+# An optional third argument names the library to link instead of the
+# default shared/test choice below: a probe driven through the
+# AMA_TESTING_MODE hooks must link the test archive, and it must still be
+# built under exactly these flags -- residue_probe.h records how a second
+# hand-copied set of them drifted from the first.
 macro(add_ama_residue_probe test_name test_source)
     add_executable(${test_name} ${test_source})
-    if(AMA_BUILD_SHARED AND NOT WIN32)
+    if(${ARGC} GREATER 2)
+        target_link_libraries(${test_name} ${ARGV2})
+    elseif(AMA_BUILD_SHARED AND NOT WIN32)
         target_link_libraries(${test_name} ama_cryptography_shared)
     else()
         target_link_libraries(${test_name} ama_cryptography_test)
@@ -300,6 +307,9 @@ if(AMA_USE_NATIVE_PQC)
     add_test(NAME test_slhdsa_context_separation COMMAND test_slhdsa_context_separation
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(test_slhdsa_context_separation PROPERTIES SKIP_RETURN_CODE 77)
+    # FIPS 204 Algorithm 21: every non-canonical hint encoding is refused.
+    # Three of its four rejections were executed by no suite until this test.
+    add_ama_test(test_ml_dsa_hint_encoding test_ml_dsa_hint_encoding.c)
 endif()
 add_ama_test(test_ed25519 test_ed25519.c)
 # The expanded signing form (INVARIANT-51 verified at key load): RFC 8032
@@ -566,6 +576,28 @@ if(AMA_USE_NATIVE_PQC)
     # ML-KEM / ML-DSA parameter blocks.  All three use AMA_TESTING_MODE-only
     # exports that appear in no public header.
     add_ama_test(test_nistp test_nistp.c)
+    # Public-API input guards in ama_kyber.c, ama_dilithium.c, ama_slhdsa.c
+    # and ama_nistp.c that no suite executed until 2026-09-26: over-long
+    # ciphertexts and keys, 256-octet contexts, out-of-range ECDSA scalars,
+    # undefined flags and digest lengths, and every NULL argument.
+    add_ama_test(test_input_guards test_input_guards.c)
+    # The dead-stack probe (residue_probe.h) applied to the eight CSPRNG-failure
+    # exits in ama_kyber.c, ama_dilithium.c, ama_slhdsa.c and ama_x25519.c
+    # that lacked a scrub until 2026-09-26: a failed draw may already have
+    # written output, and the exit must scrub it.  Linked against the test archive, not the shared
+    # library add_ama_residue_probe uses, because the failure is driven through
+    # the AMA_TESTING_MODE CSPRNG hooks; the test file records why LTO cannot
+    # hide this needle.  The probe flags come from the one macro.
+    add_ama_residue_probe(test_csprng_failure_residue test_csprng_failure_residue.c
+                          ama_cryptography_test)
+    # The same probe applied to SLH-DSA signing's hash-failure exits, which no
+    # input reaches: the AMA_TESTING_MODE fault hook in ama_slhdsa.c fails
+    # PRF_msg, H_msg or, in the SHAKE family, any other SHAKE-256 hash after it
+    # has computed its output (once per hash call, not per absorbed segment),
+    # and the exit must leave no R, digest, SK.prf or SK.seed behind.  Test
+    # archive for the same reason as the probe above.
+    add_ama_residue_probe(test_slhdsa_fault_residue test_slhdsa_fault_residue.c
+                          ama_cryptography_test)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).

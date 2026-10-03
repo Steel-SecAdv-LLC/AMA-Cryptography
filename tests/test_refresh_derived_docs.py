@@ -126,6 +126,83 @@ def test_check_mode_reports_drift_without_writing(
     assert "tools/update_docs.py" not in ran, "--check must not rewrite anything"
 
 
+def test_check_mode_names_the_stale_figure_even_when_quiet(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--quiet`` silences a current tree, not the drift report.
+
+    The pre-commit hook runs the check quietly; a refused commit must name the
+    stale figure and the regenerating command, not only the gate that failed.
+    Until 2026-09-27 the quiet path discarded the gate's output, so the hook
+    said "DRIFTED documented counts" and nothing more, while the hook's own
+    comment and ``test_the_hook_is_quiet_but_not_silent`` claimed otherwise.
+    """
+    stale = "FAIL: docs/METRICS_REPORT.md: LoC table says 1 lines for Tests; measured 2"
+
+    def fake_run(command: tuple[str, ...], quiet: bool) -> tuple[int, str]:
+        return (1, stale) if command[0].endswith("check_documented_counts.py") else (0, "OK")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+    assert tool.main(["--check", "--quiet"]) == 1
+    captured = capsys.readouterr()
+    assert stale in captured.err, captured
+    assert "Regenerate them with" in captured.err
+    assert "OK" not in captured.err, "a passing gate's output is not a drift report"
+
+
+def test_check_mode_reports_a_missing_gate_as_fatal_not_drift(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The module docstring gives a missing tool exit 2, and the writing path
+    returns 2 for one; ``--check`` printed ``DRIFTED`` and "Regenerate them
+    with" and exited 1, sending the reader to a regenerator that needs the
+    same missing script."""
+    monkeypatch.setattr(tool, "GATES", (("ghost gate", ("tools/no_such_gate_script.py",)),))
+    assert tool.main(["--check", "--quiet"]) == 2
+    captured = capsys.readouterr()
+    assert "FATAL" in captured.err, captured
+    assert "no_such_gate_script.py does not exist" in captured.err, captured
+    assert "Regenerate them with" not in captured.err, captured
+    assert "DRIFTED" not in captured.out, captured
+
+
+def test_check_mode_reports_a_gate_that_could_not_measure_as_fatal(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``check_documented_counts.py`` exits 2 when it could not measure (a
+    documented test file that cannot be collected in this interpreter);
+    regenerating fixes nothing there, so that is not reported as drift.
+    Drift found beside it is still named."""
+    unmeasured = "ERROR: 1 documented count(s) could not be measured in this environment"
+
+    def fake_run(command: tuple[str, ...], quiet: bool) -> tuple[int, str]:
+        if command[0].endswith("check_documented_counts.py"):
+            return 2, unmeasured
+        return 1, "VISUAL ASSETS CHECK FAILED"
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+    assert tool.main(["--check", "--quiet"]) == 2
+    captured = capsys.readouterr()
+    assert unmeasured in captured.err, captured
+    assert "FATAL: could not check documented counts" in captured.err, captured
+    assert "Drifted as well: visual assets" in captured.err, captured
+    assert "Regenerate them with" not in captured.err, captured
+
+
+def test_a_failing_pass_shows_its_output_even_when_quiet(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The FATAL line says "Read its output above"; under ``--quiet`` that
+    output was discarded, so there was nothing above to read."""
+    refusal = "refusing to re-measure: these files are not staged"
+    monkeypatch.setattr(tool, "_run", lambda command, quiet: (1, refusal))
+    monkeypatch.setattr(tool, "_digest_outputs", lambda: "stable")
+    assert tool.main(["--quiet"]) == 2
+    captured = capsys.readouterr()
+    assert refusal in captured.err, captured
+    assert captured.err.index(refusal) < captured.err.index("Read its output above"), captured
+
+
 def test_check_mode_passes_on_a_current_tree(
     tool: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

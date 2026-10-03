@@ -1,0 +1,39 @@
+# Flake8 configuration — supplementary to ruff (the primary linter).
+#
+# Ruff replaces flake8 + isort (see pyproject.toml [tool.ruff]).  This file
+# exists so that `flake8 .` passes cleanly, establishing agreement between
+# the two tools.  Ruff is authoritative; this config mirrors its decisions.
+#
+# E203: whitespace before ':' — Black deliberately formats slices as
+#       `a[1 : 2]`, which E203 flags.  Ruff does not enforce E203.
+#       PEP 8 was amended to permit this style.
+#
+# E402: module-level import not at top of file — ruff is context-aware
+#       (sys.path inserts, try/except guards, matplotlib.use() calls) and
+#       does not flag structurally justified late imports.  Flake8 lacks
+#       that analysis, so structurally justified files are listed below.
+#
+# extend-exclude: ama_cryptography/_integrity_signature.py is a per-build,
+#       git-ignored artefact (regenerated on every import; see .gitignore and
+#       INVARIANT-17).  It exists only after a local build, carries generated
+#       long lines, and is never present in CI's lint checkout.  Ruff skips it
+#       because ruff honours .gitignore; flake8 does not, so it is named here
+#       to keep `flake8 .` clean whether or not the tree has been built.
+
+[flake8]
+max-line-length = 100
+extend-ignore = E203
+extend-exclude =
+    ama_cryptography/_integrity_signature.py
+per-file-ignores =
+    ama_cryptography/__init__.py:E402
+    ama_cryptography/crypto_api.py:E402
+    ama_cryptography/legacy_compat.py:E402
+    benchmarks/benchmark_suite.py:E402
+    examples/python/complete_demo.py:E402
+    examples/python/fastapi_integration.py:E402
+    examples/python/flask_integration.py:E402
+    tests/test_double_helix_engine.py:E402
+    tests/test_equations.py:E402
+    tests/test_fuzzing.py:E402
+    tools/generate_dashboards.py:E402

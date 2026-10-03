@@ -58,9 +58,10 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 import subprocess
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Collection, Sequence
 
 __all__ = [
     "HISTORICAL_RECORD_DIRS",
@@ -71,6 +72,7 @@ __all__ = [
     "staged_files",
     "tracked_files",
     "tracked_names",
+    "worktree_names",
 ]
 
 _GIT_TIMEOUT_SECONDS = 60
@@ -180,6 +182,106 @@ def tracked_names(root: Path, *pathspecs: str) -> list[str]:
 def tracked_files(root: Path, *pathspecs: str) -> list[Path]:
     """:func:`tracked_names`, each joined onto ``root``."""
     return [root / name for name in tracked_names(root, *pathspecs)]
+
+
+_GLOB_MAGIC = ":(glob)"
+
+
+def _glob_pathspec(pathspec: str) -> Callable[[str], bool]:
+    """The walk's reading of one ``:(glob)`` pathspec: a predicate on a
+    ``/``-separated name relative to the root, true where ``git ls-files``
+    would list that name.
+
+    git (2.43, measured) matches ``:(glob)`` with wildmatch in pathname mode,
+    over the name's bytes: ``*`` and ``?`` never match ``/``, and ``?`` is one
+    byte (``cl?.md`` does not list ``clé.md``); a component of stars only
+    (``**``) matches any run of whole directories (``**/X`` also matches a
+    root-level ``X``).  Before that, a pathspec equal to a name, or to one of
+    its leading directories, matches it literally (``:(glob)tests`` lists
+    everything under ``tests/``).  A ``**`` that shares its component is
+    refused, since git reads it as a ``*`` only in some positions: ``src/**.c``
+    lists what ``src/*.c`` lists, but ``tests/test_**/*.py`` lists
+    ``tests/test_z.py`` and ``tests/test_x/deep/y.py``, neither of which
+    ``tests/test_*/*.py`` lists.  Anything outside this grammar raises
+    ``ValueError`` in both modes of :func:`worktree_names`, so no caller
+    depends on a pathspec git and the walk would read differently.
+    """
+    if not pathspec.startswith(_GLOB_MAGIC):
+        raise ValueError(
+            f"worktree_names takes only {_GLOB_MAGIC!r} pathspecs, which the walk "
+            f"outside a checkout matches as git does; got {pathspec!r}"
+        )
+    pattern = pathspec[len(_GLOB_MAGIC) :]
+    parts = pattern.split("/")
+    if any(part in ("", ".", "..") for part in parts) or any(c in pattern for c in "[\\"):
+        raise ValueError(
+            f"{pathspec!r}: the walk matches literal characters, '*', '?' and "
+            "'**' between non-empty path components, and nothing else"
+        )
+    if any("**" in part and part.strip("*") for part in parts):
+        raise ValueError(
+            f"{pathspec!r}: '**' must be a whole path component; git reads one "
+            "that shares its component as a '*' only in some positions"
+        )
+    regex: list[bytes] = []
+    for index, part in enumerate(os.fsencode(pattern).split(b"/")):
+        last = index == len(parts) - 1
+        if len(part) > 1 and not part.strip(b"*"):
+            regex.append(b".*" if last else b"(?:.*/)?")
+            continue
+        regex.extend(
+            b"[^/]*" if run == b"*" else b"[^/]" if run == b"?" else re.escape(run)
+            for run in re.findall(rb"\*|\?|[^*?]+", part)
+        )
+        if not last:
+            regex.append(b"/")
+    compiled = re.compile(b"".join(regex), re.DOTALL)
+    prefix = pattern + "/"
+    return lambda name: (
+        name == pattern
+        or name.startswith(prefix)
+        or compiled.fullmatch(os.fsencode(name)) is not None
+    )
+
+
+def worktree_names(root: Path, *pathspecs: str, walk_skip_dirs: Collection[str] = ()) -> list[str]:
+    """Every file a scan of ``root`` should read, ``/``-separated and relative
+    to it: in a checkout, what git tracks; outside one, every regular file.
+
+    A build leaves untracked files in the work tree that are not the tree's
+    documentation: Cython writes each ``.pyx`` docstring into a generated
+    ``src/cython/*.c``, and packaging writes ``*.egg-info/``.  A walk reads
+    them; git's list does not.
+
+    Only the absence of ``.git`` selects the walk (a source tarball, a gate's
+    own fixture directory): a ``.git`` that git cannot read is a checkout git
+    failed on, and :class:`TrackedFilesError` says so rather than the scan
+    quietly widening.
+
+    ``pathspecs`` narrow the list as they narrow ``git ls-files``, whose list
+    it is in a checkout; outside one the walk applies the same match
+    (:func:`_glob_pathspec`, which also says why only ``:(glob)`` is taken).
+    None means every file.  The walk never enters a ``.git`` (git lists no
+    path through one) nor a directory named in ``walk_skip_dirs``: outside a
+    checkout nothing says which directories are build output, so a caller
+    that knows names them.  In a checkout git's list is the answer and
+    ``walk_skip_dirs`` is not consulted.  Both modes return git's order.
+    """
+    matchers = [_glob_pathspec(pathspec) for pathspec in pathspecs]
+    if (root / ".git").exists():
+        return tracked_names(root, *pathspecs)
+    names: list[str] = []
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [d for d in subdirectories if d != ".git" and d not in walk_skip_dirs]
+        base = Path(directory).relative_to(root).as_posix()
+        for file_name in files:
+            name = file_name if base == "." else f"{base}/{file_name}"
+            if file_name == ".git" or not os.path.isfile(os.path.join(directory, file_name)):
+                continue
+            if matchers and not any(match(name) for match in matchers):
+                continue
+            names.append(name)
+    return sorted(names, key=os.fsencode)
 
 
 def staged_files(root: Path) -> list[Path]:

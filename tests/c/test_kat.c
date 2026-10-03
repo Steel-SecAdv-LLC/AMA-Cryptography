@@ -17,6 +17,7 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 #include "../../include/ama_cryptography.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,14 +151,11 @@ static void nist_drbg_generate(nist_drbg_ctx *ctx, uint8_t *out, size_t outlen) 
 /* ============================================================================
  * RANDOMNESS HOOKS
  * ============================================================================
- * External hooks defined in the crypto source files. When set, all
- * internal random byte generation routes through these, allowing
+ * Hooks defined in the crypto source files (AMA_TESTING_MODE only) and
+ * declared, with their one prototype, in ama_testing_exports.h above. When
+ * set, all internal random byte generation routes through these, allowing
  * deterministic output for KAT vector reproduction.
  * ============================================================================ */
-
-extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len);
-extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
-extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
 
 /* The DRBG-backed randombytes hook and its install/remove pair lived here
  * for the legacy pre-FIPS KAT tests. Those tests are gone; the hooks were

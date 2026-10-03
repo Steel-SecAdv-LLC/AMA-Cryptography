@@ -153,7 +153,7 @@ def fetch_bytes(
     wait = DEFAULT_BACKOFF if backoff is None else backoff
 
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(  # noqa: S310  # nosec B310 -- https enforced directly above and on every redirect by _HTTPSOnlyRedirectHandler (FETCH-001)
+    req = urllib.request.Request(  # noqa: S310  # nosec B310 -- HTTPS fetch (HF-001)
         url, headers={"User-Agent": user_agent}
     )
     for attempt in range(1, total + 1):

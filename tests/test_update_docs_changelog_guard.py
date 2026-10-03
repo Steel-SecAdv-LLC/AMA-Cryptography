@@ -23,6 +23,7 @@ These pin the heading parser directly, on both dated and undated forms.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -575,6 +576,22 @@ class TestFuzzTargetCountsAreRegenerated:
         assert counts.check_fuzz_target_counts(tmp_path, 3) == []
         assert update_docs.update_fuzz_target_counts(root=tmp_path) is False
 
+    def test_a_number_inside_an_algorithm_name_is_not_a_count(self, tmp_path: Path) -> None:
+        """ARCHITECTURE.md's "the Ed25519 and ML-DSA-65 verifiers the harnesses
+        do drive" was rewritten to "ML-DSA-17": the ``-65`` matched as a count
+        followed by two words and "harnesses"."""
+        self._tree(tmp_path, harnesses=3)
+        doc = tmp_path / "README.md"
+        text = (
+            "Fuzzing reaches the ML-DSA-65 verifiers the harnesses drive,\n"
+            "and SHA3-256 hash harnesses, through 3 fuzz targets.\n"
+        )
+        doc.write_text(text, encoding="utf-8")
+        counts = update_docs._counts_module()
+        assert counts.check_fuzz_target_counts(tmp_path, 3) == []
+        assert update_docs.update_fuzz_target_counts(root=tmp_path) is False
+        assert doc.read_text(encoding="utf-8") == text
+
 
 class TestThePublishedBenchmarkTableTracksTheRecord:
     """`wiki/Performance-Benchmarks.md`'s auto-table must match the record.
@@ -793,7 +810,12 @@ class TestReplacementTextIsInsertedVerbatim:
         "native_backend": r"ama_cryptography.dll from build\lib",
     }
 
-    def _tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    def _tree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provenance: Mapping[str, str | None] | None = None,
+    ) -> Path:
         import json
 
         (tmp_path / "benchmarks").mkdir()
@@ -802,7 +824,7 @@ class TestReplacementTextIsInsertedVerbatim:
             json.dumps(
                 {
                     "timestamp": "2026-09-24T00:00:00Z",
-                    "provenance": self._PROVENANCE,
+                    "provenance": self._PROVENANCE if provenance is None else provenance,
                     "results": [
                         {"name": "full_package_create", "ops_per_second": 500.0},
                         {"name": "dilithium_sign", "ops_per_second": 2000.0},
@@ -842,6 +864,158 @@ class TestReplacementTextIsInsertedVerbatim:
         for value in self._PROVENANCE.values():
             assert value in text, f"{value!r} was not written verbatim"
         assert "\b" not in text
+
+    @pytest.mark.parametrize(
+        ("recorded", "published"),
+        [
+            (
+                "v5.0.0 · digest d95f5cc7… · /home/user/AMA-Cryptography/ama_cryptography/"
+                "libama_cryptography.so",
+                "v5.0.0 · digest d95f5cc7… · libama_cryptography.so",
+            ),
+            (
+                r"v5.0.0 · C:\Users\bench\AMA-Cryptography\ama_cryptography\ama_cryptography.dll",
+                "v5.0.0 · ama_cryptography.dll",
+            ),
+            (
+                r"ama_cryptography.dll from build\lib",
+                r"ama_cryptography.dll from build\lib",
+            ),
+        ],
+    )
+    def test_only_an_absolute_library_path_is_reduced_to_its_basename(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        recorded: str,
+        published: str,
+    ) -> None:
+        """The record's absolute library path is the measuring checkout's home
+        directory, not a property of the build, so only that is dropped —
+        for either path flavour, on any host.  ``Path(part).name`` did this
+        with the host's rules, and on Windows it cut the descriptive value
+        ``ama_cryptography.dll from build\\lib`` down to ``lib``."""
+        self._tree(tmp_path, monkeypatch, dict(self._PROVENANCE, native_backend=recorded))
+        latency = update_docs._generate_pipeline_latency_table()
+        assert f"- **Build:** {published}\n" in latency
+
+    @pytest.mark.parametrize(
+        ("loaded_from", "basename"),
+        [
+            (
+                "/home/bench/AMA-Cryptography/ama_cryptography/libama_cryptography.so",
+                "libama_cryptography.so",
+            ),
+            (
+                r"C:\Users\bench\AMA-Cryptography\ama_cryptography\ama_cryptography.dll",
+                "ama_cryptography.dll",
+            ),
+        ],
+    )
+    def test_the_runner_records_the_library_path_as_a_part_of_its_own(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        loaded_from: str,
+        basename: str,
+    ) -> None:
+        """The reduction above acts on whole ``·``-separated parts, so it is
+        only as good as the record's shape.  A path embedded in prose
+        ("loaded from /home/...") would keep its home directory.  The field
+        has one producer, ``benchmark_runner._native_backend_summary``; driven
+        here with a home-directory path, its output must publish the basename
+        alone -- which holds because it writes the path as a part of its own."""
+        import ama_cryptography._self_test as self_test
+        import benchmarks.benchmark_runner as runner
+
+        attestation = {
+            "native_backend": {
+                "loaded": True,
+                "preload_digest_hex": "d95f5cc73e89c347" * 4,
+                "native_version": "5.0.0",
+                "path": loaded_from,
+            }
+        }
+        monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
+        recorded = runner._native_backend_summary()
+        self._tree(tmp_path, monkeypatch, dict(self._PROVENANCE, native_backend=recorded))
+        latency = update_docs._generate_pipeline_latency_table()
+        assert f"- **Build:** v5.0.0 · digest d95f5cc73e89c347… · {basename}\n" in latency
+
+    def test_only_a_record_with_its_build_configuration_claims_reproducibility(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The heading said "everything needed to reproduce these numbers"
+        over a Scope line saying the runner did not record the CMake flags.
+        It says so only of a record that carries the build configuration, and
+        both generated tables publish that configuration."""
+        claim = "everything needed to reproduce these numbers"
+        unrecorded: tuple[Mapping[str, str | None], ...] = (
+            self._PROVENANCE,
+            dict(
+                self._PROVENANCE,
+                build_configuration="not recorded: no CMake build tree searched",
+            ),
+            # JSON null: str() would render "None" and claim it reproducible.
+            {**self._PROVENANCE, "build_configuration": None},
+        )
+        for index, provenance in enumerate(unrecorded):
+            (tmp_path / f"unrecorded{index}").mkdir()
+            self._tree(tmp_path / f"unrecorded{index}", monkeypatch, provenance)
+            latency = update_docs._generate_pipeline_latency_table()
+            assert claim not in latency, provenance
+            assert "- **Build configuration:** not recorded\n" in latency
+            assert "cannot be reproduced from it" in latency
+            assert "not reproducible from it" in update_docs._generate_benchmark_table()
+
+        configured = "GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release (from build/python-cmake)"
+        (tmp_path / "recorded").mkdir()
+        self._tree(
+            tmp_path / "recorded",
+            monkeypatch,
+            dict(self._PROVENANCE, build_configuration=configured),
+        )
+        latency = update_docs._generate_pipeline_latency_table()
+        assert claim in latency
+        assert f"- **Build configuration:** `{configured}`\n" in latency
+        assert "not recorded by the runner" not in latency
+        assert f"built with `{configured}`" in update_docs._generate_benchmark_table()
+
+    def test_the_not_recorded_prefix_is_the_runners(self) -> None:
+        import importlib.util
+
+        runner_path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark_runner.py"
+        spec = importlib.util.spec_from_file_location("_runner_prefix_check", runner_path)
+        assert spec is not None and spec.loader is not None
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        assert update_docs.BUILD_CONFIGURATION_NOT_RECORDED == (
+            runner.BUILD_CONFIGURATION_NOT_RECORDED
+        )
+
+    def test_the_latency_block_names_its_commit_and_tree_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A latency figure with no commit or tree state cannot be tied to
+        the code it measured; the record carries both, so the block does."""
+        self._tree(tmp_path, monkeypatch)
+        latency = update_docs._generate_pipeline_latency_table()
+        assert "- **Commit:** (unrecorded)\n" in latency
+        assert "- **Python bindings:** (unrecorded)\n" in latency
+        provenance = dict(
+            self._PROVENANCE,
+            commit="4e4fa7fa7f25f9cf14adec240d4789fcf4123325",
+            tree="DIRTY (uncommitted changes: ama_cryptography/_integrity_digest.txt)",
+            python_bindings="6 of 6 compiled bindings imported",
+        )
+        (tmp_path / "recorded").mkdir()
+        self._tree(tmp_path / "recorded", monkeypatch, provenance)
+        latency = update_docs._generate_pipeline_latency_table()
+        assert (
+            "- **Commit:** `4e4fa7fa7f25` — DIRTY (uncommitted changes: "
+            "ama_cryptography/_integrity_digest.txt)\n"
+        ) in latency
+        assert "- **Python bindings:** 6 of 6 compiled bindings imported\n" in latency
 
     def test_every_substitution_passes_a_function(self) -> None:
         """No ``sub`` call in the module takes a string template.

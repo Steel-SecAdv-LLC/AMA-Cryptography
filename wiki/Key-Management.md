@@ -12,7 +12,7 @@ The key management system provides enterprise-grade capabilities:
 - **Key Lifecycle** — Active → Rotating → Deprecated → Revoked → Compromised
 - **Zero-Downtime Rotation** — Seamless key rotation with versioned metadata
 - **Secure Storage** — Encrypted key storage at rest
-- **HSM Support** — FIPS 140-2 Level 3+ Hardware Security Module integration
+- **HSM Support** — PKCS#11 integration (`HSMKeyStorage`); the validation is the HSM's own
 
 ---
 
@@ -334,7 +334,7 @@ active_meta = mgr.export_metadata()
 
 ### Option 1: Hardware Security Module (HSM) — Recommended
 
-For production deployments, store master secrets in FIPS 140-2 Level 3+ HSMs:
+For production deployments, store master secrets in an HSM validated to FIPS 140-3 (or FIPS 140-2 while its certificate is active), Level 3 or higher:
 
 <!-- example: pseudocode: needs a provisioned AWS CloudHSM cluster and boto3 credentials -->
 ```python
@@ -358,7 +358,7 @@ def store_master_secret_hsm(master_secret: bytes, key_label: str) -> str:
 
 ### Option 2: Hardware Token (YubiKey, Nitrokey)
 
-For personal/small-team use (FIPS 140-2 Level 2):
+For personal/small-team use (a token carries only the validation its own certificate states):
 
 <!-- example: pseudocode: needs a physically attached YubiKey and the ykman package -->
 ```python

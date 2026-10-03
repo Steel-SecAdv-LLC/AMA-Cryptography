@@ -1163,6 +1163,139 @@ class TestTheTreeRowNamesWhatIsDirty:
         assert ("imported" in row) or ("ctypes path" in row)
 
 
+class TestTheRecordNamesHowTheMeasuredLibraryWasBuilt:
+    """The record carries the measured library's build configuration.
+
+    AGENTS.md 8.7 forbids publishing a figure without its build flags, and the
+    generated ARCHITECTURE.md block called itself "everything needed to
+    reproduce these numbers" while saying the runner did not record them.
+    The library cannot report its own flags; its digest pins the binary, so
+    the build tree whose copy has that digest built it, and its CMake cache
+    says how.  The digest stands in for a SHA3-256 here: the lookup takes the
+    hash function, and the property under test is which tree it believes.
+    """
+
+    LIBRARY = "libama_cryptography.so.5.0.0"
+
+    @staticmethod
+    def _identity(data: bytes) -> bytes:
+        return data
+
+    def _tree(self, root: Path, name: str, library: bytes, build_type: str, avx512: str) -> Path:
+        tree = root / name
+        (tree / "lib").mkdir(parents=True)
+        (tree / "lib" / self.LIBRARY).write_bytes(library)
+        (tree / "CMakeCache.txt").write_text(
+            "# This is the CMakeCache file.\n"
+            "//Choose the type of build\n"
+            f"CMAKE_BUILD_TYPE:STRING={build_type}\n"
+            "CMAKE_C_FLAGS:STRING=\n"
+            f"CMAKE_C_FLAGS_{build_type.upper()}:STRING=-O3 -DNDEBUG\n"
+            f"AMA_ENABLE_AVX512:BOOL={avx512}\n"
+            "AMA_USE_NATIVE_PQC:BOOL=ON\n"
+            "AMA_HAVE_FAT_LTO:INTERNAL=1\n",
+            encoding="utf-8",
+        )
+        probe = tree / "CMakeFiles" / "4.4.3"
+        probe.mkdir(parents=True)
+        (probe / "CMakeCCompiler.cmake").write_text(
+            'set(CMAKE_C_COMPILER "/usr/bin/cc")\n'
+            'set(CMAKE_C_COMPILER_ID "GNU")\n'
+            'set(CMAKE_C_COMPILER_VERSION "13.3.0")\n',
+            encoding="utf-8",
+        )
+        return tree
+
+    def test_the_tree_holding_the_measured_bytes_is_the_one_recorded(self, tmp_path: Path) -> None:
+        measured = b"the measured object"
+        other = self._tree(tmp_path, "other", b"a rebuild since", "Debug", "OFF")
+        match = self._tree(tmp_path, "match", measured, "Release", "ON")
+        recorded = br._cmake_build_configuration(
+            self.LIBRARY, measured.hex(), [other, match], self._identity
+        )
+        assert recorded.startswith("GNU 13.3.0; cmake "), recorded
+        for option in (
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_C_FLAGS=",
+            "'-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG'",
+            "-DAMA_ENABLE_AVX512=ON",
+            "-DAMA_USE_NATIVE_PQC=ON",
+        ):
+            assert option in recorded, (option, recorded)
+        assert "Debug" not in recorded, "the configuration of a tree with other bytes"
+        assert "AMA_HAVE_FAT_LTO" not in recorded, "a configure-time probe is not an option"
+        assert "`" not in recorded, "the JSON value carries no markdown"
+
+    def test_no_tree_with_the_measured_bytes_is_said_to_be_unrecorded(self, tmp_path: Path) -> None:
+        other = self._tree(tmp_path, "other", b"a rebuild since", "Release", "ON")
+        uncached = self._tree(tmp_path, "uncached", b"the measured object", "Release", "ON")
+        (uncached / "CMakeCache.txt").unlink()
+        recorded = br._cmake_build_configuration(
+            self.LIBRARY, b"the measured object".hex(), [other, uncached], self._identity
+        )
+        assert recorded.startswith(br.BUILD_CONFIGURATION_NOT_RECORDED), recorded
+        assert "--cmake-build-dir" in recorded, "the remedy is named"
+
+    @pytest.mark.parametrize(
+        "probe",
+        [
+            None,
+            'set(CMAKE_C_COMPILER_ID "GNU")\n',
+            'set(CMAKE_C_COMPILER_VERSION "13.3.0")\n',
+            'set(CMAKE_C_COMPILER_ID "")\nset(CMAKE_C_COMPILER_VERSION "13.3.0")\n',
+        ],
+    )
+    def test_a_tree_that_does_not_name_its_compiler_records_nothing(
+        self, tmp_path: Path, probe: str | None
+    ) -> None:
+        """The bytes match, but the tree cannot say what compiled them, so it
+        cannot say how to rebuild them: no probe, or one missing the ID or the
+        version, is "not recorded", which the claims gate refuses."""
+        measured = b"the measured object"
+        tree = self._tree(tmp_path, "match", measured, "Release", "ON")
+        target = tree / "CMakeFiles" / "4.4.3" / "CMakeCCompiler.cmake"
+        if probe is None:
+            target.unlink()
+        else:
+            target.write_text(probe, encoding="utf-8")
+        recorded = br._cmake_build_configuration(
+            self.LIBRARY, measured.hex(), [tree], self._identity
+        )
+        assert recorded.startswith(br.BUILD_CONFIGURATION_NOT_RECORDED), recorded
+        assert "compiler" in recorded, recorded
+
+    def test_a_missing_digest_matches_no_tree(self, tmp_path: Path) -> None:
+        """An empty library "hashes" to the empty digest under the identity;
+        a record with no digest must still not be matched to it."""
+        empty = self._tree(tmp_path, "empty", b"", "Release", "ON")
+        recorded = br._cmake_build_configuration(self.LIBRARY, "", [empty], self._identity)
+        assert recorded.startswith(br.BUILD_CONFIGURATION_NOT_RECORDED), recorded
+
+    def test_the_lookup_starts_from_the_trees_named_on_the_command_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test, pqc_backends
+
+        measured = b"the measured object"
+        named = self._tree(tmp_path, "named", measured, "Release", "ON")
+        attestation = {
+            "native_backend": {
+                "loaded": True,
+                "path": str(tmp_path / "pkg" / self.LIBRARY),
+                "preload_digest_hex": measured.hex(),
+            }
+        }
+        monkeypatch.setattr(_self_test, "module_attestation", lambda: attestation)
+        monkeypatch.setattr(pqc_backends, "native_sha3_256", self._identity)
+        monkeypatch.setattr(br, "_CMAKE_BUILD_DIRS", [named])
+        recorded = br._native_build_configuration()
+        assert "-DAMA_ENABLE_AVX512=ON" in recorded, recorded
+        assert recorded.endswith("(from named, a build tree outside the checkout)"), recorded
+
+    def test_the_report_carries_the_row(self) -> None:
+        assert "build_configuration" in br.generate_report([])["provenance"]
+
+
 class TestBothRecordsCarryProvenance:
     """The JSON record is the machine-readable one; it had no provenance.
 

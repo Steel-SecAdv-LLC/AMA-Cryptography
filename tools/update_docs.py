@@ -92,7 +92,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -589,6 +589,12 @@ def _generate_benchmark_table() -> str:
     host = str(provenance.get("host", "unrecorded host")).strip("` ")
     cpu = str(provenance.get("cpu", "")).strip("` ")
     host_desc = f"{host}" + (f", {cpu}" if cpu else "")
+    build = recorded_build_configuration(provenance)
+    build_desc = (
+        f"built with `{build}`"
+        if build
+        else "with no build configuration recorded, so not reproducible from it"
+    )
 
     lines = [
         "<!-- "
@@ -601,7 +607,7 @@ def _generate_benchmark_table() -> str:
         "fails when measured drops more than `tolerance_percent` below "
         "floor).  Regenerate via `python tools/update_docs.py`. -->",
         f"_Headline source: `benchmarks/benchmark-results.json` (run {captured} on "
-        f"{host_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
+        f"{host_desc}; {build_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
         "the CI runner class named there — a floor and a throughput figure are "
         "different machines on purpose, so the gap between the columns is not "
         "headroom unless both were measured on the same host.  CI fails when "
@@ -671,6 +677,44 @@ def _generate_benchmark_table() -> str:
     return "\n".join(lines)
 
 
+def _without_absolute_path(part: str) -> str:
+    """Reduce an absolute path to its basename; leave any other text as it is.
+
+    The record names the loaded library by absolute path, which is the
+    measuring checkout's home directory and not a property of the build.
+    Only an absolute path is reduced, and the test is made for both path
+    flavours whatever the host: ``Path(part).name`` on Windows turned the
+    descriptive value ``ama_cryptography.dll from build\\lib`` into ``lib``.
+    """
+    for flavour in (PureWindowsPath, PurePosixPath):
+        candidate = flavour(part)
+        if candidate.is_absolute():
+            return candidate.name
+    return part
+
+
+#: What benchmarks/benchmark_runner.py records in place of a build
+#: configuration it could not establish (its BUILD_CONFIGURATION_NOT_RECORDED).
+BUILD_CONFIGURATION_NOT_RECORDED = "not recorded"
+
+
+def recorded_build_configuration(provenance: dict[str, Any]) -> Optional[str]:
+    """The record's build configuration, or None when the record has none.
+
+    A record written before the runner recorded it has no such key; one whose
+    runner could not establish it says so with the runner's prefix.  Either
+    way the figures cannot be rebuilt from the record, and nothing rendered
+    from it may say they can (AGENTS.md 8.7).
+    """
+    raw = provenance.get("build_configuration")
+    if not isinstance(raw, str):
+        return None  # absent, or a JSON null/number/list: not a configuration
+    value = raw.strip()
+    if not value or value.startswith(BUILD_CONFIGURATION_NOT_RECORDED):
+        return None
+    return value
+
+
 def _generate_pipeline_latency_table() -> str:
     """Emit ARCHITECTURE.md's per-operation latency table from the same record.
 
@@ -693,7 +737,14 @@ def _generate_pipeline_latency_table() -> str:
     command = str(provenance.get("command", "python benchmarks/benchmark_runner.py")).strip("` ")
     sampling = str(provenance.get("sampling", "")).strip()
     aggregation = str(provenance.get("aggregation", "")).strip()
-    native = str(provenance.get("native_backend", "")).strip()
+    native = " · ".join(
+        _without_absolute_path(part.strip())
+        for part in str(provenance.get("native_backend", "")).strip().split("·")
+    )
+    commit = str(provenance.get("commit", "")).strip()
+    tree_state = str(provenance.get("tree", "")).strip()
+    bindings = str(provenance.get("python_bindings", "")).strip()
+    build = recorded_build_configuration(provenance)
 
     # Each of the long entries below is hoisted to a name rather than written
     # as an adjacent-literal concatenation inside the list.  CodeQL flags the
@@ -759,6 +810,26 @@ def _generate_pipeline_latency_table() -> str:
         "`security-checks`) re-derives every cell here from the record and "
         "fails on a mismatch, so a hand-edited number cannot survive a push."
     )
+    scope_bullet = (
+        "- **Scope:** one run on the host named above. These are not the "
+        "canonical-host figures (README, Performance Metrics) and not the CI "
+        "regression floors."
+    )
+    # "Everything needed to reproduce" is said only of a record that carries
+    # the build configuration: without it the same command on the same host
+    # can measure a different binary, and the heading would be false.
+    provenance_heading = (
+        "**Provenance — everything needed to reproduce these numbers:**"
+        if build
+        else "**Provenance — what the record carries.** It does not carry the "
+        "build configuration of the library it measured, so these numbers "
+        "cannot be reproduced from it:"
+    )
+    build_bullet = (
+        f"- **Build configuration:** `{build}`"
+        if build
+        else "- **Build configuration:** not recorded"
+    )
     refresh_note = (
         "To refresh: re-run the command above on the host you want published, "
         "then `python tools/update_docs.py`."
@@ -766,12 +837,20 @@ def _generate_pipeline_latency_table() -> str:
 
     lines += [
         "",
-        "**Provenance — everything needed to reproduce these numbers:**",
+        provenance_heading,
         "",
         f"- **Benchmark command:** `{command}`",
         f"- **Source record:** `benchmarks/benchmark-results.json`, run {captured}",
         f"- **Platform:** {host}" + (f" — {cpu}" if cpu else ""),
         f"- **Build:** {native}" if native else "- **Build:** (unrecorded)",
+        build_bullet,
+        (
+            f"- **Commit:** `{commit[:12]}`" + (f" — {tree_state}" if tree_state else "")
+            if commit
+            else "- **Commit:** (unrecorded)"
+        ),
+        f"- **Python bindings:** {bindings}" if bindings else "- **Python bindings:** (unrecorded)",
+        scope_bullet,
         units_bullet,
         f"- **Sampling:** {sampling}" if sampling else "- **Sampling:** (unrecorded)",
         f"- **Aggregation:** {aggregation}" if aggregation else "- **Aggregation:** (unrecorded)",

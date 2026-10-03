@@ -2700,7 +2700,8 @@ def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # pt_len
             ctypes.c_char_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_void_p,  # ciphertext (output; c_void_p so an offset into one buffer is accepted)
+            ctypes.c_void_p,  # ciphertext (output; c_void_p so an
+            #   offset into one buffer is accepted)
             ctypes.c_void_p,  # tag[16]    (output, at pt_len into the same buffer)
         ]
         lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
@@ -4102,14 +4103,14 @@ def _secure_memzero(buf: bytearray) -> None:
 @dataclass
 class DilithiumKeyPair:
     """
-    CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, Level 3).
+    CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, NIST category 3).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 4032 bytes
         - Public key: 1952 bytes
         - Signature: 3309 bytes
 
-    Security: 192-bit quantum security (NIST Security Level 3)
+    Security: NIST security category 3
     Standard: NIST FIPS 204 (ML-DSA)
 
     INVARIANT-6: secret_key is stored as mutable bytearray and securely
@@ -4139,7 +4140,7 @@ class DilithiumKeyPair:
 @dataclass
 class KyberKeyPair:
     """
-    CRYSTALS-Kyber post-quantum key pair (Kyber-1024, Level 5).
+    CRYSTALS-Kyber post-quantum key pair (Kyber-1024, NIST category 5).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 3168 bytes
@@ -4147,7 +4148,7 @@ class KyberKeyPair:
         - Ciphertext: 1568 bytes
         - Shared secret: 32 bytes
 
-    Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum security (NIST security category 5)
     Standard: NIST FIPS 203 (ML-KEM)
 
     INVARIANT-6: secret_key is stored as mutable bytearray and securely
@@ -4189,14 +4190,14 @@ class KyberEncapsulation:
 @dataclass
 class SphincsKeyPair:
     """
-    SPHINCS+-SHA2-256f-simple post-quantum key pair (Level 5).
+    SPHINCS+-SHA2-256f-simple post-quantum key pair (NIST category 5).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 128 bytes
         - Public key: 64 bytes
         - Signature: 49856 bytes
 
-    Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum security (NIST security category 5)
     Standard: NIST FIPS 205 (SLH-DSA)
 
     Note: SPHINCS+ signatures are large (~49KB) but provide stateless
@@ -4228,7 +4229,7 @@ class SphincsKeyPair:
 
 def generate_dilithium_keypair() -> DilithiumKeyPair:
     """
-    Generate CRYSTALS-Dilithium key pair (Level 3).
+    Generate CRYSTALS-Dilithium key pair (ML-DSA-65, NIST category 3).
 
     Returns:
         DilithiumKeyPair with ML-DSA-65 keys
@@ -4325,7 +4326,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign failed with error code {rc}"
             )
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4472,7 +4473,7 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign_ctx failed with error code {rc}"
             )
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4484,7 +4485,7 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
 
 def generate_kyber_keypair() -> KyberKeyPair:
     """
-    Generate CRYSTALS-Kyber key pair (Kyber-1024, Level 5).
+    Generate CRYSTALS-Kyber key pair (Kyber-1024, NIST category 5).
 
     Kyber-1024 provides IND-CCA2 secure key encapsulation based on the
     Module-LWE (Learning With Errors) problem.
@@ -4602,7 +4603,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-002)
+            ciphertext=ct_buf.raw[: ct_len.value],
             shared_secret=bytes(ss_buf),
         )
 
@@ -4689,7 +4690,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
 def generate_sphincs_keypair() -> SphincsKeyPair:
     """
-    Generate SPHINCS+-SHA2-256f-simple key pair (Level 5).
+    Generate SPHINCS+-SHA2-256f-simple key pair (NIST category 5).
 
     SPHINCS+ provides stateless hash-based signatures with no risk of
     key reuse vulnerabilities. The 'f' variant is optimized for fast
@@ -4797,7 +4798,7 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-003)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -4993,12 +4994,15 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         rc = _native_lib.ama_slhdsa_keygen(ctypes.c_int(enum_id), pk_buf, sk_buf)
         if rc != 0:
             raise RuntimeError(f"ama_slhdsa_keygen({param_set}) failed: rc={rc}")
-        # INVARIANT-6: copy SK into a wipeable bytearray, then immediately
-        # zero the ctypes scratch buffer so the only live copy of the secret
-        # key is the one the SlhDsaKeyPair (or its caller) owns.
+        # INVARIANT-6: copy SK into a wipeable bytearray THROUGH A MEMORYVIEW
+        # -- bytearray(sk_buf.raw[:n]) minted an interim immutable bytes the
+        # GC frees unwiped (PR #394 recorded it; measured equal byte-for-byte
+        # without it) -- then immediately zero the ctypes scratch buffer so
+        # the only live copy of the secret key is the one the SlhDsaKeyPair
+        # (or its caller) owns.
         result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
-            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            secret_key=bytearray(memoryview(sk_buf)[:sk_len]),
             param_set=param_set,
         )
         # FIPS 140-3 pairwise consistency test (INVARIANT-41).  Deliberately
@@ -5064,7 +5068,7 @@ def generate_slhdsa_keypair_from_seed(
             raise RuntimeError(f"ama_slhdsa_keygen_from_seed({param_set}) failed: rc={rc}")
         result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
-            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            secret_key=bytearray(memoryview(sk_buf)[:sk_len]),
             param_set=param_set,
         )
         # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
@@ -5658,7 +5662,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
+        from ama_cryptography.ed25519_binding import (
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -5673,7 +5677,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
+        from ama_cryptography.dilithium_binding import (
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -5688,9 +5692,7 @@ def _probe_cython_hkdf() -> "Any":
     if not _binding_imports_permitted():
         return None
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
-            cy_hkdf,
-        )
+        from ama_cryptography.hkdf_binding import cy_hkdf
 
         return cy_hkdf
     except (ImportError, AttributeError):
@@ -7300,8 +7302,9 @@ def _wipe(*buffers: Any) -> None:
     of open-coded at every site.
 
     *Input* secrets go through :func:`_borrow` or :class:`_CBufferViews`
-    instead, which borrow a ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
-    inputs is worse than useless: the copy it wipes is the second one, and the
+    instead, which borrow a ``bytearray`` in place rather than
+    copying it. A wipe-the-copy helper for inputs is worse than
+    useless: the copy it wipes is the second one, and the
     transient it had to make to get there is the un-wipeable ``bytes`` the
     exercise was supposed to avoid.
     """

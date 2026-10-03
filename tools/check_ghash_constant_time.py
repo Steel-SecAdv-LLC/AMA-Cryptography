@@ -1848,7 +1848,8 @@ int main(void) {
     TAINT(sk + sizeof sk - 32, 32);
     static volatile unsigned sink;
     for (int i = 0; i < 2; i++) {
-        ama_error_t rc = ama_kyber_decapsulate(i ? ct_bad : ct, ct_len, sk, sizeof sk, ss, sizeof ss);
+        ama_error_t rc = ama_kyber_decapsulate(
+            i ? ct_bad : ct, ct_len, sk, sizeof sk, ss, sizeof ss);
         UNTAINT(&rc, sizeof rc);
         if (rc != AMA_SUCCESS) return 1;
         sink ^= (unsigned)ss[0];
@@ -1864,7 +1865,8 @@ int main(void) {
 int main(void) {
     uint8_t public_key[32], secret_key[64], signature[64];
     static const uint8_t message[64] = "AMA Cryptography Ed25519 taint driver.";
-    for (unsigned i = 0; i < 32u; i++) secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < 32u; i++)
+        secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     TAINT(secret_key, 32);
     if (ama_ed25519_keypair(public_key, secret_key) != AMA_SUCCESS) return 1;
     static volatile uint8_t sink;
@@ -1887,7 +1889,8 @@ int main(void) {
     uint8_t public_key[32], secret_key[64], signature[64];
     uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES];
     static const uint8_t message[64] = "AMA Cryptography Ed25519 taint driver.";
-    for (unsigned i = 0; i < 32u; i++) secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < 32u; i++)
+        secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     TAINT(secret_key, 32);
     if (ama_ed25519_keypair(public_key, secret_key) != AMA_SUCCESS) return 1;
     {
@@ -1914,7 +1917,8 @@ int main(void) {
     ama_ed25519_set_avx2_fold_override(0);  /* measure the SSE2 fold */
     uint8_t public_key[32], secret_key[64], signature[64];
     static const uint8_t message[64] = "AMA Cryptography Ed25519 taint driver.";
-    for (unsigned i = 0; i < 32u; i++) secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < 32u; i++)
+        secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     TAINT(secret_key, 32);
     if (ama_ed25519_keypair(public_key, secret_key) != AMA_SUCCESS) return 1;
     static volatile uint8_t sink;
@@ -1933,8 +1937,10 @@ int main(void) {
  * bit per step; a swap written as a branch or a cmov is reported here. */
 int main(void) {
     uint8_t sk[32], peer[32], out[32];
-    for (unsigned i = 0; i < sizeof sk; i++) sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
-    for (unsigned i = 0; i < sizeof peer; i++) peer[i] = (uint8_t)(0x09u + i);
+    for (unsigned i = 0; i < sizeof sk; i++)
+        sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof peer; i++)
+        peer[i] = (uint8_t)(0x09u + i);
     TAINT(sk, sizeof sk);
     static volatile uint8_t sink;
     for (int i = 0; i < 2; i++) {
@@ -1991,7 +1997,8 @@ int main(void) {
 void ama_test_force_aes_gcm_scalar(void);
 int main(void) {
     uint8_t key[32], nonce[12], pt[512], aad[64], ct[512], tag[16];
-    for (unsigned i = 0; i < sizeof key; i++) key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof key; i++)
+        key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     memset(nonce, 0, sizeof nonce);
     memset(pt, 0, sizeof pt);
     memset(aad, 0, sizeof aad);
@@ -2011,7 +2018,8 @@ int main(void) {
 int main(void) {
     uint8_t key[AMA_ASCON_AEAD128_KEY_LEN], nonce[AMA_ASCON_AEAD128_NONCE_LEN];
     uint8_t pt[64], ct[64], tag[AMA_ASCON_AEAD128_TAG_LEN];
-    for (unsigned i = 0; i < (unsigned)sizeof key; i++) key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < (unsigned)sizeof key; i++)
+        key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     memset(nonce, 0x5A, sizeof nonce);
     memset(pt, 0xA5, sizeof pt);
     TAINT(key, sizeof key);
@@ -2033,14 +2041,19 @@ int main(void) {
     uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
     uint8_t profile[AMA_ETHICAL_PROFILE_BYTES];
     uint8_t authority_key[32];
-    for (unsigned i = 0; i < (unsigned)sizeof instance_id; i++) instance_id[i] = (uint8_t)(0x5Au + i * 167u);
-    for (unsigned i = 0; i < (unsigned)sizeof profile; i++) profile[i] = (uint8_t)(0xA5u + i * 13u);
-    for (unsigned i = 0; i < (unsigned)sizeof authority_key; i++) authority_key[i] = (uint8_t)(0x11u + i * 31u);
+    for (unsigned i = 0; i < (unsigned)sizeof instance_id; i++)
+        instance_id[i] = (uint8_t)(0x5Au + i * 167u);
+    for (unsigned i = 0; i < (unsigned)sizeof profile; i++)
+        profile[i] = (uint8_t)(0xA5u + i * 13u);
+    for (unsigned i = 0; i < (unsigned)sizeof authority_key; i++)
+        authority_key[i] = (uint8_t)(0x11u + i * 31u);
     if (ama_agent_binding_init(&good, AMA_AGENT_LIFETIME_PERSISTENT,
                                (uint8_t)(AMA_AGENT_CAP_DATA_SIGN | AMA_AGENT_CAP_PERSISTENCE |
                                          AMA_AGENT_CAP_SELF_REPLICATE),
                                instance_id, profile) != AMA_SUCCESS) return 1;
-    if (ama_agent_binding_authorize(&good, authority_key, sizeof authority_key) != AMA_SUCCESS) return 1;
+    if (ama_agent_binding_authorize(
+            &good, authority_key, sizeof authority_key) != AMA_SUCCESS)
+        return 1;
     memcpy(&bad, &good, sizeof bad);
     bad.authorization[0] ^= 0x01u;
     TAINT(authority_key, sizeof authority_key);
@@ -2062,29 +2075,38 @@ int main(void) {
 void ama_test_force_aes_gcm_scalar(void);
 int main(void) {
     uint8_t key[32], nonce[12], aad[32], tag_good[16], tag_bad[16];
-    for (unsigned i = 0; i < sizeof key; i++) key[i] = (uint8_t)(0x5Eu * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof key; i++)
+        key[i] = (uint8_t)(0x5Eu * 31u + i * 167u + i * i * 13u);
     memset(nonce, 0x24, sizeof nonce);
     memset(aad, 0x7Bu, sizeof aad);
     ama_test_force_aes_gcm_scalar();
-    if (ama_chacha20poly1305_encrypt(key, nonce, NULL, 0, aad, sizeof aad, NULL, tag_good) != AMA_SUCCESS) return 1;
+    if (ama_chacha20poly1305_encrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, NULL, tag_good)
+            != AMA_SUCCESS) return 1;
     memcpy(tag_bad, tag_good, sizeof tag_bad);
     tag_bad[0] ^= 0x01;
     TAINT(key, sizeof key);
     {
-        ama_error_t ok = ama_chacha20poly1305_decrypt(key, nonce, NULL, 0, aad, sizeof aad, tag_good, NULL);
-        ama_error_t bad = ama_chacha20poly1305_decrypt(key, nonce, NULL, 0, aad, sizeof aad, tag_bad, NULL);
+        ama_error_t ok = ama_chacha20poly1305_decrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, tag_good, NULL);
+        ama_error_t bad = ama_chacha20poly1305_decrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, tag_bad, NULL);
         UNTAINT(&ok, sizeof ok);
         UNTAINT(&bad, sizeof bad);
         if (ok != AMA_SUCCESS || bad == AMA_SUCCESS) return 1;
     }
     UNTAINT(key, sizeof key);
-    if (ama_aes256_gcm_encrypt(key, nonce, NULL, 0, aad, sizeof aad, NULL, tag_good) != AMA_SUCCESS) return 1;
+    if (ama_aes256_gcm_encrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, NULL, tag_good)
+            != AMA_SUCCESS) return 1;
     memcpy(tag_bad, tag_good, sizeof tag_bad);
     tag_bad[0] ^= 0x01;
     TAINT(key, sizeof key);
     {
-        ama_error_t ok = ama_aes256_gcm_decrypt(key, nonce, NULL, 0, aad, sizeof aad, tag_good, NULL);
-        ama_error_t bad = ama_aes256_gcm_decrypt(key, nonce, NULL, 0, aad, sizeof aad, tag_bad, NULL);
+        ama_error_t ok = ama_aes256_gcm_decrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, tag_good, NULL);
+        ama_error_t bad = ama_aes256_gcm_decrypt(
+            key, nonce, NULL, 0, aad, sizeof aad, tag_bad, NULL);
         UNTAINT(&ok, sizeof ok);
         UNTAINT(&bad, sizeof bad);
         if (ok != AMA_SUCCESS || bad == AMA_SUCCESS) return 1;
@@ -2123,7 +2145,8 @@ int main(void) {
  * the API hands back. */
 int main(void) {
     uint8_t sk[32], pk[33], sig[AMA_SECP256K1_ECDSA_RAW_SIG_LEN], msg[32];
-    for (unsigned i = 0; i < sizeof sk; i++) sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof sk; i++)
+        sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
     memset(msg, 0x11, sizeof msg);
     TAINT(sk, sizeof sk);
     static volatile uint8_t sink;
@@ -2155,11 +2178,15 @@ int main(void) {
 int main(void) {
     uint8_t sk[32], pk[65], sig[64], digest[32];
     uint8_t peer_sk[32], peer_pk[64], shared[32];
-    for (unsigned i = 0; i < sizeof sk; i++) sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
-    for (unsigned i = 0; i < sizeof peer_sk; i++) peer_sk[i] = (uint8_t)(0x5Au + i * 29u);
+    for (unsigned i = 0; i < sizeof sk; i++)
+        sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof peer_sk; i++)
+        peer_sk[i] = (uint8_t)(0x5Au + i * 29u);
     memset(digest, 0x11, sizeof digest);
     /* The peer key pair is public: derived before anything is tainted. */
-    if (ama_nistp_pubkey_from_privkey(AMA_NIST_CURVE_P256, peer_sk, peer_pk) != AMA_SUCCESS) return 1;
+    if (ama_nistp_pubkey_from_privkey(
+            AMA_NIST_CURVE_P256, peer_sk, peer_pk)
+            != AMA_SUCCESS) return 1;
     TAINT(sk, sizeof sk);
     static volatile uint8_t sink;
     {
@@ -2168,7 +2195,8 @@ int main(void) {
         if (rc != AMA_SUCCESS) return 1;
     }
     for (int i = 0; i < 2; i++) {
-        ama_error_t rc = ama_nistp_ecdsa_sign_raw(AMA_NIST_CURVE_P256, digest, sizeof digest, sk, sig);
+        ama_error_t rc = ama_nistp_ecdsa_sign_raw(
+            AMA_NIST_CURVE_P256, digest, sizeof digest, sk, sig);
         UNTAINT(&rc, sizeof rc);
         if (rc != AMA_SUCCESS) return 1;
         UNTAINT(sig, sizeof sig);
