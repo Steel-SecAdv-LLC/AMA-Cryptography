@@ -17,7 +17,7 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 ## Algorithm Summary
 
-| Algorithm | Type | Security Level | Standard | Implementation | Status |
+| Algorithm | Type | Security category | Standard | Implementation | Status |
 |-----------|------|----------------|----------|----------------|--------|
 | ML-DSA-65 (Dilithium) | Digital Signature | NIST security category 3 | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
 | ML-KEM-1024 (Kyber) | Key Encapsulation | NIST security category 5 | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |

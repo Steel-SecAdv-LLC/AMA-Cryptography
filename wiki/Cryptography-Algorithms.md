@@ -10,7 +10,7 @@ Complete reference for all cryptographic algorithms used in AMA Cryptography, th
 
 ## Algorithm Summary
 
-| Algorithm | Type | Security Level | Standard | C Source | Status |
+| Algorithm | Type | Security category | Standard | C Source | Status |
 |-----------|------|---------------|----------|----------|--------|
 | ML-DSA-65 (Dilithium) | Digital Signature | NIST category 3 | FIPS 204 | `ama_dilithium.c` | Primary PQC |
 | ML-KEM-1024 (Kyber) | Key Encapsulation | NIST category 5 | FIPS 203 | `ama_kyber.c` | Available |

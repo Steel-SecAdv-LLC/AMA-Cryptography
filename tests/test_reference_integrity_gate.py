@@ -1198,8 +1198,19 @@ class TestTheScanIsLinear:
     against the 2026-09-27 patterns, a Python line followed by 24 spaces took
     6.8 s and doubled per space, ``test_x`` then three indented lines took
     105 s, and ``tests/a_`` then 20 ``//`` lines doubled per line.  The gate
-    runs inside this suite, so that was a hang, not a slow report.  Each
-    input is also run a thousand times larger: linear work stays fast."""
+    runs inside this suite, so that was a hang, not a slow report.
+
+    The verdict is growth, not an absolute time.  This test used to run each
+    input a thousand times larger and assert the scan finished inside half a
+    second -- and on 2026-10-02 the shared macos-15-intel runner took 0.51 s
+    and 0.57 s over two of the LINEAR scans (job 110957360556), a constant
+    factor from a loaded host, exactly the false-positive class the
+    zeroization gate's linearity test retired the same day.  The scan is now
+    timed at three sizes spanning 4x, each the floor of interleaved rounds,
+    and the verdict is the end-to-end span: linear work grows 4x across it,
+    quadratic 16x, and the 2026-09-27 exponential patterns do not finish the
+    smallest size at all.  The ceiling and the floor-of-interleaved-rounds
+    estimator are the zeroization gate's, for the reasons recorded there."""
 
     PATHOLOGICAL: ClassVar[list[tuple[str, str, int]]] = [
         ("        x = test_vec\n", " ", 24),
@@ -1211,17 +1222,35 @@ class TestTheScanIsLinear:
         ("test_a, test_b and ", "test_c, ", 20),
     ]
 
-    @pytest.mark.parametrize("scale", [1, 1000])
+    #: Linear growth spans 4.0 across the 4x input span; quadratic spans 16.
+    #: One noisy floor must move the span past the midpoint of the two to
+    #: flip the verdict, twice the margin the absolute bound gave a single
+    #: inflated reading.
+    SPAN_CEILING: ClassVar[float] = 8.0
+    SCALES: ClassVar[tuple[int, int, int]] = (250, 500, 1000)
+    ROUNDS: ClassVar[int] = 3
+
     @pytest.mark.parametrize(("head", "unit", "count"), PATHOLOGICAL)
-    def test_a_pathological_input_is_scanned_quickly(
-        self, head: str, unit: str, count: int, scale: int
+    def test_a_pathological_input_is_scanned_linearly(
+        self, head: str, unit: str, count: int
     ) -> None:
-        text = head + unit * (count * scale) + "y = 1"
-        started = time.perf_counter()
-        extract_test_citations(text)
-        scan_text(text)
-        elapsed = time.perf_counter() - started
-        assert elapsed < 0.5, f"{elapsed:.2f}s on {len(text)} characters: {text[:40]!r}"
+        texts = {s: head + unit * (count * s) + "y = 1" for s in self.SCALES}
+        floors = {s: float("inf") for s in self.SCALES}
+        for _ in range(self.ROUNDS):
+            for s in self.SCALES:  # interleaved: one slow moment cannot bias one size
+                started = time.perf_counter()
+                extract_test_citations(texts[s])
+                scan_text(texts[s])
+                floors[s] = min(floors[s], time.perf_counter() - started)
+        if floors[self.SCALES[0]] < 1e-4:
+            return  # too fast to measure growth: nothing here is pathological
+        span = floors[self.SCALES[-1]] / floors[self.SCALES[0]]
+        assert span < self.SPAN_CEILING, (
+            f"{span:.1f}x growth over a 4x input span "
+            f"({floors[self.SCALES[0]]:.4f}s -> {floors[self.SCALES[-1]]:.4f}s "
+            f"on {len(texts[self.SCALES[-1]])} characters): "
+            f"{texts[self.SCALES[-1]][:40]!r}"
+        )
 
 
 class TestTheTreeIsClean:
