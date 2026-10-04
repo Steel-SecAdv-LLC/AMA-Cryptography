@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-03 |
+| Last Updated | 2026-10-04 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+## [5.0.0] - 2026-10-04
+
+> **Released 2026-10-04.** Until 2026-09-24 this heading carried the date
+> 2026-09-10, on which no release was cut; dating it is part of cutting the
+> release, and `tools/check_release_state.py` refuses the tag while the
+> shipped documents still call the version unreleased. What follows is the
+> release notes: the dated audit passes of the release branch (#407) that
+> closed out the version, the behavioural and breaking changes at a glance,
+> then the Security, Fixed, Changed and Performance entries. The dated
+> development journal that accumulated in this file while 5.0.0 was prepared
+> — every maintenance, verification, constant-time, audit-remediation and
+> completion pass, with the measurements and rationale behind each change —
+> is kept verbatim in
+> [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
 ### Re-investigation of the branch against `main` and the #394 ledger; the SLH-DSA keygens stop minting an interim secret-key copy — 2026-10-03
 
@@ -807,20 +822,6 @@ published-figure retirement) is out of this pass's scope and stays reverted.
   release on every run). Checked against OSV/GHSA for every pinned version and
   range floor in every tracked manifest and every pinned action: 0 advisories
   (62 tuples); `pip-audit` over the CI-equivalent environment: none.
-
-## [5.0.0] - Unreleased
-
-> **5.0.0 is not tagged yet.** The newest release tag is `v4.0.0`. Until
-> 2026-09-24 this heading carried the date 2026-09-10, on which no release was
-> cut; dating it is part of cutting the release, and
-> `tools/check_release_state.py` refuses the tag while it still reads
-> `Unreleased`. What follows is the release notes: the behavioural and breaking
-> changes at a glance, then the Security, Fixed, Changed and Performance
-> entries. The dated development journal that accumulated in this file while
-> 5.0.0 was prepared — every maintenance, verification, constant-time,
-> audit-remediation and completion pass, with the measurements and rationale
-> behind each change — is kept verbatim in
-> [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
 ### Behavioural and breaking changes at a glance
 
@@ -8722,7 +8723,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.0.0 | Unreleased | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
+| 5.0.0 | 2026-10-04 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
 | 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |

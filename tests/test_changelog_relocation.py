@@ -55,7 +55,9 @@ BASE_COMMIT = "974cb019a2cf098495aaa6bbf4622b8cc8115484"
 BASE_CHANGELOG_SHA256 = "58c84ba3ec3d9355db129636b031f198dbbf7232d7462cf7976699604faad9d7"
 
 OLD_HEADING = "## [5.0.0] - 2026-09-10\n"
-NEW_HEADING = "## [5.0.0] - Unreleased\n"
+#: Dated on 2026-10-04, the release-roll that filed every [Unreleased] entry
+#: under it (the heading read Unreleased from the relocation until then).
+NEW_HEADING = "## [5.0.0] - 2026-10-04\n"
 UNRELEASED_GROUP = "## Entries recorded under [Unreleased]\n\n"
 RELEASE_GROUP = "## Entries recorded under [5.0.0]\n\n"
 GLANCE_HEADING = "### Behavioural and breaking changes at a glance\n"
@@ -78,7 +80,7 @@ GLANCE_CORRECTION = ("105 native entry points", "107 native entry points")
 #: ten breaking changes against a glance table of eleven.  Each substitution
 #: must occur exactly once in the tail, so neither can widen into a licence.
 SUMMARY_ROW_CORRECTIONS = (
-    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | Unreleased |"),
+    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | 2026-10-04 |"),
     ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d711 \u2014 see `[5.0.0]`"),
 )
 
@@ -90,7 +92,7 @@ SUMMARY_ROW_CORRECTIONS = (
 #: exactly once, so the row can follow the newest entry while
 #: :data:`BASE_CHANGELOG_SHA256` stays the hash of the pre-relocation file.
 #: A stamp that moves without moving this row fails the exactly-once check.
-PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-03 |"),)
+PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-04 |"),)
 
 
 def _journal_body(journal: str) -> str:
@@ -133,8 +135,11 @@ class TestTheTwoFilesReassembleTheOriginal:
         for original, corrected in PREAMBLE_CORRECTIONS:
             assert preamble.count(corrected) == 1, corrected
             preamble = preamble.replace(corrected, original)
+        # Re-anchored on 2026-10-04: the release-roll moved the retained entry
+        # below the dated [5.0.0] heading, directly above the glance table, so
+        # its end anchor is the glance heading rather than the version heading.
         first_entry = changelog[
-            _line_index(changelog, FIRST_RETAINED_ENTRY) : _line_index(changelog, NEW_HEADING)
+            _line_index(changelog, FIRST_RETAINED_ENTRY) : _line_index(changelog, GLANCE_HEADING)
         ]
         glance_and_classic = changelog[
             _line_index(changelog, GLANCE_HEADING) : _line_index(changelog, V4_HEADING)
