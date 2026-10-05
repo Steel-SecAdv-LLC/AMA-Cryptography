@@ -165,7 +165,7 @@ production default. It is exposed through the unified
 
 ### Security Guarantee
 
-> **Dual-signature security:** Both Ed25519 and ML-DSA-65 signatures must independently verify for the package to be accepted. An attacker must forge **both** simultaneously — one classical forgery (2^128 classical operations) and one quantum-resistant forgery (2^190 quantum operations).
+> **Dual-signature security:** Both Ed25519 and ML-DSA-65 signatures must independently verify for the package to be accepted. An attacker must forge **both** simultaneously — an Ed25519 forgery (about 2^128 classical operations) and an ML-DSA-65 forgery (NIST category 3: at least as hard as a key search on AES-192).
 
 **That guarantee depends on domain separation, and format v1 did not have it.**
 

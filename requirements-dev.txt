@@ -14,28 +14,29 @@ Cython>=3.3.0
 numpy>=1.24.0
 
 # Testing
-pytest>=9.1.1
+pytest>=9.1.1,<9.2
 pytest-cov>=4.0.0
 hypothesis>=6.168.0
 
 # Code Quality
-black>=26.5.1
-ruff>=0.16.8
-mypy>=2.3.1
+black>=26.5.1,<27
+ruff>=0.16.8,<0.17
+# Capped below 2.4 with pyproject.toml's [dev] extra; see the note there.
+mypy>=2.3.1,<2.4
 # PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
 # .github/workflows/** structurally rather than by regex.  types-PyYAML keeps
 # that tool and its tests inside `mypy --strict` instead of behind an override.
-PyYAML>=6.0.3
-types-PyYAML>=6.0.12.20260906
+PyYAML>=6.0.3,<6.1
+types-PyYAML>=6.0.12.20260906,<6.1
 # Same case, same reason: setup.py is inside `mypy --strict` and setuptools
 # ships no `py.typed`, so without this stub the type-check fails with 5 errors.
 # It was added to pyproject's [dev] extra and to requirements-lock.txt and NOT
 # here, so this file — which README.md presents as the equivalent alternative
 # to `pip install -e ".[dev]"` — still could not run `make lint`.
-types-setuptools>=84.0.0.20260812
+types-setuptools>=84.0.0.20260812,<84.1
 
 # Security Scanning
-bandit>=1.7.0
+bandit>=1.9.4,<1.10
 # pip-audit (installed in CI) provides dependency vulnerability scanning via OSV.
 
 # Benchmarking (optional — benchmarks/benchmark_suite.py uses psutil when available)

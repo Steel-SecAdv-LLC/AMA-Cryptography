@@ -750,6 +750,26 @@ markers — no reason, no tracking ID — over `urllib` calls in the corpus fetc
 that accepted `file:` and `ftp:` URLs; both now check the scheme, so the
 suppression states a fact rather than a hope.
 
+The pass reads what a justification *says*, not only how it is punctuated. It
+used to accept any separator, so `-- (CB-001)`, a separator and a tag with no
+reason between them, passed; measured on the tree at `c6326b4`, 32 trailing
+markers passed with no reason, one word ("McCabe", "cast"), or only a pointer
+to other prose ("same", "ditto", "see the note above"). The justification now
+needs at least two words of three or more letters once tags, rule codes,
+`fmt:` directives and further markers are removed, and not only words that
+point elsewhere. It cannot tell a good reason from a bad one; it refuses an
+absent one. It also reads a comment-only line that *opens* with `noqa`,
+`nosec` or `nosemgrep`, which it used to skip as prose: bandit applies such a
+`# nosec` to a multi-line statement that spans the line, and semgrep honours a
+`# nosemgrep` only directly above its finding, ignoring one any further away,
+so the line is either a live suppression no justification rule examined or a
+dead one that claims a suppression.
+`key_management.py` carried one of each; its two dead `nosemgrep` markers were
+replaced by constant-time comparisons, so the semgrep rule is satisfied at the
+source. Pinned, with the bandit premise measured, by
+`tests/test_suppression_hygiene_gate.py`::`TestAJustificationGivesAReason` and
+::`TestAMarkerOnACommentOnlyLine`.
+
 *The absolutely-forbidden pass* covers every non-vendored `.c` and `.h` under
 `src/c/` and `include/` — the same enumeration the fail-closed clang-tidy job
 performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
@@ -2087,7 +2107,9 @@ scope (the gate scans `ama_cryptography/`, `tests/` and `tools/`, not
 The second is the interoperability oracles: the tests carrying
 `@pytest.mark.requires_interop_oracle` in `tests/test_aes_gcm_native.py`,
 `tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py`,
-`tests/test_ed25519_expanded_key.py`, `tests/test_differential.py` and
+`tests/test_ed25519_expanded_key.py`, `tests/test_differential.py`,
+`tests/test_comparative_provenance.py` (which loads a benchmark harness that
+imports PyCA at module level to measure against it) and
 `tests/test_vendor_isolation_gate.py` (which plants PyCA as a resident binding
 to prove the vendor-isolation gate flags one — the control, not an oracle) import
 PyCA cryptography, PyNaCl or pycryptodome

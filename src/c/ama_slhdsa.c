@@ -29,7 +29,7 @@
  *     (existing tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json).
  *   - SHAKE-128s path: byte-exact against NIST ACVP SLH-DSA-sigGen-FIPS205
  *     deterministic external/pure vectors (tcIds 214–220). See
- *     tests/kat/fips205/slhdsa_shake_128s_siggen_acvp.json.
+ *     tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json.
  *
  * Backward compatibility (single canonical signer):
  *   The legacy SPHINCS+-SHA2-256f-simple API — ama_sphincs_keypair /
@@ -58,8 +58,11 @@
 #include "ama_sha256.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
  * was the §10.2 wrapper's whole-message calloc in the three external entry
  * points, and absorbing the wrapper as its own hash segment removed it — so
@@ -146,6 +149,72 @@ typedef struct slhdsa_params {
                      const uint8_t *prefix, size_t prefix_len,
                      const uint8_t *msg, size_t msglen);
 } slhdsa_params_t;
+
+/* The largest value a parameter row may carry in each column that sizes a
+ * fixed stack buffer in this file, or that sets how far into one a read
+ * reaches.  The buffers are declared through these bounds, and every row of
+ * SLH_PARAM_ROWS (the parameter table, below) is checked against all of them
+ * at compile time where the table is expanded: a row that exceeded one fails
+ * to compile instead of overrunning a buffer at run time.  One row-sized
+ * stack buffer is not declared through them: sha2_HT's input buffer,
+ * AMA_SLHDSA_SHA2_HT_BUF_BYTES, is sized for FIPS 205's SHA-2 sets, and
+ * sha2_HT refuses a longer input at run time by zeroing its output.
+ *
+ *   SLH_MAX_N     n: R, the seeds, every tree node and root, and each other
+ *                 n-octet value; and the ceil(len1 * lg(w) / 8) octets of
+ *                 one that slh_base_w reads as the WOTS+ message digits.
+ *                 Held to AMA_SHA256_DIGEST_SIZE as well, below.
+ *   SLH_MAX_HP    h' (tree_height): the XMSS treehash stack, an auth path
+ *   SLH_MAX_A     a (fors_height): the FORS treehash stack
+ *   SLH_MAX_K     k (fors_trees): the FORS indices and roots
+ *   SLH_MAX_LEN   len (wots_len): the WOTS+ digits and public key
+ *   SLH_MAX_LEN2  len2 (wots_len2): the WOTS+ checksum digits
+ *   SLH_MAX_M     m (md_bytes): the H_msg digest; and the fors_msg_bytes +
+ *                 ceil((h - h') / 8) + ceil(h' / 8) octets of it that
+ *                 slh_split_digest reads
+ *   SLH_CSUM_BYTES  the WOTS+ checksum, len2 * lg(w) bits, packed */
+#define SLH_MAX_N      32u
+#define SLH_MAX_HP     9u
+#define SLH_MAX_A      12u
+#define SLH_MAX_K      35u
+#define SLH_MAX_LEN    80u
+#define SLH_MAX_LEN2   8u
+#define SLH_MAX_M      64u
+#define SLH_CSUM_BYTES 2u
+/* sha2_F and sha2_PRF copy n octets out of one 32-octet SHA-256 digest, which
+ * no bound above resizes.  The table's assertion holds each row's n to
+ * SLH_MAX_N alone, so SLH_MAX_N is held to the digest here: raised past it,
+ * the file does not compile, rather than admitting a SHA-2 row that reads
+ * past the digest as n = 40 did (see SLH_PARAM_ROWS). */
+_Static_assert(SLH_MAX_N <= AMA_SHA256_DIGEST_SIZE,
+               "SLH_MAX_N exceeds the SHA-256 digest that sha2_F and sha2_PRF "
+               "truncate to n");
+/* H_msg's MGF1-SHA-512 seed in categories 3 and 5: R || PK.seed || SHA-512. */
+#define SLH_MGF1_SEED_MAX (2u * SLH_MAX_N + 64u)
+
+/* SLH_HASH_FAULT(): the hash-failure exits below are reached by no input --
+ * every entry point refuses a NULL segment with a nonzero length before any
+ * hashing starts, and ama_hmac_sha512_3 returns 0 only -- yet each must
+ * scrub what it computed.  In AMA_TESTING_MODE a test may set
+ * ama_slhdsa_hash_fault_hook to make a hash call report failure AFTER it has
+ * computed its output, which is the worst case for what the exit leaves
+ * behind.  Three sites consult it, each once per call: sha2_PRF_msg after the
+ * HMAC and before truncating it into `out`, unless ama_hmac_sha512_3 failed;
+ * sha2_H_msg after MGF1 has written `out`; shake_finish after the squeeze,
+ * unless the init, an absorb, the finalize or the squeeze failed.  That is
+ * once per SHAKE-256 hash (F, H, T_l, PRF, PRF_msg, H_msg), not once per
+ * absorbed segment.  sha2_F, sha2_HT and sha2_PRF do not consult it, and
+ * shake_F, shake_HT and shake_PRF discard the helper's result, so a fault on
+ * F, H, T_l or PRF changes no output and no return code.  In a shipped build
+ * the macro is the constant 0 and the object is byte-identical to one built
+ * without it (tests/c/test_slhdsa_fault_residue.c). */
+#ifdef AMA_TESTING_MODE
+int (*ama_slhdsa_hash_fault_hook)(void) = NULL;
+#define SLH_HASH_FAULT() \
+    (ama_slhdsa_hash_fault_hook != NULL && ama_slhdsa_hash_fault_hook() != 0)
+#else
+#define SLH_HASH_FAULT() 0
+#endif
 
 /* ----------------------------------------------------------------------------
  * Address helpers — we use a uniform uint32_t[8] in-memory representation and
@@ -249,16 +318,24 @@ static void slh_addr_serialize(const slhdsa_params_t *p, uint8_t *out,
  * SHA2-256f-simple hash chain (FIPS 205 §11.2, NIST category 5)
  * ============================================================================ */
 
-/* MGF1-SHA-512 used for H_msg in NIST categories 3/5. */
+/* MGF1-SHA-512 used for H_msg in NIST categories 3/5.
+ *
+ * The seed is R || PK.seed || SHA-512(...), 2n + 64 octets, and `hashbuf` is
+ * sized for it at SLH_MAX_N with room for the 4-octet counter; every
+ * parameter row's n is asserted against SLH_MAX_N at compile time (see the
+ * parameter table), so the copy below cannot overrun.
+ *
+ * Until 2026-09-28 this function instead refused `seedlen > 160` at run time
+ * and described that as failing closed for "a future parameter row".  It
+ * could not: sha2_H_msg had already copied the same 2n + 64 octets into its
+ * own 160-octet `mgf_seed` before calling here, so any seed long enough to
+ * reach the refusal had overrun that buffer first.  A bound checked after
+ * the copies it bounds protects nothing; it is now a property of the types. */
 static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
                              const uint8_t *seed, size_t seedlen) {
     uint8_t buf[64];
-    /* Max seed in our use: R(n) + PK.seed(n) + SHA-512(64) = 32+32+64 = 128. */
-    uint8_t hashbuf[160 + 4];
+    uint8_t hashbuf[SLH_MGF1_SEED_MAX + 4];
     size_t i, blocks, tocopy;
-    if (seedlen > sizeof(hashbuf) - 4) {
-        return;
-    }
     memcpy(hashbuf, seed, seedlen);
     blocks = (outlen + 63) / 64;
     for (i = 0; i < blocks; ++i) {
@@ -331,8 +408,10 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
     msglen = inblocks * p->n;
     total = p->n + (128 - p->n) + 22 + msglen;
     /* Defensive bound check: any future parameter set exceeding the static
-     * envelope is a programming error, not a runtime input. Refuse to write
-     * a half-formed digest rather than corrupting the chain silently. */
+     * envelope is a programming error, not a runtime input.  The output is
+     * zeroed rather than left half-formed, but the chain it feeds continues
+     * from that zeroed node, so the result is silently not FIPS 205's.  The
+     * table's bounds do not exclude such a SHA-2 row (see SLH_MAX_N). */
     if (total > sizeof(buf)) {
         ama_secure_memzero(out, p->n);
         return;
@@ -384,7 +463,8 @@ static int sha2_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
      * be passed NULL — no concatenation buffer anywhere on this path. */
     uint8_t hmac_out[64];
     if (ama_hmac_sha512_3(sk_prf, p->n, opt_rand, p->n, prefix, prefix_len,
-                          msg, msglen, hmac_out) != 0) {
+                          msg, msglen, hmac_out) != 0 || SLH_HASH_FAULT()) {
+        ama_secure_memzero(hmac_out, sizeof(hmac_out));
         return -1;
     }
     memcpy(out, hmac_out, p->n);
@@ -399,7 +479,7 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
     /* H_msg = MGF1-SHA-512(R || PK.seed || SHA-512(R || PK.seed || PK.root || M'), m)
      * with M' = prefix || M.  Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
     uint8_t hash[64];
-    uint8_t mgf_seed[160];   /* n + n + 64, ≤ 32+32+64 = 128 */
+    uint8_t mgf_seed[SLH_MGF1_SEED_MAX];   /* n + n + 64, with n <= SLH_MAX_N */
     size_t mgf_seed_len = p->n + p->n + 64;
 
     /* Inner hash: SHA-512(R || PK.seed || PK.root || M'), streamed through the
@@ -426,7 +506,7 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
 
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
-    return 0;
+    return SLH_HASH_FAULT() ? -1 : 0;
 }
 
 /* ============================================================================
@@ -437,19 +517,37 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
  * input segments without an intermediate concatenation buffer.
  * ============================================================================ */
 
+/* shake_absorb_seg: one segment into ctx; an empty one is skipped, as the
+ * sponge would skip it.  Nonzero on success. */
+static int shake_absorb_seg(ama_sha3_ctx *ctx, const uint8_t *seg, size_t len) {
+    return len == 0 || ama_shake256_inc_absorb(ctx, seg, len) == AMA_SUCCESS;
+}
+
+/* shake_finish: finalize and squeeze if every absorb succeeded (`ok`
+ * nonzero), then scrub ctx on every path, the failing ones included: for PRF
+ * and PRF_msg it has absorbed SK.seed or SK.prf.  A failing path returns -1
+ * without writing out; it needs a NULL segment with a nonzero length, which
+ * every entry point refuses before any hashing starts. */
+static int shake_finish(ama_sha3_ctx *ctx, int ok, uint8_t *out, size_t outlen) {
+    ok = ok && ama_shake256_inc_finalize(ctx) == AMA_SUCCESS;
+    ok = ok && ama_shake256_inc_squeeze(ctx, out, outlen) == AMA_SUCCESS;
+    ok = ok && !SLH_HASH_FAULT();
+    ama_secure_memzero(ctx, sizeof(*ctx));
+    return ok ? 0 : -1;
+}
+
+/* shake_absorb_{three,four,five}: SHAKE-256 over the concatenated segments,
+ * one statement per step so each short-circuits on the one before. */
 static int shake_absorb_three(const uint8_t *a, size_t alen,
                               const uint8_t *b, size_t blen,
                               const uint8_t *c, size_t clen,
                               uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 static int shake_absorb_four(const uint8_t *a, size_t alen,
@@ -458,15 +556,12 @@ static int shake_absorb_four(const uint8_t *a, size_t alen,
                              const uint8_t *d, size_t dlen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (dlen && ama_shake256_inc_absorb(&ctx, d, dlen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    ok = ok && shake_absorb_seg(&ctx, d, dlen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 /* Five segments: the widest absorb this file needs is H_msg with the §10.2
@@ -480,16 +575,13 @@ static int shake_absorb_five(const uint8_t *a, size_t alen,
                              const uint8_t *e, size_t elen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (dlen && ama_shake256_inc_absorb(&ctx, d, dlen) != AMA_SUCCESS) return -1;
-    if (elen && ama_shake256_inc_absorb(&ctx, e, elen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    ok = ok && shake_absorb_seg(&ctx, d, dlen);
+    ok = ok && shake_absorb_seg(&ctx, e, elen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 static void shake_F(const slhdsa_params_t *p, uint8_t *out,
@@ -561,20 +653,6 @@ static int shake_H_msg(const slhdsa_params_t *p, uint8_t *out,
  *     => 40 + 8 + 1 = 49 ✓
  * Byte-exact against NIST ACVP SLH-DSA-SHA2-256f vectors (FIPS 205).
  */
-static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
-    AMA_SLHDSA_SHA2_256F,
-    32, 68, 17, 4, 9, 35, 16, 4, 64, 3, 67,
-    49, /* m = 49 bytes (40+8+1) */
-    64, 128, 49856,
-    40,            /* fors_msg_bytes = ceil(k*a/8) */
-    11200,
-    2144,
-    1,
-    /* FIPS 205 §4.2: PRF input ADRS uses WOTS_PRF=5 / FORS_PRF=6, identical to
-     * the SHAKE family — the address type codes do not depend on the hash. */
-    SLH_ADDR_TYPE_WOTS_PRF, SLH_ADDR_TYPE_FORS_PRF,
-    sha2_F, sha2_HT, sha2_PRF, sha2_PRF_msg, sha2_H_msg
-};
 
 /* SLH-DSA-SHAKE-128s constants (FIPS 205 Table 2):
  *   n=16, h=63, d=7, h'=9, a=12, k=14, lg(w)=4 → w=16
@@ -588,25 +666,107 @@ static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
  *   leaf-index bits = h/d = 9 → ceil(9/8) = 2 bytes
  *   total m = 21 + 7 + 2 = 30 ✓
  */
-static const slhdsa_params_t SLHDSA_PARAMS_SHAKE_128S = {
-    AMA_SLHDSA_SHAKE_128S,
-    16, 63, 7, 9, 12, 14, 16, 4, 32, 3, 35,
-    30, /* m = 30 bytes (21+7+2) */
-    32, 64, 7856,
-    21,            /* fors_msg_bytes = ceil(k*a/8) = 21 */
-    2912,
-    560,
-    0,
-    /* SHAKE family follows FIPS 205 §6 / §8 verbatim: PRF input ADRS uses
-     * separate WOTS_PRF=5 / FORS_PRF=6 type codes. */
-    SLH_ADDR_TYPE_WOTS_PRF, SLH_ADDR_TYPE_FORS_PRF,
-    shake_F, shake_HT, shake_PRF, shake_PRF_msg, shake_H_msg
-};
+
+/* SLH_PARAM_ROWS is the parameter table, one X(...) per parameter set:
+ *
+ *   X(name, ama_slhdsa_param_set_t,
+ *     n, h, d, h', a, k, w, lg(w), len1, len2, len, m,
+ *     pk_bytes, sk_bytes, sig_bytes, fors_msg_bytes, fors_bytes,
+ *     wots_sig_bytes, use_compressed_adrs, hash family)
+ *
+ * The row objects, slh_lookup() and the buffer-bound assertion below are all
+ * expanded from this one list, so every row slh_lookup() can return is a row
+ * the assertion has read.  Until 2026-09-30 each row was written out by hand
+ * beside its own _Static_assert on n alone, and neither half held.  A row
+ * without the assertion compiled: one with n = 40 did, and at run time
+ * sha2_PRF copied 40 octets out of its 32-octet SHA-256 digest.  A row with
+ * it compiled and overran too: SLH-DSA-SHAKE-256s (FIPS 205 Table 2; a = 14,
+ * as in every 192s and 256s set) passed its n assertion and overflowed the
+ * FORS treehash stack, which is sized for a <= 12.  Both were measured under
+ * AddressSanitizer. */
+#define SLH_PARAM_ROWS(X)                                                    \
+    X(SHA2_256F, AMA_SLHDSA_SHA2_256F,                                       \
+      32, 68, 17, 4, 9, 35, 16, 4, 64, 3, 67, 49,                            \
+      64, 128, 49856, 40, 11200, 2144,                                       \
+      1, sha2)                                                               \
+    X(SHAKE_128S, AMA_SLHDSA_SHAKE_128S,                                     \
+      16, 63, 7, 9, 12, 14, 16, 4, 32, 3, 35, 30,                            \
+      32, 64, 7856, 21, 2912, 560,                                           \
+      0, shake)
+
+/* SLH_ROWS_MAX(col) is the largest entry of one column over every row, as an
+ * integer constant expression: the size of a union holding one octet array
+ * per row, each as long as that row's entry.  The row objects are not
+ * constant expressions, so this is how a _Static_assert reads the table, and
+ * a row added to the list is a member of every union below.  The WOTS+
+ * digits are written at indices below len1 + len2 and read below len, so
+ * both are bounded.  Two entries are not columns but octet counts a row
+ * reads out of a bounded buffer: the ceil(len1 * lg(w) / 8) octets of an
+ * n-octet value that slh_base_w turns into the len1 WOTS+ message digits,
+ * and the octets slh_split_digest reads from the H_msg digest, through the
+ * tree and leaf indices that follow the FORS message.  Without those two, a
+ * row inside every other bound compiled and overran under AddressSanitizer:
+ * len1 = 72 at lg(w) = 4 reads 36 octets of the 32-octet fors_pk, and
+ * fors_msg_bytes = 60 reads octets 60 to 68 of the 64-octet digest. */
+#define SLH_ROWS_MAX(col) sizeof(union { SLH_PARAM_ROWS(col) })
+#define SLH_COL_N(NAME, ID, N, ...) uint8_t NAME[N];
+#define SLH_COL_HP(NAME, ID, N, H, D, HP, ...) uint8_t NAME[HP];
+#define SLH_COL_A(NAME, ID, N, H, D, HP, A, ...) uint8_t NAME[A];
+#define SLH_COL_K(NAME, ID, N, H, D, HP, A, K, ...) uint8_t NAME[K];
+#define SLH_COL_DIGITS(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, ...) \
+    uint8_t NAME[(LEN1) + (LEN2)];
+#define SLH_COL_LEN2(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, ...)   \
+    uint8_t NAME[LEN2];
+#define SLH_COL_CSUM(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, ...)   \
+    uint8_t NAME[(LEN2) * (LGW)];
+#define SLH_COL_LEN(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, LEN,    \
+                    ...)                                                     \
+    uint8_t NAME[LEN];
+#define SLH_COL_M(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, LEN, M,   \
+                  ...)                                                       \
+    uint8_t NAME[M];
+#define SLH_COL_WOTS_MSG(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, ...)     \
+    uint8_t NAME[((LEN1) * (LGW) + 7) / 8];
+#define SLH_COL_SPLIT(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, LEN,  \
+                      M, PK, SK, SIG, FORS_MSG, ...)                         \
+    uint8_t NAME[(FORS_MSG) + ((H) - (HP) + 7) / 8 + ((HP) + 7) / 8];
+_Static_assert(SLH_ROWS_MAX(SLH_COL_N) <= SLH_MAX_N
+                   && SLH_ROWS_MAX(SLH_COL_HP) <= SLH_MAX_HP
+                   && SLH_ROWS_MAX(SLH_COL_A) <= SLH_MAX_A
+                   && SLH_ROWS_MAX(SLH_COL_K) <= SLH_MAX_K
+                   && SLH_ROWS_MAX(SLH_COL_DIGITS) <= SLH_MAX_LEN
+                   && SLH_ROWS_MAX(SLH_COL_LEN) <= SLH_MAX_LEN
+                   && SLH_ROWS_MAX(SLH_COL_LEN2) <= SLH_MAX_LEN2
+                   && SLH_ROWS_MAX(SLH_COL_M) <= SLH_MAX_M
+                   && SLH_ROWS_MAX(SLH_COL_CSUM) <= 8u * SLH_CSUM_BYTES
+                   && SLH_ROWS_MAX(SLH_COL_WOTS_MSG) <= SLH_MAX_N
+                   && SLH_ROWS_MAX(SLH_COL_SPLIT) <= SLH_MAX_M,
+               "a row of SLH_PARAM_ROWS exceeds a stack-buffer bound of this "
+               "file (SLH_MAX_N and the bounds after it)");
+
+/* One static const slhdsa_params_t per row, SLHDSA_PARAMS_<name>.  FIPS 205
+ * §4.2 gives the PRF input ADRS the WOTS_PRF=5 / FORS_PRF=6 type codes as a
+ * property of the address structure, not of the hash, so both families take
+ * them; the family name selects the five hash functions.  The initializer is
+ * positional, in member order, as the hand-written rows were: a member added
+ * to slhdsa_params_t and not here is then a -Wmissing-field-initializers
+ * diagnostic (-Wextra), where a designated initializer compiles it to zero
+ * without one (measured, gcc 13.3.0 and clang 18.1.3;
+ * tests/test_slhdsa_param_row_bounds.py). */
+#define SLH_ROW_OBJECT(NAME, ID, N, H, D, HP, A, K, W, LGW, LEN1, LEN2, LEN,  \
+                       M, PK, SK, SIG, FORS_MSG, FORS, WOTS_SIG, ADRSC, FAM)  \
+    static const slhdsa_params_t SLHDSA_PARAMS_##NAME = {                    \
+        (ID), (N), (H), (D), (HP), (A), (K), (W), (LGW), (LEN1), (LEN2),     \
+        (LEN), (M), (PK), (SK), (SIG), (FORS_MSG), (FORS), (WOTS_SIG),       \
+        (ADRSC), SLH_ADDR_TYPE_WOTS_PRF, SLH_ADDR_TYPE_FORS_PRF,             \
+        FAM##_F, FAM##_HT, FAM##_PRF, FAM##_PRF_msg, FAM##_H_msg};
+SLH_PARAM_ROWS(SLH_ROW_OBJECT)
+
+#define SLH_ROW_CASE(NAME, ID, ...) case ID: return &SLHDSA_PARAMS_##NAME;
 
 static const slhdsa_params_t *slh_lookup(ama_slhdsa_param_set_t ps) {
     switch (ps) {
-        case AMA_SLHDSA_SHA2_256F:  return &SLHDSA_PARAMS_SHA2_256F;
-        case AMA_SLHDSA_SHAKE_128S: return &SLHDSA_PARAMS_SHAKE_128S;
+        SLH_PARAM_ROWS(SLH_ROW_CASE)
         default: return NULL;
     }
 }
@@ -695,7 +855,7 @@ static void slh_wots_checksum(const slhdsa_params_t *p, unsigned int *csum_out,
                               const unsigned int *msg) {
     unsigned int csum = 0;
     size_t i;
-    uint8_t csum_bytes[2];
+    uint8_t csum_bytes[SLH_CSUM_BYTES];
     for (i = 0; i < p->wots_len1; ++i) {
         csum += (unsigned int)(p->wots_w - 1) - msg[i];
     }
@@ -723,7 +883,7 @@ static void slh_wots_gen_pk(const slhdsa_params_t *p, uint8_t *pk,
                             const uint8_t *sk_seed, const uint8_t *pub_seed,
                             uint32_t addr[8]) {
     size_t i;
-    uint8_t chain_in[32];
+    uint8_t chain_in[SLH_MAX_N];
     uint32_t saved_type = addr[3];
     for (i = 0; i < p->wots_len; ++i) {
         slh_set_chain(addr, (uint32_t)i);
@@ -740,10 +900,10 @@ static void slh_wots_gen_pk(const slhdsa_params_t *p, uint8_t *pk,
 static void slh_wots_sign(const slhdsa_params_t *p, uint8_t *sig,
                           const uint8_t *msg, const uint8_t *sk_seed,
                           const uint8_t *pub_seed, uint32_t addr[8]) {
-    unsigned int basew[80];   /* len ≤ 67 for either set */
-    unsigned int csum[8];
+    unsigned int basew[SLH_MAX_LEN];   /* len ≤ 67 for either set */
+    unsigned int csum[SLH_MAX_LEN2];
     size_t i;
-    uint8_t chain_in[32];
+    uint8_t chain_in[SLH_MAX_N];
     uint32_t saved_type = addr[3];
     slh_base_w(p, basew, p->wots_len1, msg);
     slh_wots_checksum(p, csum, basew);
@@ -763,8 +923,8 @@ static void slh_wots_sign(const slhdsa_params_t *p, uint8_t *sig,
 static void slh_wots_pk_from_sig(const slhdsa_params_t *p, uint8_t *pk,
                                  const uint8_t *sig, const uint8_t *msg,
                                  const uint8_t *pub_seed, uint32_t addr[8]) {
-    unsigned int basew[80];
-    unsigned int csum[8];
+    unsigned int basew[SLH_MAX_LEN];
+    unsigned int csum[SLH_MAX_LEN2];
     size_t i;
     slh_base_w(p, basew, p->wots_len1, msg);
     slh_wots_checksum(p, csum, basew);
@@ -795,7 +955,7 @@ static void slh_fors_gen_sk(const slhdsa_params_t *p, uint8_t *sk,
 static void slh_fors_gen_leaf(const slhdsa_params_t *p, uint8_t *leaf,
                               const uint8_t *sk_seed, const uint8_t *pub_seed,
                               uint32_t idx, uint32_t addr[8]) {
-    uint8_t sk[32];
+    uint8_t sk[SLH_MAX_N];
     slh_set_tree_height(addr, 0);
     slh_set_tree_index(addr, idx);
     slh_fors_gen_sk(p, sk, sk_seed, pub_seed, addr);
@@ -809,8 +969,8 @@ static void slh_fors_treehash(const slhdsa_params_t *p, uint8_t *root,
                               uint32_t tree_idx, uint32_t addr[8]) {
     /* Stack big enough for both parameter sets: max fors_height is 12 (SHAKE-128s)
      * and max n is 32 (SHA2-256f). 13 entries × 32 B = 416 B. */
-    uint8_t  stack[(12 + 1) * 32];
-    unsigned int heights[12 + 1];
+    uint8_t  stack[(SLH_MAX_A + 1) * SLH_MAX_N];
+    unsigned int heights[SLH_MAX_A + 1];
     unsigned int sp = 0;
     uint32_t leaves = (uint32_t)1u << p->fors_height;
     uint32_t offset = tree_idx * leaves;
@@ -845,8 +1005,8 @@ static void slh_fors_sign(const slhdsa_params_t *p, uint8_t *sig, uint8_t *pk,
                           const uint8_t *pub_seed, uint32_t fors_addr[8]) {
     /* Caller-provided indices buffer would be cleaner, but k≤35 across both
      * sets so we use a stack array. */
-    unsigned int indices[35];
-    uint8_t roots[35 * 32];
+    unsigned int indices[SLH_MAX_K];
+    uint8_t roots[SLH_MAX_K * SLH_MAX_N];
     size_t i;
     uint32_t saved_keypair;
 
@@ -873,9 +1033,9 @@ static void slh_fors_pk_from_sig(const slhdsa_params_t *p, uint8_t *pk,
                                  const uint8_t *sig, const uint8_t *msg_digest,
                                  const uint8_t *pub_seed,
                                  uint32_t fors_addr[8]) {
-    unsigned int indices[35];
-    uint8_t roots[35 * 32];
-    uint8_t node[2 * 32];
+    unsigned int indices[SLH_MAX_K];
+    uint8_t roots[SLH_MAX_K * SLH_MAX_N];
+    uint8_t node[2 * SLH_MAX_N];
     size_t i, j;
     uint32_t saved_keypair;
 
@@ -918,7 +1078,7 @@ static void slh_fors_pk_from_sig(const slhdsa_params_t *p, uint8_t *pk,
 static void slh_xmss_gen_leaf(const slhdsa_params_t *p, uint8_t *leaf,
                               const uint8_t *sk_seed, const uint8_t *pub_seed,
                               uint32_t idx, uint32_t addr[8]) {
-    uint8_t wots_pk[80 * 32];   /* len*n max: 67*32 = 2144 < 80*32 */
+    uint8_t wots_pk[SLH_MAX_LEN * SLH_MAX_N];   /* len*n max: 67*32 = 2144 < 80*32 */
     uint32_t wots_pk_addr[8];
 
     slh_set_type(addr, SLH_ADDR_TYPE_WOTS);
@@ -935,8 +1095,8 @@ static void slh_xmss_treehash(const slhdsa_params_t *p, uint8_t *root,
                               const uint8_t *pub_seed, uint32_t leaf_idx,
                               uint32_t addr[8]) {
     /* Max h' is 9 (SHAKE-128s), n max 32 → 10 × 32 = 320 B */
-    uint8_t stack[(9 + 1) * 32];
-    unsigned int heights[9 + 1];
+    uint8_t stack[(SLH_MAX_HP + 1) * SLH_MAX_N];
+    unsigned int heights[SLH_MAX_HP + 1];
     unsigned int sp = 0;
     uint32_t leaves = (uint32_t)1u << p->tree_height;
     uint32_t i;
@@ -969,7 +1129,7 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
                         const uint8_t *msg, uint64_t tree, uint32_t leaf_idx,
                         const uint8_t *sk_seed, const uint8_t *pub_seed) {
     uint32_t addr[8];
-    uint8_t root[32];
+    uint8_t root[SLH_MAX_N];
     size_t layer;
     memset(addr, 0, sizeof(addr));  // PUBLIC-DATA: addr — SLH-DSA tree-address struct, pre-use init filled by set_layer/tree/keypair
 
@@ -1020,9 +1180,9 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
                          const uint8_t *pub_seed, const uint8_t *root_expected) {
     uint32_t addr[8];
     uint32_t wots_pk_addr[8];
-    uint8_t node[32];
-    uint8_t wots_pk[80 * 32];
-    uint8_t combined[2 * 32];
+    uint8_t node[SLH_MAX_N];
+    uint8_t wots_pk[SLH_MAX_LEN * SLH_MAX_N];
+    uint8_t combined[2 * SLH_MAX_N];
     size_t layer;
     unsigned int h;
 
@@ -1091,9 +1251,14 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
-static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
-    return ama_randombytes(buf, len);
-}
+/* CSPRNG override for tests (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h).  Every draw in this file goes through
+ * slh_randombytes().  The hook used to be consulted only by the legacy
+ * ama_sphincs_* entry points, through a second draw function, so the
+ * fail-closed exits of ama_slhdsa_keygen() and ama_slhdsa_sign() on a CSPRNG
+ * failure could not be reached by any test (measured 2026-09-26);
+ * tests/c/test_input_guards.c now drives all four. */
+AMA_TEST_CSPRNG(ama_sphincs_randombytes_hook, slh_randombytes)
 
 /* keygen_internal: given (sk_seed, sk_prf, pk_seed) all of length n, fill pk
  * (= pk_seed || pk_root) and sk (= sk_seed || sk_prf || pk_seed || pk_root). */
@@ -1103,8 +1268,8 @@ static ama_error_t slh_keygen_internal(const slhdsa_params_t *p,
                                        const uint8_t *pk_seed,
                                        uint8_t *pk, uint8_t *sk) {
     uint32_t addr[8];
-    uint8_t root[32];
-    uint8_t auth_path[9 * 32];   /* h' ≤ 9 → ≤ 9*32 = 288 B */
+    uint8_t root[SLH_MAX_N];
+    uint8_t auth_path[SLH_MAX_HP * SLH_MAX_N];   /* h' ≤ 9 → ≤ 9*32 = 288 B */
 
     memset(addr, 0, sizeof(addr));  // PUBLIC-DATA: addr — SLH-DSA tree-address struct, pre-use init
     slh_set_layer(addr, (uint32_t)(p->d - 1));
@@ -1131,11 +1296,17 @@ static ama_error_t slh_keygen_internal(const slhdsa_params_t *p,
 AMA_API ama_error_t ama_slhdsa_keygen(ama_slhdsa_param_set_t ps,
                                       uint8_t *pk, uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
-    uint8_t seeds[3 * 32];
+    uint8_t seeds[3 * SLH_MAX_N];
     ama_error_t rc;
     if (!p || !pk || !sk) return AMA_ERROR_INVALID_PARAM;
     rc = slh_randombytes(seeds, 3 * p->n);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) {
+        /* A failed draw may already have written CSPRNG output: the
+         * getrandom(2) and getentropy(3) paths of ama_randombytes loop and
+         * can fail after earlier iterations succeeded. */
+        ama_secure_memzero(seeds, sizeof(seeds));
+        return rc;
+    }
     rc = slh_keygen_internal(p, seeds, seeds + p->n, seeds + 2 * p->n, pk, sk);
     ama_secure_memzero(seeds, sizeof(seeds));
     return rc;
@@ -1168,12 +1339,12 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
                                      const uint8_t *prefix, size_t prefix_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *sk) {
-    uint8_t pk[2 * 32];
-    uint8_t R[32];
-    uint8_t fors_msg[64];   /* m ≤ 49 (SHA2-256f) */
+    uint8_t pk[2 * SLH_MAX_N];
+    uint8_t R[SLH_MAX_N];
+    uint8_t fors_msg[SLH_MAX_M];   /* m ≤ 49 (SHA2-256f) */
     uint64_t tree;
     uint32_t leaf_idx;
-    uint8_t fors_pk[32];
+    uint8_t fors_pk[SLH_MAX_N];
     uint32_t fors_addr[8];
     uint8_t *sig_ptr = signature;
 
@@ -1188,6 +1359,8 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     /* R = PRF_msg(SK.prf, opt_rand, M') */
     if (p->prf_msg(p, R, sk_prf, opt_rand, prefix, prefix_len,
                    message, message_len) != 0) {
+        ama_secure_memzero(R, sizeof(R));
+        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
     /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
@@ -1202,14 +1375,26 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
      * INVARIANT-12: FIPS 205 has no rejection loop.  SK.seed and SK.prf
      * themselves stay tainted. */
     AMA_CT_DECLASSIFY(R, p->n);
-    memcpy(sig_ptr, R, p->n);
-    sig_ptr += p->n;
 
-    /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf. */
+    /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf.
+     * R enters the caller's signature only once H_msg has succeeded: it was
+     * written first until 2026-09-28, so a refused H_msg returned an error
+     * with R already in the caller's buffer.  Both error exits scrub what
+     * they computed, as the success exit does: R is public only once it is
+     * in a signature, and on these exits it never is.  They also wipe the
+     * dead stack the failed hash left below this frame: its Keccak
+     * permutation's lanes hold the state R or the digest was squeezed from,
+     * and in an unoptimised build they stay there (measured, gcc 13.3.0
+     * CMAKE_BUILD_TYPE=None, tests/c/test_slhdsa_fault_residue.c). */
     if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
                     message, message_len) != 0) {
+        ama_secure_memzero(R, sizeof(R));
+        ama_secure_memzero(fors_msg, sizeof(fors_msg));
+        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
+    memcpy(sig_ptr, R, p->n);
+    sig_ptr += p->n;
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
 
     /* FORS sign at (tree, leaf_idx). */
@@ -1280,7 +1465,7 @@ AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
                                     const uint8_t *ctx, size_t ctx_len,
                                     const uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
-    uint8_t opt_rand[32];
+    uint8_t opt_rand[SLH_MAX_N];
     uint8_t prefix[AMA_SLHDSA_CTX_PREFIX_MAX];
     size_t prefix_len;
     ama_error_t rc;
@@ -1306,7 +1491,10 @@ AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
      * latter, so we must support both. We expose the hedged form here; the
      * deterministic form is ama_slhdsa_sign_deterministic. */
     rc = slh_randombytes(opt_rand, p->n);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(opt_rand, sizeof(opt_rand));   /* see ama_slhdsa_keygen */
+        return rc;
+    }
 
     rc = slh_sign_internal(p, signature, opt_rand, prefix, prefix_len,
                            message, message_len, sk);
@@ -1329,10 +1517,10 @@ static ama_error_t slh_verify_internal(const slhdsa_params_t *p,
                                        size_t message_len,
                                        const uint8_t *pk) {
     const uint8_t *R, *fors_sig, *ht_sig;
-    uint8_t fors_msg[64];
+    uint8_t fors_msg[SLH_MAX_M];
     uint64_t tree;
     uint32_t leaf_idx;
-    uint8_t fors_pk[32];
+    uint8_t fors_pk[SLH_MAX_N];
     uint32_t fors_addr[8];
     int ok;
 
@@ -1509,7 +1697,6 @@ AMA_API ama_error_t ama_slhdsa_sign_addrnd(ama_slhdsa_param_set_t ps,
  * repository and links ama_cryptography_test.
  * ============================================================================ */
 #ifdef AMA_TESTING_MODE
-#include "internal/ama_testing_exports.h"
 
 ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
                                      uint8_t *signature,
@@ -1595,25 +1782,17 @@ ama_error_t ama_slhdsa_verify_internal(ama_slhdsa_param_set_t ps,
  * which is where that behaviour now lives.
  * ============================================================================ */
 
-/* Deterministic-randomness hook for KAT testing (test-only), preserved from
- * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
- * the SPHINCS+ vectors deterministically. */
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
+/* The legacy SPHINCS+ layer's draw.  It kept the test hook to itself until
+ * 2026-09-26; slh_randombytes() now honours the same hook, so this is that
+ * function under the compatibility layer's name, and the two layers cannot
+ * disagree about where their randomness comes from. */
 static ama_error_t spx_compat_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_sphincs_randombytes_hook) {
-        return ama_sphincs_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
+    return slh_randombytes(buf, len);
 }
 
 AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
-    uint8_t seeds[3 * 32];
+    uint8_t seeds[3 * SLH_MAX_N];
     ama_error_t rc;
 
     if (!p || !public_key || !secret_key) {
@@ -1623,6 +1802,7 @@ AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key
     /* Draw SK.seed || SK.prf || PK.seed (3n bytes) and derive the keypair. */
     rc = spx_compat_randombytes(seeds, 3 * p->n);
     if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(seeds, sizeof(seeds));   /* see ama_slhdsa_keygen */
         return rc;
     }
     rc = slh_keygen_internal(p, seeds, seeds + p->n, seeds + 2 * p->n,
@@ -1635,7 +1815,7 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *secret_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
-    uint8_t opt_rand[32];
+    uint8_t opt_rand[SLH_MAX_N];
     /* M' = 0x00 || IntegerToBytes(0, 1) || M — the §10.2 wrapper with the
      * empty context.  Two bytes on the stack; the message is not copied. */
     static const uint8_t empty_ctx_prefix[2] = { 0x00, 0x00 };
@@ -1650,12 +1830,10 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Hedged randomizer: fresh addrnd per signature.  Drawn through
-     * spx_compat_randombytes, which keeps the AMA_TESTING_MODE KAT hook —
-     * routing through ama_slhdsa_sign() instead would silently drop it and
-     * take tests/c/test_kat.c's deterministic SPHINCS+ driver with it. */
+    /* Hedged randomizer: fresh addrnd per signature. */
     rc = spx_compat_randombytes(opt_rand, p->n);
     if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(opt_rand, sizeof(opt_rand));   /* see ama_slhdsa_keygen */
         return rc;
     }
     rc = slh_sign_internal(p, signature, opt_rand,

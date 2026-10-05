@@ -25,8 +25,24 @@ jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    # Windows gets 30, everything else keeps 20.  The budget is set by the
-    # spread between two runs of the SAME matrix entry, not by one overrun.
+    # Every leg gets 30.  The budget is set by the spread between runs of the
+    # SAME job, not by one overrun.  Windows reached 30 first (below); Linux
+    # followed on run 36739915970 at 0b74bd7, per-step minutes from the
+    # Actions API:
+    #
+    #   step                 ubuntu 3.10   ubuntu 3.11   ubuntu 3.12
+    #   apt: deps + cross       0.28          2.45          6.58
+    #   pytest                 17.10         12.02         11.98 (at 93 %)
+    #   TOTAL                  19.75         16.17         20.27
+    #                          success       success       CANCELLED
+    #
+    # The 3.10 leg, on a healthy mirror, finished 15 seconds under the old
+    # 20-minute cap: pytest alone ranged 12.0 to 17.1 minutes across siblings
+    # of one commit.  The 3.12 leg spent 6.6 minutes in apt on a slow mirror,
+    # which the apt helper bounds at 600 s per call, not per job, and was
+    # cancelled mid-suite, taking `CI Gate` red.  30 minutes is 52 % headroom
+    # over the slowest healthy leg and leaves one apt call its whole 600 s
+    # budget beside it.
     #
     # `Test windows-latest / Python 3.14`, per-step minutes, from the Actions
     # API rather than from the summary line:
@@ -67,7 +83,7 @@ jobs:
     # measured job and 49 % over the worst observed run.  A timeout is a
     # resource budget, not a correctness threshold: nothing here is made
     # easier to pass, and a leg that genuinely hangs still fails.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

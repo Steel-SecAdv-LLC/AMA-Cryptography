@@ -1670,6 +1670,143 @@ def _native_backend_summary() -> str:
         return "unavailable"
 
 
+#: Build trees searched for the one that produced the measured library, in
+#: order, after any ``--cmake-build-dir``: setup.py's (``build/python-cmake``,
+#: which ``python setup.py build_ext --inplace`` copies the package's library
+#: from) and the conventional top-level tree.
+_DEFAULT_CMAKE_BUILD_DIRS: "tuple[str, ...]" = ("build/python-cmake", "build")
+
+#: ``--cmake-build-dir`` values, set by :func:`main` before anything is measured.
+_CMAKE_BUILD_DIRS: "list[Path]" = []
+
+#: Prefix of every build-configuration value that is not a configuration, so a
+#: reader (and ``tools/check_benchmark_claims.py``) can tell the two apart.
+BUILD_CONFIGURATION_NOT_RECORDED = "not recorded"
+
+
+def _cmake_cache_entries(cache: Path) -> "dict[str, tuple[str, str]]":
+    """``NAME:TYPE=VALUE`` lines of a ``CMakeCache.txt`` as ``{NAME: (TYPE, VALUE)}``."""
+    entries: dict[str, tuple[str, str]] = {}
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        name, _sep, kind = key.partition(":")
+        entries[name] = (kind, value)
+    return entries
+
+
+def _cmake_compiler(tree: Path) -> Optional[str]:
+    """``"GNU 13.3.0"``: the C compiler CMake identified when it configured ``tree``.
+
+    None unless CMake's probe names both the compiler and its version: a
+    configuration without them does not say what compiled the measured bytes.
+    """
+    found: dict[str, str] = {}
+    for probe in sorted(tree.glob("CMakeFiles/*/CMakeCCompiler.cmake")):
+        for line in probe.read_text(encoding="utf-8", errors="replace").splitlines():
+            for field in ("CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION"):
+                prefix = f'set({field} "'
+                if line.startswith(prefix) and line.endswith('")'):
+                    found[field] = line[len(prefix) : -2]
+    compiler_id = found.get("CMAKE_C_COMPILER_ID", "").strip()
+    version = found.get("CMAKE_C_COMPILER_VERSION", "").strip()
+    if not compiler_id or not version:
+        return None
+    return f"{compiler_id} {version}"
+
+
+def _describe_cmake_tree(tree: Path, entries: "dict[str, tuple[str, str]]", compiler: str) -> str:
+    """The compiler and the configure line that reproduce ``tree``'s build.
+
+    Every user-settable project option is listed (each ``AMA_*`` entry of type
+    BOOL or STRING, defaults included), with the build type and the C flags
+    CMake was handed.  The flags ``CMakeLists.txt`` adds follow from those at
+    the recorded commit, so the line and the commit determine the compile
+    flags; listing defaults too means no reader has to know what they were.
+    """
+    build_type = entries.get("CMAKE_BUILD_TYPE", ("", ""))[1]
+    wanted = ["CMAKE_BUILD_TYPE", "CMAKE_C_FLAGS"]
+    if build_type:
+        wanted.append(f"CMAKE_C_FLAGS_{build_type.upper()}")
+    wanted += sorted(
+        name
+        for name, (kind, _value) in entries.items()
+        if name.startswith("AMA_") and kind in ("BOOL", "STRING")
+    )
+    configure = " ".join(
+        shlex.quote(f"-D{name}={entries[name][1]}") for name in wanted if name in entries
+    )
+    try:
+        where = tree.resolve().relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        where = f"{tree.name}, a build tree outside the checkout"
+    return f"{compiler}; cmake {configure} (from {where})"
+
+
+def _cmake_build_configuration(
+    library_name: str,
+    digest_hex: str,
+    trees: "list[Path]",
+    sha3_256: "Callable[[bytes], bytes]",
+) -> str:
+    """The configuration of the CMake tree whose library IS the measured object.
+
+    There is no runtime accessor for the configure flags, and the library
+    cannot be asked how it was built.  The mapped-bytes digest pins the exact
+    binary, though, so a build tree whose ``lib``/``bin`` copy of the library
+    has that same digest built it, and its ``CMakeCache.txt`` records how.  A
+    tree whose copy differs (a rebuild since, another configuration) is not
+    evidence about the measured object and is passed over, so the value is
+    either the configuration that produced these bytes or says it is not
+    recorded -- never a guess from a tree that happens to exist.
+    """
+    if not digest_hex:
+        return f"{BUILD_CONFIGURATION_NOT_RECORDED}: the measured object has no recorded digest"
+    for tree in trees:
+        cache = tree / "CMakeCache.txt"
+        if not cache.is_file():
+            continue
+        for sub in ("", "lib", "bin"):
+            candidate = tree / sub / library_name
+            if candidate.is_file() and sha3_256(candidate.read_bytes()).hex() == digest_hex:
+                compiler = _cmake_compiler(tree)
+                if compiler is None:
+                    return (
+                        f"{BUILD_CONFIGURATION_NOT_RECORDED}: {tree} built the measured "
+                        "object, but its CMake compiler probe "
+                        "(CMakeFiles/*/CMakeCCompiler.cmake) does not name the "
+                        "compiler and its version"
+                    )
+                return _describe_cmake_tree(tree, _cmake_cache_entries(cache), compiler)
+    searched = ", ".join(str(tree) for tree in trees) or "none"
+    return (
+        f"{BUILD_CONFIGURATION_NOT_RECORDED}: no CMake build tree searched ({searched}) "
+        f"holds a {library_name} with the measured object's digest; pass the tree "
+        "that built it with --cmake-build-dir"
+    )
+
+
+def _native_build_configuration() -> str:
+    """How the measured native library was built, or why that is not recorded."""
+    try:
+        from ama_cryptography._self_test import module_attestation
+        from ama_cryptography.pqc_backends import native_sha3_256
+
+        nb = module_attestation().get("native_backend") or {}
+        if not nb.get("loaded"):
+            return f"{BUILD_CONFIGURATION_NOT_RECORDED}: no native library was loaded"
+        trees = list(_CMAKE_BUILD_DIRS) + [_REPO_ROOT / d for d in _DEFAULT_CMAKE_BUILD_DIRS]
+        return _cmake_build_configuration(
+            Path(str(nb.get("path") or "")).name,
+            str(nb.get("preload_digest_hex") or ""),
+            trees,
+            native_sha3_256,
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never raise
+        return f"{BUILD_CONFIGURATION_NOT_RECORDED}: {type(exc).__name__}: {exc}"
+
+
 #: The dispatcher's own initialisation report, captured in the MEASURING
 #: process by :func:`capture_dispatch_report` before the first benchmark runs.
 #: ``None`` means nothing captured it (a direct call from a test, or an
@@ -1825,6 +1962,9 @@ def _provenance() -> "list[tuple[str, str]]":
         ("Python", f"{platform.python_version()} ({platform.python_implementation()})"),
         # Which native binary produced the numbers — the digest pins the build.
         ("Native backend", _native_backend_summary()),
+        # How that binary was built: the compiler and the configure line of
+        # the CMake tree whose library has the same digest (AGENTS.md 8.7).
+        ("Build configuration", _native_build_configuration()),
         # Which kernels that binary actually ran, per the dispatcher's own
         # report, auto-tune verdicts included — captured in THIS process,
         # before its first measurement (capture_dispatch_report).
@@ -2020,8 +2160,21 @@ def main() -> int:
         type=Path,
         help="Path to write markdown report with tables and charts",
     )
+    parser.add_argument(
+        "--cmake-build-dir",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "CMake build tree that built the measured library, searched before "
+            "build/python-cmake and build (repeatable); the provenance records "
+            "the configuration of the tree whose library matches the measured "
+            "object's digest"
+        ),
+    )
 
     args = parser.parse_args()
+    _CMAKE_BUILD_DIRS[:] = args.cmake_build_dir
 
     # Before anything is measured and before any output file is written, so
     # the recorded commit and cleanliness describe the tree the numbers came

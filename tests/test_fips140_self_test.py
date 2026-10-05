@@ -16,12 +16,14 @@ Tests for the FIPS 140-3 power-on self-test infrastructure:
 Run with:  pytest tests/test_fips140_self_test.py -v -m fips
 """
 
+import logging
 import sys
+import threading
 from unittest.mock import patch
 
 import pytest
 
-pytestmark = pytest.mark.fips
+pytestmark = [pytest.mark.fips, pytest.mark.usefixtures("post_state_restored")]
 
 
 # ============================================================================
@@ -128,11 +130,248 @@ class TestPowerOnSelfTests:
         assert module_status() == "OPERATIONAL"
 
     def test_post_duration_is_under_budget(self) -> None:
-        from ama_cryptography._self_test import post_duration_ms
+        """POST's own cost stays under 2 s.
 
-        duration = post_duration_ms()
-        assert duration > 0, "POST duration should be positive"
-        assert duration < 2000, f"POST took {duration:.1f}ms, exceeding 2000ms budget"
+        Measured here, on five POST runs, against the median.  This used to
+        read ``post_duration_ms()`` -- the duration of whichever POST some
+        other test ran last.  On main's Windows / CPython 3.14.7 lane that was
+        ``test_reset_module_recovers_from_error``'s POST, at 6,234 ms, while
+        every other POST in the same process took about 1 s and the same lane
+        on CPython 3.14.6 took 0.32 s: one stall of the host, charged to POST.
+
+        The median, not the minimum: a stall adds time to one sample, and the
+        median absorbs up to two; a regression that slows most runs --
+        deterministic, or intermittent in three of five -- moves the median
+        over the budget, where the minimum would let one fast run hide it.
+        Every sample's per-stage breakdown is in the message.
+        """
+        from ama_cryptography._self_test import _run_self_tests, module_attestation
+
+        # A run that fails leaves the module in ERROR; the module's
+        # ``post_state_restored`` fixture puts it back for the tests after it.
+        samples = []
+        for run in range(1, 6):
+            assert _run_self_tests() is True, f"POST run {run} of 5 failed"
+            attestation = module_attestation()
+            samples.append((attestation["duration_ms"], attestation["stage_durations_ms"]))
+        median = sorted(duration for duration, _ in samples)[len(samples) // 2]
+        report = "; ".join(
+            f"{duration:.1f}ms " + ", ".join(f"{k}={v:.1f}" for k, v in stages.items())
+            for duration, stages in samples
+        )
+        assert median > 0, "POST duration should be positive"
+        assert median < 2000, (
+            f"POST's median of 5 runs took {median:.1f}ms, exceeding the 2000ms "
+            f"budget; runs: {report}"
+        )
+
+    def test_stage_durations_account_for_the_run(self) -> None:
+        """Every stage is timed, in order, and the stages fit in the run."""
+        from ama_cryptography._self_test import _run_self_tests, module_attestation
+
+        assert _run_self_tests() is True
+        attestation = module_attestation()
+        stages = attestation["stage_durations_ms"]
+        assert list(stages) == [
+            "native-backend",
+            "kat-pre-integrity",
+            "integrity",
+            "execution-integrity",
+            "kat",
+            "oracle",
+            "rng",
+        ]
+        assert all(v >= 0 for v in stages.values())
+        assert sum(stages.values()) <= attestation["duration_ms"] + 1.0
+
+    # The tests below force POST to fail or to be interrupted.  Each leaves
+    # the module however the forced run left it; the module's
+    # ``post_state_restored`` fixture puts every piece of POST state back
+    # afterwards.  (They used to re-run POST in a ``finally`` instead, where a
+    # failing re-run replaced the test's own error and skipped the restore of
+    # ``_LAST_FAILURE`` that followed it.)
+
+    def test_stage_durations_stop_at_the_failing_stage(self) -> None:
+        """A failed stage is timed; the stages POST never reached are absent."""
+        from ama_cryptography._self_test import _run_self_tests, module_attestation
+
+        with patch(
+            "ama_cryptography._self_test._run_timing_oracle_stage",
+            return_value=(False, "forced"),
+        ):
+            assert _run_self_tests() is False
+        stages = module_attestation()["stage_durations_ms"]
+        assert list(stages)[-1] == "oracle"
+        assert "rng" not in stages
+
+    def test_an_interrupt_before_the_first_stage_still_drops_the_allowance(self) -> None:
+        """The self-test allowance is pinned to this thread the moment
+        SELF_TEST is entered.  An interrupt that lands before the first stage
+        runs -- here, while the strict-mode flag is read -- used to escape the
+        ``try`` with the allowance still set, which kept
+        ``check_crypto_permitted()`` permissive on this thread for the rest of
+        the process (a window of microseconds, and a real one).  The pin
+        itself is asserted: the guard now also requires the POST lock, so a
+        refusal alone no longer shows that the ``finally`` ran."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography._self_test import _run_self_tests, module_status
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        assert _run_self_tests() is True
+        with (
+            patch(
+                "ama_cryptography._self_test._env_flag_enabled",
+                side_effect=KeyboardInterrupt,
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            _run_self_tests()
+        assert module_status() == "SELF_TEST"
+        assert ms._SELF_TEST_THREAD is None
+        with pytest.raises(CryptoModuleError):
+            ms.check_crypto_permitted()
+
+    def test_an_exception_before_the_first_stage_is_named_as_such(self) -> None:
+        """A failure before any stage has run is attributed to no stage: the
+        reason names ``<before the first stage>``, where it used to read as a
+        stage called ``''``."""
+        from ama_cryptography import _self_test as st
+
+        with (
+            patch.object(st, "_env_flag_enabled", side_effect=RuntimeError("flag unreadable")),
+            pytest.raises(RuntimeError, match="flag unreadable"),
+        ):
+            st._run_self_tests()
+        assert st.module_error_reason() == (
+            "FIPS POST internal error: stage '<before the first stage>' raised "
+            "RuntimeError: flag unreadable"
+        )
+
+    def test_an_interrupt_as_self_test_is_entered_drops_the_pin(self) -> None:
+        """``_begin_self_test()`` runs inside the ``try`` whose ``finally``
+        drops the pin.  An interrupt delivered the instant it returns must
+        still leave no thread pinned; with the call moved back above the
+        ``try``, it escaped with this thread's ident in ``_SELF_TEST_THREAD``."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        # The object _self_test binds; patched below on _self_test by name.
+        real_begin = ms._begin_self_test
+
+        def begin_then_interrupt() -> object:
+            real_begin()
+            raise KeyboardInterrupt
+
+        with (
+            patch.object(st, "_begin_self_test", begin_then_interrupt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            st._run_self_tests()
+        assert ms._MODULE_STATE == "SELF_TEST"
+        assert ms._SELF_TEST_THREAD is None
+
+    def test_a_failure_outside_post_is_recorded_with_its_reason_and_no_run(self) -> None:
+        """A pairwise consistency test or the continuous RNG test puts the
+        module in ERROR without a failed POST.  ``reset_module()`` records
+        that reason, and no run: the live table and timings belong to the
+        last POST, which passed, and attaching them (as it did until
+        2026-09-27) reported a POST failure that never happened."""
+        from ama_cryptography._module_state import _set_error
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            last_failure,
+            module_status,
+            reset_module,
+        )
+
+        reason = "Pairwise consistency test failed for ed25519: synthetic"
+        assert _run_self_tests() is True
+        _set_error(reason)
+        assert module_status() == "ERROR"
+        assert reset_module() is True
+        assert module_status() == "OPERATIONAL"
+        record = last_failure()
+        assert record["reason"] == reason
+        assert record["results"] == []
+        assert record["duration_ms"] == 0.0
+        assert record["stage_durations_ms"] == {}
+
+    def test_an_interrupt_during_post_is_not_recorded_as_a_failed_post(self) -> None:
+        """Ctrl-C during POST is an interrupted self-test, not a failed one.
+
+        The module still must not operate: SELF_TEST stands, the thread
+        allowance is dropped and crypto is refused.  But no CRITICAL "POST
+        FAILURE" is logged, no reason is set, last_failure() is untouched and
+        the interrupt propagates; the stage timings are still published."""
+        from ama_cryptography._module_state import check_crypto_permitted
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            last_failure,
+            module_attestation,
+            module_error_reason,
+            module_status,
+        )
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        assert _run_self_tests() is True
+        untouched_record = last_failure()
+        with (
+            patch(
+                "ama_cryptography._self_test._run_timing_oracle_stage",
+                side_effect=KeyboardInterrupt,
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            _run_self_tests()
+        assert module_status() == "SELF_TEST"
+        assert module_error_reason() is None
+        assert last_failure() == untouched_record
+        with pytest.raises(CryptoModuleError):
+            check_crypto_permitted()
+        stages = module_attestation()["stage_durations_ms"]
+        assert list(stages)[-1] == "oracle"
+
+    def test_stage_durations_name_a_stage_that_raises(self) -> None:
+        """A stage that raises is a recorded POST failure: timed and published
+        (not the previous run's map, and not a zero duration), the module in
+        ERROR naming the stage, a failing row in the table, and the run in
+        last_failure(); the exception still propagates."""
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            last_failure,
+            module_attestation,
+            module_error_reason,
+            module_self_test_results,
+            module_status,
+            post_duration_ms,
+        )
+
+        assert _run_self_tests() is True
+        before = module_attestation()["stage_durations_ms"]
+        assert "rng" in before
+        with (
+            patch(
+                "ama_cryptography._self_test._run_timing_oracle_stage",
+                side_effect=RuntimeError("stage escaped"),
+            ),
+            pytest.raises(RuntimeError, match="stage escaped"),
+        ):
+            _run_self_tests()
+        stages = module_attestation()["stage_durations_ms"]
+        assert list(stages)[-1] == "oracle"
+        assert "rng" not in stages
+        # The run's wall-clock is published on this exit too: it covers the
+        # stages it timed, so it cannot be the zero POST starts from.
+        assert post_duration_ms() >= sum(stages.values())
+        assert module_status() == "ERROR"
+        reason = module_error_reason() or ""
+        assert "'oracle'" in reason and "RuntimeError" in reason
+        assert module_self_test_results()[-1] == ("POST", False, reason)
+        record = last_failure()
+        assert record["reason"] == reason
+        assert record["stage_durations_ms"] == stages
+        assert record["duration_ms"] == post_duration_ms()
+        assert record["results"] == module_self_test_results()
 
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.
@@ -226,6 +465,595 @@ class TestPowerOnSelfTests:
         if passed is None:
             pytest.skip(detail)
         assert passed, detail
+
+
+# ============================================================================
+# POST State Transitions
+# ============================================================================
+
+
+class TestPostStateTransitions:
+    """POST's transitions against each other, against other threads, and
+    against the readers that report them.  Every test forces a failure or a
+    race; the module's ``post_state_restored`` fixture undoes it."""
+
+    def test_an_error_reported_during_post_is_not_overwritten(self) -> None:
+        """Another thread's pairwise or continuous-RNG failure that lands while
+        POST runs (its draw began before POST did) must survive POST.  The end
+        of POST was an unconditional ``_set_operational()``, which erased it:
+        the module reported OPERATIONAL, with no reason, after a failed
+        conditional self-test."""
+        from ama_cryptography import _self_test as st
+
+        reason = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
+        real_rng = st._run_rng_stage
+        failed_post = st.last_failure()["failed_post"]
+
+        def rng_then_another_thread_fails() -> tuple[bool, str | None]:
+            outcome = real_rng()
+            other = threading.Thread(target=st._set_error, args=(reason,))
+            other.start()
+            other.join(30)
+            return outcome
+
+        with patch.object(st, "_run_rng_stage", rng_then_another_thread_fails):
+            assert st.reset_module() is False
+        assert st.module_status() == "ERROR"
+        assert st.module_error_reason() == reason
+        # POST's own stages all passed; the record carries the reason and no
+        # run, and the last failed POST it holds is not replaced.
+        assert all(ok is not False for _, ok, _ in st.module_self_test_results())
+        assert st.last_failure() == {
+            "reason": reason,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": failed_post,
+        }
+
+    @pytest.mark.parametrize("fails", ["returning", "raising"])
+    @pytest.mark.parametrize(
+        "lands", ["before-the-run-fails", "as-post-enters-error", "as-the-run-records"]
+    )
+    def test_a_failed_run_survives_an_error_that_lands_before_its_record(
+        self, lands: str, fails: str
+    ) -> None:
+        """Another thread's failure can land between POST's own ``_set_error``
+        and the ``finally`` that records the run: as POST enters ERROR, or as
+        the ``finally`` begins.  Recorded from the live state alone, that newer
+        ERROR was the only one recorded, and the failed run's reason and table
+        were in no record, before recovery or after it.  The newer ERROR is the
+        most recent failure and is reported as one, with no run;
+        ``failed_post`` holds the failed run, its own reason beside its own
+        table.  One that lands inside the failing stage is followed by POST's
+        own failure, which is then the most recent: the four keys and
+        ``failed_post`` both hold the run."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        other = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
+        own = {
+            "returning": "synthetic oracle failure",
+            "raising": (
+                "FIPS POST internal error: stage 'oracle' raised RuntimeError: stage escaped"
+            ),
+        }[fails]
+        # The objects _self_test binds; patched below on _self_test by name.
+        real_set_error = ms._set_error
+        real_clear = ms._clear_self_test_thread
+        entered: list[str] = []
+
+        def another_thread_fails() -> None:
+            thread = threading.Thread(target=real_set_error, args=(other,))
+            thread.start()
+            thread.join(30)
+            assert not thread.is_alive()
+
+        def failing_oracle(strict_mode: bool) -> tuple[bool, str | None]:
+            if lands == "before-the-run-fails":
+                another_thread_fails()
+            if fails == "raising":
+                raise RuntimeError("stage escaped")
+            return False, own
+
+        def post_enters_error(reason: str) -> int:
+            sequence = real_set_error(reason)
+            entered.append(reason)
+            if lands == "as-post-enters-error":
+                another_thread_fails()
+            return sequence
+
+        def the_finally_begins() -> None:
+            # The first call in POST's ``finally``, ahead of the record, once
+            # POST has entered ERROR.
+            if lands == "as-the-run-records" and entered:
+                another_thread_fails()
+            real_clear()
+
+        first_sequence = ms._ERROR_SEQUENCE
+        with (
+            patch.object(st, "_set_error", post_enters_error),
+            patch.object(st, "_clear_self_test_thread", the_finally_begins),
+            patch.object(st, "_run_timing_oracle_stage", failing_oracle),
+        ):
+            if fails == "raising":
+                with pytest.raises(RuntimeError, match="stage escaped"):
+                    st._run_self_tests()
+            else:
+                assert st._run_self_tests() is False
+        # POST entered ERROR once, with its own reason, and the other thread once.
+        assert entered == [own]
+        assert ms._ERROR_SEQUENCE == first_sequence + 2
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        assert list(run["stage_durations_ms"])[-1] == "oracle"
+        if lands == "before-the-run-fails":
+            assert st.module_error_reason() == own
+            record = {**run, "failed_post": run}
+        else:
+            assert st.module_error_reason() == other
+            record = {
+                "reason": other,
+                "results": [],
+                "duration_ms": 0.0,
+                "stage_durations_ms": {},
+                "failed_post": run,
+            }
+        assert st.last_failure() == record
+        # The recovery run replaces the live table, not the record.
+        assert st.reset_module() is True
+        assert st.last_failure() == record
+
+    def test_post_itself_records_an_error_that_lands_before_its_record(self) -> None:
+        """POST's ``finally`` records the newer ERROR itself, after the run's
+        own.  ``last_failure()`` and the next POST record an ERROR nothing has
+        recorded before they read, but ``_set_operational()`` leaves ERROR
+        recording nothing, so a reader after it sees only what POST recorded.
+        With the newer ERROR left to a reader, or recorded before the run's
+        own, it was in no record, and the run was reported as the most recent
+        failure."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        other = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
+        own = "synthetic oracle failure"
+        # The object _self_test binds; patched below on _self_test by name.
+        real_set_error = ms._set_error
+        entered: list[str] = []
+
+        def post_enters_error(reason: str) -> int:
+            sequence = real_set_error(reason)
+            entered.append(reason)
+            thread = threading.Thread(target=real_set_error, args=(other,))
+            thread.start()
+            thread.join(30)
+            assert not thread.is_alive()
+            return sequence
+
+        with (
+            patch.object(st, "_set_error", post_enters_error),
+            patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)),
+        ):
+            assert st._run_self_tests() is False
+        assert entered == [own]
+        assert st.module_error_reason() == other
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        st._set_operational()
+        assert st.last_failure() == {
+            "reason": other,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": run,
+        }
+
+    def test_a_reader_on_the_post_thread_does_not_detach_the_run(self) -> None:
+        """A log handler that calls ``last_failure()`` on POST's CRITICAL "POST
+        FAILURE" runs on the POST thread, inside POST's ``_set_error``, and
+        records that ERROR with no run, as a reader records any.  POST's
+        ``finally`` records its own failure with its table all the same.
+        Recorded only if nothing had recorded it, the run's table was in no
+        record."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        own = "synthetic oracle failure"
+        seen: list[object] = []
+
+        class ReadsLastFailure(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                seen.append(st.last_failure()["reason"])
+
+        handler = ReadsLastFailure(logging.CRITICAL)
+        ms.logger.addHandler(handler)
+        try:
+            with patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)):
+                assert st._run_self_tests() is False
+        finally:
+            ms.logger.removeHandler(handler)
+        assert seen == [own]
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        assert st.last_failure() == {**run, "failed_post": run}
+
+    @pytest.mark.parametrize("lands", ["after-the-run", "after-recovery"])
+    def test_a_failed_run_survives_a_later_failure_outside_post(self, lands: str) -> None:
+        """A failure outside POST that follows a failed POST's record, while
+        that POST's ERROR stands or once ``reset_module()`` has recovered from
+        it, is the most recent failure and is reported as one, with its reason
+        and no run.  ``failed_post`` keeps the failed run through that failure
+        and the recovery after it.  Until it existed, that failure replaced the
+        run in ``last_failure()``, and with the live table a recovery run's, no
+        reader returned the failed run's reason or table."""
+        from ama_cryptography import _self_test as st
+
+        own = "synthetic oracle failure"
+        other = "Continuous RNG test failed: consecutive identical outputs (synthetic)"
+        with patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)):
+            assert st._run_self_tests() is False
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        if lands == "after-recovery":
+            assert st.reset_module() is True
+        st._set_error(other)
+        record = {
+            "reason": other,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": run,
+        }
+        assert st.last_failure() == record
+        assert st.reset_module() is True
+        assert st.last_failure() == record
+
+    def test_the_post_thread_is_refused_once_another_thread_enters_error(self) -> None:
+        """The self-test allowance is for SELF_TEST only.  Once another thread
+        has put the module in ERROR, the POST thread's next cryptographic call
+        is refused like any other, and the run ends without OPERATIONAL."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        reason = "Pairwise consistency test failed for ML-KEM-1024: synthetic, from another thread"
+        outcome: list[str] = []
+
+        def another_thread_fails_mid_run() -> tuple[bool, str | None]:
+            ms.check_crypto_permitted()  # this thread's allowance, before the failure
+            other = threading.Thread(target=st._set_error, args=(reason,))
+            other.start()
+            other.join(30)
+            try:
+                ms.check_crypto_permitted()
+                outcome.append("permitted")
+            except CryptoModuleError:
+                outcome.append("refused")
+            return True, None
+
+        with patch.object(st, "_run_rng_stage", another_thread_fails_mid_run):
+            assert st._run_self_tests() is False
+        assert outcome == ["refused"]
+        assert st.module_status() == "ERROR"
+        assert st.module_error_reason() == reason
+
+    @staticmethod
+    def _decide_while_a_transition_lands(
+        pinned: bool, land: tuple[str, str | None]
+    ) -> tuple[bool, Exception | None]:
+        """Run ``check_crypto_permitted`` on a worker thread in SELF_TEST, and
+        make ``land`` -- a ``(state, reason)`` transition -- happen after the
+        worker's unlocked fast-path read and before its locked decision.
+
+        The worker announces when it reaches ``_STATE_LOCK``; this thread holds
+        the lock until then, applies the transition, and releases it.  Returns
+        whether the worker reached the lock, and what the check raised."""
+        from ama_cryptography import _module_state as ms
+
+        inner = threading.RLock()
+        reached = threading.Event()
+
+        class _Announcing:
+            def __enter__(self) -> bool:
+                reached.set()
+                return inner.__enter__()
+
+            def __exit__(self, *exc: object) -> None:
+                inner.release()
+
+        raised: list[Exception | None] = []
+
+        def worker() -> None:
+            with ms._POST_LOCK:
+                if pinned:
+                    ms._SELF_TEST_THREAD = threading.get_ident()
+                try:
+                    ms.check_crypto_permitted()
+                    raised.append(None)
+                except Exception as exc:
+                    raised.append(exc)
+
+        with patch.object(ms, "_STATE_LOCK", _Announcing()):
+            ms._MODULE_STATE = "SELF_TEST"
+            ms._ERROR_REASON = None
+            ms._SELF_TEST_THREAD = None
+            with inner:
+                thread = threading.Thread(target=worker)
+                thread.start()
+                did_reach = reached.wait(30)
+                ms._MODULE_STATE, ms._ERROR_REASON = land
+            thread.join(30)
+        assert not thread.is_alive()
+        return did_reach, raised[0]
+
+    def test_an_error_entered_after_the_fast_path_read_is_honoured(self) -> None:
+        """The permit is decided under ``_STATE_LOCK``, not on the state read
+        before it: the POST thread, pinned and holding the POST lock, read
+        SELF_TEST, and another thread's ERROR landed before the decision.  The
+        call is refused and names that ERROR.  Decided on the earlier read, it
+        was permitted after the failure."""
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        reason = "Continuous RNG test failed: consecutive identical outputs (synthetic)"
+        reached, raised = self._decide_while_a_transition_lands(True, ("ERROR", reason))
+        assert reached
+        assert isinstance(raised, CryptoModuleError)
+        assert reason in str(raised)
+
+    def test_operational_reached_after_the_fast_path_read_is_permitted(self) -> None:
+        """A thread that read SELF_TEST while POST was finishing, and is not
+        the POST thread, is permitted once POST has made the module
+        OPERATIONAL.  The locked decision reads the state again; refused on
+        the stale read, a caller racing a successful POST got an error."""
+        reached, raised = self._decide_while_a_transition_lands(False, ("OPERATIONAL", None))
+        assert reached
+        assert raised is None
+
+    def test_the_post_state_snapshot_restores_everything_post_rewrites(self) -> None:
+        """The fixture every POST-failing module takes restores every piece of
+        state a failed run rewrites, the ERROR sequence number included (it
+        was left out, so a test that entered ERROR left the sequence ahead of
+        the restored ``_LAST_FAILURE_SEQUENCE``)."""
+        import copy
+
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from tests.conftest import _POST_GLOBALS, post_state_snapshot
+
+        def post_state() -> tuple[object, ...]:
+            return (
+                ms._MODULE_STATE,
+                ms._ERROR_REASON,
+                ms._SELF_TEST_THREAD,
+                ms._ERROR_SEQUENCE,
+                ms._rng_state["previous"],
+                copy.deepcopy(st._LAST_FAILURE),
+                {name: copy.deepcopy(getattr(st, name)) for name in _POST_GLOBALS},
+            )
+
+        before = post_state()
+        with post_state_snapshot():
+            with patch.object(st, "_run_rng_stage", lambda: (False, "synthetic RNG failure")):
+                assert st._run_self_tests() is False
+            assert st.last_failure()["reason"]
+            during = post_state()
+            assert during[3] != before[3], "the failed run entered no ERROR"
+        assert post_state() == before
+
+    def test_an_error_reported_as_post_begins_is_recorded(self) -> None:
+        """An ERROR entered in the instant before POST enters SELF_TEST is
+        replaced by the run, which is what a reset is for, but it is recorded
+        first.  Erased unrecorded, it survived only as a log line."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        reason = "Continuous RNG test failed: consecutive identical outputs (synthetic)"
+        # The object _self_test binds; patched below on _self_test by name.
+        real_begin = ms._begin_self_test
+
+        def another_thread_fails_then_begin() -> tuple[str, str | None, int]:
+            other = threading.Thread(target=st._set_error, args=(reason,))
+            other.start()
+            other.join(30)
+            return real_begin()
+
+        assert st._run_self_tests() is True
+        with patch.object(st, "_begin_self_test", another_thread_fails_then_begin):
+            assert st.reset_module() is True
+        assert st.module_status() == "OPERATIONAL"
+        assert st.last_failure()["reason"] == reason
+        assert st.last_failure()["results"] == []
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [(False, "stage failed and recorded no row"), (False, None)],
+        ids=["reason-without-row", "contract-violation"],
+    )
+    def test_a_failed_stage_that_left_no_row_gets_one(
+        self, outcome: tuple[bool, str | None]
+    ) -> None:
+        """With no failing row, ``module_attestation()["failed"]`` and the
+        import gate's results listing named no failure while the module was
+        in ERROR."""
+        from ama_cryptography import _self_test as st
+
+        with patch.object(st, "_run_timing_oracle_stage", return_value=outcome):
+            assert st._run_self_tests() is False
+        reason = st.module_error_reason()
+        assert reason is not None
+        assert st.module_self_test_results()[-1] == ("POST", False, reason)
+        assert st.module_attestation()["failed"] == [("POST", reason)]
+
+    def test_a_failed_stage_that_left_its_own_row_gets_no_second_one(self) -> None:
+        from ama_cryptography import _self_test as st
+
+        with patch.object(st, "_kat_sha3_256", return_value=(False, "synthetic KAT failure")):
+            assert st._run_self_tests() is False
+        failing = [name for name, ok, _ in st.module_self_test_results() if ok is False]
+        assert failing == ["SHA3-256"]
+
+    @pytest.mark.parametrize("reader", ["module_attestation", "last_failure"])
+    def test_a_reader_waits_for_a_running_post(self, reader: str) -> None:
+        """A reader called while POST runs describes the finished run.
+
+        Unlocked, it paired whatever it read first with a table still being
+        written: ``module_attestation()`` reported ``fully_verified: True``
+        for a run that went on to skip a test, and ``last_failure()`` a new
+        failure's reason beside an older one's evidence.  The reader is
+        started inside a stage; it cannot return until POST has, which the
+        stage observes for half a second (a reader that did not wait returns
+        well within it, and one that does cannot return at all)."""
+        from ama_cryptography import _self_test as st
+
+        read = getattr(st, reader)
+        started = threading.Event()
+        returned = threading.Event()
+        seen: list[dict[str, object]] = []
+        returned_during_post: list[bool] = []
+
+        def read_during_post() -> None:
+            started.set()
+            seen.append(read())
+            returned.set()
+
+        worker = threading.Thread(target=read_during_post)
+
+        def stage_with_a_reader(strict_mode: bool) -> tuple[bool, str | None]:
+            worker.start()
+            started.wait(30)
+            returned_during_post.append(returned.wait(0.5))
+            st._SELF_TEST_RESULTS.append(("forced", False, "failed after the read began"))
+            return False, "forced after the read began"
+
+        with patch.object(st, "_run_timing_oracle_stage", stage_with_a_reader):
+            assert st._run_self_tests() is False
+        worker.join(30)
+        assert returned_during_post == [False]
+        if reader == "module_attestation":
+            assert seen[0]["state"] == "ERROR"
+            assert seen[0]["failed"] == [("forced", "failed after the read began")]
+        else:
+            assert seen[0]["reason"] == "forced after the read began"
+            assert seen[0]["results"] == st.module_self_test_results()
+
+    def test_last_failure_reports_an_outside_post_failure_before_recovery(self) -> None:
+        """A failure outside POST is reported while the module is in ERROR,
+        not only once ``reset_module()`` has been asked to recover; until then
+        ``last_failure()`` described an older failure as the most recent."""
+        from ama_cryptography import _self_test as st
+
+        reason = "Pairwise consistency test failed for Ed25519: synthetic, unrecovered"
+        assert st._run_self_tests() is True
+        failed_post = st.last_failure()["failed_post"]
+        st._set_error(reason)
+        assert st.last_failure() == {
+            "reason": reason,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": failed_post,
+        }
+
+    def test_a_run_that_fails_before_integrity_reports_no_integrity_verdict(self) -> None:
+        """The integrity verdict is the integrity stage's.  A run that fails
+        before reaching it reported the previous run's ``integrity_strength``
+        and ``anchored`` as its own, and kept its failure classification."""
+        from ama_cryptography import _self_test as st
+
+        assert st._run_self_tests() is True
+        assert st.module_attestation()["integrity_strength"] is not None
+        # As a previous run that failed on a stale binding would leave it.
+        st._INTEGRITY_FAILURE_KIND = st._INTEGRITY_FAILURE_STALE_BINDING
+        with patch.object(st, "_run_backend_stage", return_value=(False, "backend gone")):
+            assert st._run_self_tests() is False
+        attestation = st.module_attestation()
+        assert attestation["integrity_strength"] is None
+        assert attestation["anchored"] is None
+        assert st.integrity_failure_was_stale_binding() is False
+
+    def test_an_exception_whose_str_raises_is_still_recorded(self) -> None:
+        """Formatting the reason used to call ``str(exc)`` inside the handler,
+        so an exception whose ``__str__`` raises replaced itself with that
+        second exception before ``_set_error`` ran: no ERROR, no reason, no
+        record."""
+        from ama_cryptography import _self_test as st
+
+        class UnprintableError(Exception):
+            def __str__(self) -> str:
+                raise ValueError("__str__ failed")
+
+        with (
+            patch.object(st, "_run_timing_oracle_stage", side_effect=UnprintableError()),
+            pytest.raises(UnprintableError),
+        ):
+            st._run_self_tests()
+        assert st.module_status() == "ERROR"
+        reason = st.module_error_reason()
+        assert reason == (
+            "FIPS POST internal error: stage 'oracle' raised UnprintableError: "
+            "<str() of UnprintableError raised ValueError>"
+        )
+        assert st.last_failure()["reason"] == reason
+
+    def test_the_timing_maps_handed_out_are_copies(self) -> None:
+        """A caller editing a returned map cannot edit the module's record."""
+        from ama_cryptography import _self_test as st
+
+        with patch.object(st, "_run_timing_oracle_stage", return_value=(False, "forced")):
+            assert st._run_self_tests() is False
+        st.module_attestation()["stage_durations_ms"]["injected"] = 1.0
+        assert "injected" not in st.module_attestation()["stage_durations_ms"]
+        st.last_failure()["stage_durations_ms"]["injected"] = 1.0
+        assert "injected" not in st.last_failure()["stage_durations_ms"]
+
+    def test_a_pin_that_outlives_its_run_grants_nothing(self) -> None:
+        """A second interrupt can land in the ``finally`` before the pin is
+        dropped.  The pin then outlives the run, and it used to keep
+        ``check_crypto_permitted()`` permissive on this thread after an
+        unfinished POST.  The guard also requires the POST lock, which the
+        ``with`` statement released."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        def second_interrupt() -> None:
+            raise KeyboardInterrupt
+
+        with (
+            patch.object(st, "_run_timing_oracle_stage", side_effect=KeyboardInterrupt),
+            patch.object(st, "_clear_self_test_thread", second_interrupt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            st._run_self_tests()
+        assert ms._MODULE_STATE == "SELF_TEST"
+        assert ms._SELF_TEST_THREAD == threading.get_ident()
+        with pytest.raises(CryptoModuleError, match="SELF_TEST"):
+            ms.check_crypto_permitted()
+        # The skipped ``finally`` also publishes the timing.  The run's map is
+        # published live from its start, so what is reported is this run's
+        # partial timing, and a wall-clock of 0 for a run that never finished,
+        # never the previous run's figures.
+        assert list(st.module_attestation()["stage_durations_ms"])[-1] == "oracle"
+        assert st.post_duration_ms() == 0.0
 
 
 # ============================================================================
@@ -440,6 +1268,34 @@ class TestPairwiseConsistency:
                 )
         finally:
             _set_operational()
+
+    @pytest.mark.parametrize("helper", ["signature", "kem", "agreement"])
+    def test_a_failure_with_an_unprintable_exception_still_enters_error(self, helper: str) -> None:
+        """The failure reason used to format ``str(exc)`` inside the handler;
+        an exception whose ``__str__`` raises replaced itself with that second
+        exception before ``_set_error`` ran, and the module stayed
+        OPERATIONAL after a failed pairwise test."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        class UnprintableError(Exception):
+            def __str__(self) -> str:
+                raise ValueError("__str__ failed")
+
+        def fails(*_args: object) -> object:
+            raise UnprintableError
+
+        calls = {
+            "signature": lambda: ms.pairwise_test_signature(fails, fails, b"sk", b"pk", "X"),
+            "kem": lambda: ms.pairwise_test_kem(fails, fails, b"pk", b"sk", "X"),
+            "agreement": lambda: ms.pairwise_test_agreement(fails, (b"p", b"s"), b"sk", b"pk", "X"),
+        }
+        with pytest.raises(CryptoModuleError, match="Pairwise test failed for X"):
+            calls[helper]()
+        assert ms.module_status() == "ERROR"
+        assert ms.module_error_reason() == (
+            "Pairwise consistency test failed for X: <str() of UnprintableError raised ValueError>"
+        )
 
 
 # ============================================================================

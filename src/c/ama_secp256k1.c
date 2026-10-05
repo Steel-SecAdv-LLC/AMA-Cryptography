@@ -2493,7 +2493,7 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
      * verify under a second, distinct public-key byte string (see
      * secp256k1_fe_bytes_canonical).  Wycheproof ships no out-of-field-point
      * ECDSA vectors, so this path is covered by tests/test_secp256k1_ecdsa_
-     * noncanonical_pubkey.py and tests/c/test_secp256k1_ecdsa.c instead. */
+     * noncanonical_pubkey.py and tests/c/test_secp256k1.c instead. */
     /* Canonical-bytes + on-curve, via the same helper
      * ama_secp256k1_point_mul uses (secp256k1_aff_from_bytes_checked) —
      * one validation, two callers, so the two paths cannot drift. */

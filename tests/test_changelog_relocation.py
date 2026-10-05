@@ -20,8 +20,9 @@ message:
   grouping headings, and no moved entry is left behind in the CHANGELOG;
 * every retained span is unchanged — with named exceptions only: the figure
   ``tools/check_documented_counts.py`` refused once the heading stopped
-  claiming a release date (see :data:`GLANCE_CORRECTION`), and the 5.0.0 row
-  of the Version History Summary (see :data:`SUMMARY_ROW_CORRECTIONS`);
+  claiming a release date (see :data:`GLANCE_CORRECTION`), the 5.0.0 row
+  of the Version History Summary (see :data:`SUMMARY_ROW_CORRECTIONS`), and
+  the ``Last Updated`` stamp of the preamble (see :data:`PREAMBLE_CORRECTIONS`);
 * reassembling the pre-relocation file from the two files as they stand gives
   back the pinned SHA-256 of the original, which holds without git history.
 
@@ -54,7 +55,9 @@ BASE_COMMIT = "974cb019a2cf098495aaa6bbf4622b8cc8115484"
 BASE_CHANGELOG_SHA256 = "58c84ba3ec3d9355db129636b031f198dbbf7232d7462cf7976699604faad9d7"
 
 OLD_HEADING = "## [5.0.0] - 2026-09-10\n"
-NEW_HEADING = "## [5.0.0] - Unreleased\n"
+#: Dated on 2026-10-04, the release-roll that filed every [Unreleased] entry
+#: under it (the heading read Unreleased from the relocation until then).
+NEW_HEADING = "## [5.0.0] - 2026-10-04\n"
 UNRELEASED_GROUP = "## Entries recorded under [Unreleased]\n\n"
 RELEASE_GROUP = "## Entries recorded under [5.0.0]\n\n"
 GLANCE_HEADING = "### Behavioural and breaking changes at a glance\n"
@@ -77,9 +80,19 @@ GLANCE_CORRECTION = ("105 native entry points", "107 native entry points")
 #: ten breaking changes against a glance table of eleven.  Each substitution
 #: must occur exactly once in the tail, so neither can widen into a licence.
 SUMMARY_ROW_CORRECTIONS = (
-    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | Unreleased |"),
+    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | 2026-10-04 |"),
     ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d711 \u2014 see `[5.0.0]`"),
 )
+
+#: The one edit inside the retained preamble: the ``Last Updated`` row of the
+#: Document Information table.  The pre-relocation file was stamped
+#: 2026-09-23, and every entry recorded since left the row alone, because it
+#: sits inside the span this test reassembles byte for byte.  The fix is in
+#: the test, not the pin: the live stamp is mapped back to the original one,
+#: exactly once, so the row can follow the newest entry while
+#: :data:`BASE_CHANGELOG_SHA256` stays the hash of the pre-relocation file.
+#: A stamp that moves without moving this row fails the exactly-once check.
+PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-04 |"),)
 
 
 def _journal_body(journal: str) -> str:
@@ -107,9 +120,9 @@ class TestTheTwoFilesReassembleTheOriginal:
     merge because a squash or rebase merge leaves that commit unreachable from
     ``main``, where ``AMA_CI_REQUIRE_HISTORY`` would turn it into a failure.
     Exact reassembly implies what it checked: every moved span is in the
-    journal in order, and every retained span is unchanged but for the one
-    named correction.  New entries added above the first retained one are
-    outside the reassembled span, so the test survives the CHANGELOG growing.
+    journal in order, and every retained span is unchanged but for the named
+    corrections.  New entries added above the first retained one are outside
+    the reassembled span, so the test survives the CHANGELOG growing.
     """
 
     def test_reassembly_reproduces_the_pinned_bytes(self) -> None:
@@ -118,8 +131,15 @@ class TestTheTwoFilesReassembleTheOriginal:
         moved_unreleased, moved_release = journal[len(UNRELEASED_GROUP) :].split(RELEASE_GROUP)
 
         preamble_end = _line_index(changelog, "## [Unreleased]\n\n") + len("## [Unreleased]\n\n")
+        preamble = changelog[:preamble_end]
+        for original, corrected in PREAMBLE_CORRECTIONS:
+            assert preamble.count(corrected) == 1, corrected
+            preamble = preamble.replace(corrected, original)
+        # Re-anchored on 2026-10-04: the release-roll moved the retained entry
+        # below the dated [5.0.0] heading, directly above the glance table, so
+        # its end anchor is the glance heading rather than the version heading.
         first_entry = changelog[
-            _line_index(changelog, FIRST_RETAINED_ENTRY) : _line_index(changelog, NEW_HEADING)
+            _line_index(changelog, FIRST_RETAINED_ENTRY) : _line_index(changelog, GLANCE_HEADING)
         ]
         glance_and_classic = changelog[
             _line_index(changelog, GLANCE_HEADING) : _line_index(changelog, V4_HEADING)
@@ -135,7 +155,7 @@ class TestTheTwoFilesReassembleTheOriginal:
             tail = tail.replace(corrected, original)
 
         rebuilt = (
-            changelog[:preamble_end]
+            preamble
             + first_entry
             + moved_unreleased
             + OLD_HEADING
@@ -148,6 +168,29 @@ class TestTheTwoFilesReassembleTheOriginal:
             + tail
         )
         assert hashlib.sha256(rebuilt.encode("utf-8")).hexdigest() == BASE_CHANGELOG_SHA256
+
+
+def test_the_stamp_is_not_older_than_the_newest_entry() -> None:
+    """The ``Last Updated`` row moves with the newest dated entry.
+
+    It read 2026-09-23 under entries dated 2026-09-26 and 2026-09-27: the row
+    sits inside the reassembled span, and nothing compared it with the entries
+    below it.  An entry's date closes its heading (``... — YYYY-MM-DD``); the
+    stamp may not be older than the newest of them, and it must be the stamp
+    :data:`PREAMBLE_CORRECTIONS` maps back to the pre-relocation one, so the
+    two move together.
+    """
+    changelog = _read(CHANGELOG)
+    stamp = re.search(r"^\| Last Updated \| (\d{4}-\d{2}-\d{2}) \|$", changelog, re.M)
+    assert stamp is not None, "CHANGELOG.md has no Last Updated row"
+    entry_dates = re.findall(r"^### .*?(\d{4}-\d{2}-\d{2})\)?\s*$", changelog, re.M)
+    assert entry_dates, "CHANGELOG.md has no dated entry heading"
+    newest = max(entry_dates)
+    assert stamp.group(1) >= newest, (
+        f"Last Updated reads {stamp.group(1)} under an entry dated {newest}; "
+        f"move the row and PREAMBLE_CORRECTIONS together"
+    )
+    assert stamp.group(0) in {corrected for _, corrected in PREAMBLE_CORRECTIONS}, stamp.group(0)
 
 
 # ---------------------------------------------------------------------------

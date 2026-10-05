@@ -1854,14 +1854,16 @@ class TestEveryBackendSkipIsEscalatable:
         "test_secure_memory.py",
     )
 
-    #: Skip reasons in those modules that are about the host operating system,
-    #: not a backend, listed verbatim so the guard stays exact: a reason may be
-    #: exempt only by appearing here, and an entry that no longer matches any
-    #: skip fails the test below so the list cannot rot.
-    HOST_OS_SKIP_REASONS: ClassVar[dict[str, frozenset[str]]] = {
+    #: Skip reasons in those modules that are about the host -- its operating
+    #: system or its Python version -- not a backend, listed verbatim so the
+    #: guard stays exact: a reason may be exempt only by appearing here, and an
+    #: entry that no longer matches any skip fails the test below so the list
+    #: cannot rot.
+    HOST_SKIP_REASONS: ClassVar[dict[str, frozenset[str]]] = {
         "test_pqc_backends_coverage.py": frozenset(
             {"LD_LIBRARY_PATH is Unix-only", "DYLD_LIBRARY_PATH is Unix-only"}
         ),
+        "test_post_failclosed.py": frozenset({"ExceptionGroup is a builtin only from Python 3.11"}),
     }
 
     @staticmethod
@@ -1909,7 +1911,7 @@ class TestEveryBackendSkipIsEscalatable:
     def test_every_literal_skip_reason_matches_a_backend_keyword(self, module_name: str) -> None:
         source_path = Path(__file__).resolve().parent / module_name
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        exempt = self.HOST_OS_SKIP_REASONS.get(module_name, frozenset())
+        exempt = self.HOST_SKIP_REASONS.get(module_name, frozenset())
 
         reasons = self._skip_reasons(tree)
         assert reasons, f"{module_name}: the scan found no skip at all; the pattern broke"
@@ -1927,6 +1929,6 @@ class TestEveryBackendSkipIsEscalatable:
         )
         unused_exemptions = sorted(exempt - {text for _, text in reasons})
         assert not unused_exemptions, (
-            f"{module_name}: HOST_OS_SKIP_REASONS lists {unused_exemptions}, which no "
+            f"{module_name}: HOST_SKIP_REASONS lists {unused_exemptions}, which no "
             f"skip in the module records any more; delete the stale entry."
         )

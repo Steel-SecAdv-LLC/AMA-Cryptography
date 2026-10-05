@@ -381,7 +381,9 @@ class TestEvalHarnessGateLogic:
         original = ev.run_shipped
         try:
 
-            def inert(values, *, threshold_sigma=3.0, alarm_budget=0.01):  # type: ignore[no-untyped-def]  # mirrors run_shipped for monkeypatch (TDC-002)
+            def inert(  # type: ignore[no-untyped-def]  # mirror signature (TDC-002)
+                values, *, threshold_sigma=3.0, alarm_budget=0.01
+            ):
                 run = original(values, threshold_sigma=3.0, alarm_budget=alarm_budget)
                 return run  # ignores the sigma argument — inert by construction
 

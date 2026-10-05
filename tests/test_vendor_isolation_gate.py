@@ -1653,3 +1653,113 @@ class TestContainerRecipes:
             "RUN apt-get install -y libssl-dev\n", encoding="utf-8"
         )
         assert gate.check_container_recipes(tmp_path) == []
+
+    def test_standalone_invocation_reaches_the_git_enumeration(self) -> None:
+        """``python tools/check_vendor_isolation.py`` must use ``git ls-files``.
+
+        The CI entry point runs the gate as a script, so ``sys.path[0]`` is
+        ``tools/`` and the repository root is absent -- ``from tools._repo
+        import tracked_files`` then raised ``ModuleNotFoundError``, which
+        ``_container_recipes`` caught and answered with the ``os.walk``
+        fallback, scanning generated and untracked recipes and losing the
+        worktree/sparse semantics the git path provides. That fallback is
+        gone (:meth:`test_a_missing_repo_helper_is_an_error_not_a_walk`), so
+        without the module's ``sys.path`` insert the import now fails outright.
+        Reproduced here by stripping the repository root from ``sys.path``
+        before the module runs; the observable is that the enumeration returns
+        and ``tools._repo`` was imported. Deleting the insert makes the probe
+        exit non-zero (measured).
+        """
+        probe = (
+            "import importlib.util, os, sys\n"
+            f"repo = {str(REPO_ROOT)!r}\n"
+            "tools_dir = os.path.join(repo, 'tools')\n"
+            "sys.path = [p for p in sys.path if p and os.path.abspath(p) != repo]\n"
+            "sys.path.insert(0, tools_dir)\n"
+            "spec = importlib.util.spec_from_file_location(\n"
+            "    'cvi_standalone', os.path.join(tools_dir, 'check_vendor_isolation.py'))\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "from pathlib import Path\n"
+            "mod._container_recipes(Path(repo))\n"
+            "print('GIT_PATH' if 'tools._repo' in sys.modules else 'FALLBACK')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().endswith("GIT_PATH"), proc.stdout + proc.stderr
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def test_a_checkout_scans_the_recipes_git_tracks(self, tmp_path: Path) -> None:
+        """In a checkout the recipes are git's list: an untracked one is not
+        the tree's, and a tracked one is scanned even under a directory the
+        walk outside a checkout skips."""
+        (tmp_path / "docker").mkdir()
+        (tmp_path / "docker" / "Dockerfile").write_text("FROM x\n", encoding="utf-8")
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "docker")
+        for directory in ("scratch", "build"):
+            (tmp_path / directory).mkdir()
+            (tmp_path / directory / "Dockerfile").write_text(
+                "RUN apt-get install -y libssl-dev\n", encoding="utf-8"
+            )
+        assert gate.check_container_recipes(tmp_path) == []
+
+        self._git(tmp_path, "add", "-f", "scratch", "build")
+        violations = gate.check_container_recipes(tmp_path)
+        assert sorted(v.where for v in violations) == [
+            os.path.join("build", "Dockerfile"),
+            os.path.join("scratch", "Dockerfile"),
+        ]
+
+    def test_a_missing_repo_helper_is_an_error_not_a_walk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``_container_recipes`` caught an ``ImportError`` of ``tools._repo``
+        and walked the directory, checkout or not.  Another project's
+        ``tools`` package imported first was enough to take that branch
+        (measured), and the walk then read untracked recipes and skipped a
+        tracked ``build/Dockerfile`` installing ``libssl-dev``.  The import
+        failing is now an error, and ``main`` exits 2 on it, as
+        ``check_crypto_construction_docs.py`` and ``check_hd_interop_honesty.py``
+        do when they cannot list their files.  ``None`` in ``sys.modules``
+        makes the import fail here."""
+        (tmp_path / "docker").mkdir()
+        (tmp_path / "docker" / "Dockerfile").write_text("FROM x\n", encoding="utf-8")
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "docker")
+        monkeypatch.setitem(sys.modules, "tools._repo", None)
+        with pytest.raises(ImportError):
+            gate._container_recipes(tmp_path)
+        assert gate.main(["--build-config"]) == 2
+        assert "FATAL: cannot list the container recipes" in capsys.readouterr().err
+
+    def test_a_checkout_git_cannot_list_exits_2(self, tmp_path: Path) -> None:
+        """A ``.git`` git cannot read is a checkout, not a tarball: no recipe
+        was examined, which is exit 2 -- not a walk's clean scan, and not the
+        ``TrackedFilesError`` traceback (exit 1) it used to end in.  Run as CI
+        runs it, as a script, on a copy of the gate."""
+        tools = tmp_path / "tools"
+        tools.mkdir()
+        for name in ("__init__.py", "_repo.py", "check_vendor_isolation.py"):
+            shutil.copyfile(REPO_ROOT / "tools" / name, tools / name)
+        (tmp_path / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
+        (tmp_path / "Dockerfile").write_text("FROM x\n", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(tools / "check_vendor_isolation.py"), "--build-config"],
+            capture_output=True,
+            text=True,
+            cwd=str(tmp_path),
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+        )
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "FATAL: cannot list the container recipes" in proc.stderr, proc.stderr
+        assert "Traceback" not in proc.stderr, proc.stderr

@@ -69,6 +69,9 @@ from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 
+from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography.exceptions import AmaCryptographyError
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,8 +82,6 @@ logger = logging.getLogger(__name__)
 # call-time import inside ``secure_random_bytes`` existed only because the draw
 # lived in ``_self_test`` and importing the POST orchestrator here formed a
 # cycle.
-from ama_cryptography._module_state import secure_token_bytes
-from ama_cryptography.exceptions import AmaCryptographyError
 
 
 class SecureMemoryError(AmaCryptographyError):
@@ -569,9 +570,7 @@ def _buffer_address(data: Union[bytes, bytearray, memoryview], what: str) -> Tup
     # locking unrelated memory.
     probe = ctypes.string_at(addr, 1)
     # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-    if (
-        probe != data[:1]
-    ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-001)
+    if probe != data[:1]:  # nosemgrep: non-constant-time-comparison -- layout probe (SM-001)
         raise NotImplementedError(
             f"{what}: PyBytesObject layout probe failed — "
             f"computed address does not point to bytes payload "

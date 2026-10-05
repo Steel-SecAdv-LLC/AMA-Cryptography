@@ -334,7 +334,8 @@ def list_remote_refs(base_repo: str, timeout: int = 60) -> Optional[dict[str, li
     comment impossible to verify.
     """
     try:
-        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, https URL built from repo slug (PIN-002)
+        # Fixed argv, no shell; https URL built from the repo slug (PIN-002)
+        out = subprocess.run(  # nosec B603 -- fixed argv, no shell (PIN-002)
             ["git", "ls-remote", f"https://github.com/{base_repo}.git"],
             capture_output=True,
             text=True,

@@ -16,6 +16,7 @@ Enterprise-grade key management with:
 
 import base64
 import contextlib
+import importlib.util
 import json
 import logging
 import os
@@ -53,7 +54,7 @@ from ama_cryptography.pqc_backends import (
     native_pbkdf2_hmac_sha512,
     native_sha3_256,
 )
-from ama_cryptography.secure_memory import secure_memzero
+from ama_cryptography.secure_memory import constant_time_compare, secure_memzero
 
 
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
@@ -184,7 +185,6 @@ logger = logging.getLogger(__name__)
 # Use find_spec() rather than a probe import to avoid an unused-import
 # binding that CodeQL and ruff would flag.
 # ---------------------------------------------------------------------------
-import importlib.util
 
 HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 
@@ -1712,7 +1712,11 @@ class HSMKeyStorage:
     """
     Hardware Security Module key storage via PKCS#11.
 
-    Provides FIPS 140-2 Level 3 compliant key storage for production deployments.
+    The storage is the token's: this class adds no validation of its own,
+    so a deployment has exactly the level its device's certificate states.
+    Production master secrets belong in an HSM validated to FIPS 140-3
+    (or FIPS 140-2 while its certificate is active), Level 3 or higher
+    (SECURITY.md); SoftHSM2 is for development and testing only.
     Keys generated inside HSM never leave the hardware in plaintext.
 
     Supported devices:
@@ -1774,9 +1778,9 @@ class HSMKeyStorage:
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
         token_label: str = "AmaCryptography",
-        pin: Optional[
-            str
-        ] = None,  # nosec B107 -- default None, not a hardcoded secret; PIN is caller-provided at runtime (KM-001)
+        # The PIN is caller-provided at runtime; the default is None, not a
+        # hardcoded secret.
+        pin: Optional[str] = None,  # nosec B107 -- default None, not a secret (KM-001)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1856,13 +1860,33 @@ class HSMKeyStorage:
                 return slots[slot_index]
             raise ValueError(f"Slot index {slot_index} out of range (0-{len(slots) - 1})")
 
+        # The caller's label is encoded once, outside the loop.  A label that
+        # cannot be UTF-8 encoded -- a lone surrogate, as produced by the
+        # errors="surrogateescape" decode of a non-UTF-8 byte in an
+        # environment variable or a config file -- can match no token: a
+        # label read back through PyKCS11 is always encodable (measured:
+        # a raw invalid-UTF-8 label written via C_InitToken reads back with
+        # the invalid byte dropped).  Encoding it per-slot raised
+        # UnicodeEncodeError out of the constructor on the first slot, where
+        # the string comparison this replaced fell through to the designed
+        # RuntimeError below naming the available tokens.
+        try:
+            wanted: Optional[bytes] = token_label.encode("utf-8")
+        except UnicodeEncodeError:
+            wanted = None
+
         for slot in slots:
             try:
                 info = self.lib.getTokenInfo(slot)
-                # PKCS#11 token labels are public identifiers, not secret material.
-                if (
-                    info.label.strip() == token_label
-                ):  # nosemgrep: non-constant-time-comparison -- PKCS#11 token labels are public identifiers, not secret material (KM-003)
+                # PKCS#11 token labels are public identifiers, not secret
+                # material, so timing is not the reason for constant_time_compare
+                # here: it satisfies the non-constant-time-comparison rule at
+                # source.  The previous `nosemgrep` sat two lines below the
+                # finding's first line and suppressed nothing (semgrep 1.179.0
+                # still reported it).
+                if wanted is not None and constant_time_compare(
+                    info.label.strip().encode("utf-8"), wanted
+                ):
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue
@@ -2138,7 +2162,6 @@ if __name__ == "__main__":
     # Secure Storage
     logger.info("\n3. Secure Key Storage")
     logger.info("-" * 70)
-    import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     demo_password = secrets.token_urlsafe(24)
@@ -2151,8 +2174,12 @@ if __name__ == "__main__":
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
+    # Key material is compared in constant time even in a demo.  This was a
+    # `==` under a comment-only `nosemgrep` that semgrep 1.179.0 does not
+    # honour, so the finding was reported while the code claimed it was not.
     logger.info(
-        f"[OK] Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+        "[OK] Key retrieved: "
+        f"{retrieved_key is not None and constant_time_compare(retrieved_key, test_key)}"
     )
 
     logger.info("\n" + "=" * 70)

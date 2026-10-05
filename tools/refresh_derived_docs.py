@@ -41,8 +41,9 @@ passes are fighting each other, which is a real defect and must be visible.
 Exit status
 -----------
 0  converged; both gates pass
-1  did not converge, or a gate still fails
-2  a required tool is missing or a pass could not run
+1  did not converge, or a gate reports drift
+2  a required tool is missing, a pass could not run, or a gate could not
+   measure (with ``--check`` too)
 """
 
 from __future__ import annotations
@@ -91,6 +92,12 @@ def _env() -> dict[str, str]:
     files and perform no cryptography, so the diagnostic import is correct
     here: the module completes its import in the ERROR state and every
     cryptographic operation stays refused.
+
+    A default, so a caller's own value reaches the passes.  The one child
+    whose result depended on it -- ``check_documented_counts``' pytest
+    collection, which a caller's ``AMA_POST_DIAGNOSTIC_IMPORT=0`` turned into
+    six false "no count" rows -- now sets it itself, for that subprocess
+    only, however it is invoked.
     """
     env = dict(os.environ)
     env.setdefault("AMA_POST_DIAGNOSTIC_IMPORT", "1")
@@ -126,14 +133,43 @@ def _run(command: tuple[str, ...], *, quiet: bool) -> tuple[int, str]:
 
 
 def check_only(quiet: bool) -> int:
-    """Report whether the derived figures are already current."""
-    failures = []
+    """Report whether the derived figures are already current.
+
+    ``quiet`` keeps a current tree from echoing every checked claim; it does
+    not hide what drifted.  A gate that fails has its output printed to
+    stderr, ahead of the drift report, whatever ``quiet`` says: the
+    pre-commit hook runs this quietly, and a refused commit that names only
+    the gate leaves the developer to re-run it to learn which figure moved.
+    (Until 2026-09-27 the quiet path discarded that output, and two comments
+    said otherwise.)
+
+    Exit 1 from a gate is drift, and the answer is to regenerate.  Exit 2 is
+    a gate that could not measure (``check_documented_counts.py`` in an
+    interpreter that lacks a module a documented test file imports) or a
+    gate script that is missing (``_run``); regenerating fixes neither, so
+    that is reported as FATAL with exit 2 -- the status the module docstring
+    gives a missing tool, and the one the writing path already returned.
+    This used to print ``DRIFTED`` and "Regenerate them with" for both.
+    """
+    failures: list[str] = []
+    errors: list[str] = []
     for label, command in GATES:
-        code, _ = _run(command, quiet=quiet)
-        status = "OK" if code == 0 else "DRIFTED"
+        code, output = _run(command, quiet=quiet)
+        status = "OK" if code == 0 else ("DRIFTED" if code == 1 else "ERROR")
         print(f"  {status:<8} {label}")
         if code != 0:
-            failures.append(label)
+            (failures if code == 1 else errors).append(label)
+            if quiet:
+                for line in output.splitlines():
+                    print(f"      {line}", file=sys.stderr)
+    if errors:
+        print(
+            f"\nFATAL: could not check {', '.join(errors)}: the output above "
+            f"names why. That is not drift, and regenerating will not fix it."
+            + (f"\nDrifted as well: {', '.join(failures)}." if failures else ""),
+            file=sys.stderr,
+        )
+        return 2
     if failures:
         print(
             f"\nDerived figures have drifted: {', '.join(failures)}.\n"
@@ -178,6 +214,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             if code != 0:
                 print(f"  FAILED   {label} (exit {code})")
+                if args.quiet:
+                    # --quiet kept _run from printing the pass's output, and
+                    # the message below sends the reader to it.
+                    for line in output.splitlines():
+                        print(f"      {line}", file=sys.stderr)
                 # A pass that refuses to run — for example because a new file
                 # is not staged — is not a convergence problem and retrying
                 # will not fix it.

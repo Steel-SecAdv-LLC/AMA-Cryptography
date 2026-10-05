@@ -569,31 +569,41 @@ def main() -> None:
     print("=" * 50)
 
     crypto_ops = results["cryptographic_operations"]
+    ed_sign = crypto_ops["ed25519_sign"]
+    ed_ver = crypto_ops["ed25519_verify"]
+    dl_sign = crypto_ops["dilithium_sign"]
+    dl_ver = crypto_ops["dilithium_verify"]
     print(
-        f"Ed25519 Sign:     {crypto_ops['ed25519_sign']['mean_ms']:>8.2f}ms ({crypto_ops['ed25519_sign']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Ed25519 Sign:     {ed_sign['mean_ms']:>8.2f}ms"
+        f" ({ed_sign['ops_per_sec']:>6.0f} ops/sec)"
     )
     print(
-        f"Ed25519 Verify:   {crypto_ops['ed25519_verify']['mean_ms']:>8.2f}ms ({crypto_ops['ed25519_verify']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Ed25519 Verify:   {ed_ver['mean_ms']:>8.2f}ms" f" ({ed_ver['ops_per_sec']:>6.0f} ops/sec)"
     )
     print(
-        f"Dilithium Sign:   {crypto_ops['dilithium_sign']['mean_ms']:>8.2f}ms ({crypto_ops['dilithium_sign']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Dilithium Sign:   {dl_sign['mean_ms']:>8.2f}ms"
+        f" ({dl_sign['ops_per_sec']:>6.0f} ops/sec)"
     )
     print(
-        f"Dilithium Verify: {crypto_ops['dilithium_verify']['mean_ms']:>8.2f}ms ({crypto_ops['dilithium_verify']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Dilithium Verify: {dl_ver['mean_ms']:>8.2f}ms" f" ({dl_ver['ops_per_sec']:>6.0f} ops/sec)"
     )
 
     dna_ops = results["dna_operations"]
+    pkg_c = dna_ops["package_creation"]
+    pkg_v = dna_ops["package_verification"]
     print(
-        f"Package Create:   {dna_ops['package_creation']['mean_ms']:>8.2f}ms ({dna_ops['package_creation']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Package Create:   {pkg_c['mean_ms']:>8.2f}ms" f" ({pkg_c['ops_per_sec']:>6.0f} ops/sec)"
     )
     print(
-        f"Package Verify:   {dna_ops['package_verification']['mean_ms']:>8.2f}ms ({dna_ops['package_verification']['ops_per_sec']:>6.0f} ops/sec)"
+        f"Package Verify:   {pkg_v['mean_ms']:>8.2f}ms" f" ({pkg_v['ops_per_sec']:>6.0f} ops/sec)"
     )
 
     if "ethical_overhead" in results["ethical_integration"]:
         overhead = results["ethical_integration"]["ethical_overhead"]
         print(
-            f"Ethical Overhead: {overhead['overhead_ms']:>8.2f}ms ({overhead['overhead_pct']:>6.2f}%)"
+            f"Ethical Overhead:"
+            f" {overhead['overhead_ms']:>8.2f}ms"
+            f" ({overhead['overhead_pct']:>6.2f}%)"
         )
 
 

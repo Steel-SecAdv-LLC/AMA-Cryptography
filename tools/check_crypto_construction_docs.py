@@ -141,7 +141,11 @@ PROSE_SUFFIXES: frozenset[str] = frozenset({".md", ".rst", ".txt"})
 #: ``secure_memory.py``'s module docstring described ``secure_memzero`` as a
 #: "Multi-pass byte-level overwrite" while its function docstring — in the same
 #: file — correctly said the native kernel writes once and issues a barrier.
-SCAN_SUFFIXES: frozenset[str] = PROSE_SUFFIXES | frozenset({".py", ".pyx"})
+#: C sources and headers are read too: ``ama_dilithium.c``'s header comment
+#: still said "~192-bit quantum security" after every page and docstring had
+#: been corrected, because no rule looked at it.  Adding them was measured
+#: first: every rule over every ``.c`` and ``.h`` reported that one line.
+SCAN_SUFFIXES: frozenset[str] = PROSE_SUFFIXES | frozenset({".py", ".pyx", ".c", ".h"})
 
 
 def _is_historical_record(relative: Path) -> bool:
@@ -150,12 +154,17 @@ def _is_historical_record(relative: Path) -> bool:
     Excluding the historical record is what lets the gate be strict everywhere
     else.  Which files that is has one definition, in ``tools/_repo.py``.
     """
-    root = str(Path(__file__).resolve().parent.parent)
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    _tools_importable()
     from tools._repo import is_historical_record
 
     return is_historical_record(relative)
+
+
+def _tools_importable() -> None:
+    """Make ``tools._repo`` importable whether this runs as a script or a module."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 
 EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -716,6 +725,14 @@ _NO_LMS = re.compile(
     re.IGNORECASE,
 )
 
+_QUANTUM_CATEGORY_WHY = (
+    "a NIST security category is defined by the cost of a key search on "
+    "AES (category 3: AES-192; category 5: AES-256), not as bits or "
+    "operations of quantum security; Grover's algorithm roughly halves an "
+    "AES key search exponent, and no operation count is standardised for "
+    "the lattice or hash-based schemes. State the category (FIPS 203/204/205)."
+)
+
 #: Claims corrected in the 2026-09 pass. Each is pinned by its exact retired
 #: wording so it cannot reappear in another document — the failure mode
 #: INVARIANT-16's BIP32 case demonstrated six times over.
@@ -783,7 +800,204 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         ".github/workflows/clusterfuzzlite.yml), building in OSS-Fuzz's base-builder "
         "image; the project is not onboarded to OSS-Fuzz.",
     ),
+    (
+        re.compile(
+            r"\b\d+\s*(?:\+|-plus)\s*-?\s*years?\b[^.\n]{0,40}"
+            r"(?:secur|protect|horizon|guarantee)"
+            r"|(?:secur|protect|horizon|guarantee)[^.\n]{0,40}\b\d+\s*(?:\+|-plus)\s*-?\s*years?\b",
+            re.IGNORECASE,
+        ),
+        "no security lifetime is a property of this implementation: how long a "
+        "primitive resists attack depends on cryptanalysis and quantum hardware "
+        "no library can bound. What the standards define is the security "
+        "category: ML-DSA-65 is NIST category 3 (FIPS 204), ML-KEM-1024 "
+        "category 5 (FIPS 203).",
+    ),
+    (
+        re.compile(
+            "\\b(?:192|256)[- ]bit quantum\\b"
+            "|\\b2\\s*(?:\\^|\\*\\*)?\\s*[-\u207b]?\\s*"
+            "(?:192|256|\u00b9\u2079\u00b2|\u00b2\u2075\u2076)(?![0-9])[^.\\n]{0,24}quantum",
+            re.IGNORECASE,
+        ),
+        _QUANTUM_CATEGORY_WHY,
+    ),
+    (
+        re.compile(
+            r"(?:ML-KEM|ML-DSA|SLH-DSA|Kyber|Dilithium|SPHINCS|FIPS\s*20[345])"
+            r"(?:(?!140)[^.;\n]){0,80}?"
+            r"\b(?:NIST\s+)?(?:security\s+)?level\s*[1-5]\b"
+            r"|\bNIST\s+(?:security\s+)?level\s*[1-5]\b",
+            re.IGNORECASE,
+        ),
+        "FIPS 203, 204 and 205 define a security category, not a level: ML-DSA-65 "
+        "is category 3; ML-KEM-1024 and SLH-DSA-SHA2-256f are category 5. A FIPS "
+        "140-3 security level is a different scale, and grades a module, not an "
+        "algorithm.",
+    ),
 )
+
+#: A power of two in each notation the tree has published a work factor in:
+#: ``2^190``, ``2**190``, ``2^{190}``, ``2^-192``, and superscript digits with or
+#: without a superscript minus.
+_POWER_OF_TWO = re.compile(
+    "\\b2\\s*(?:\\^|\\*\\*)\\s*\\{?\\s*[-\u2212\u207b]?\\s*([0-9]+)"
+    "|\\b2\u207b?([\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+)"
+)
+_SUPERSCRIPT_DIGITS = str.maketrans(
+    "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079", "0123456789"
+)
+#: ``2^255 - 19`` is a modulus, not a work factor.
+_MODULUS_TAIL = re.compile("\\s*[-+\u2212]\\s*[0-9]")
+#: What makes a work factor a statement about a quantum adversary or about a
+#: post-quantum scheme's strength.
+_QUANTUM_SUBJECT = re.compile(
+    r"quantum|grover|ML-KEM|ML-DSA|SLH-DSA|kyber|dilithium|sphincs", re.IGNORECASE
+)
+#: Grover's bound on an AES-256 key search: the one quantum work factor a
+#: standard states, and so the largest this rule lets through.
+_GROVER_AES256_EXPONENT = 128
+
+
+def _rule_quantum_work_factor(line: str, authority: Authority) -> Optional[str]:
+    """A work factor above 2^128 in a sentence about quantum attack or a
+    post-quantum scheme, in either word order.
+
+    The retired-claim pattern above read "2^N quantum" and a few fixed
+    phrasings, so "Quantum Attacks | Lattice sieving + Grover: ~2^190" and
+    "ML-DSA-65 forgery (quantum) | ... | Negligible (2^190 ops)" passed it.
+    A classical figure beside a quantum one goes in its own sentence; a
+    semicolon ends one.
+    """
+    start = 0
+    for end in [mark.end() for mark in _SENTENCE_END.finditer(line)] + [len(line)]:
+        sentence, start = line[start:end], end
+        if not _QUANTUM_SUBJECT.search(sentence):
+            continue
+        for power in _POWER_OF_TWO.finditer(sentence):
+            if _MODULUS_TAIL.match(sentence, power.end()):
+                continue
+            digits = power.group(1) or power.group(2).translate(_SUPERSCRIPT_DIGITS)
+            if int(digits) > _GROVER_AES256_EXPONENT:
+                return f"reintroduces a corrected claim \u2014 {_QUANTUM_CATEGORY_WHY}"
+    return None
+
+
+#: A strength written in bits: ``192-bit``, ``~192-bit``, ``192 bits``, and with
+#: a non-breaking hyphen.  Not digits inside a name or a longer number:
+#: ``ML_KEM_1024BIT``, ``15,360-bit``.
+_BIT_FIGURE = re.compile("(?<![\\w,])([0-9]+)[-\u2011 ]?bits?\\b", re.IGNORECASE)
+#: What makes a bit figure a statement about a quantum adversary or a
+#: post-quantum scheme: the work-factor rule's subjects, "PQ", the three
+#: standards, and a NIST category, which is what the figure was standing in for.
+_BIT_STRENGTH_SUBJECT = re.compile(
+    _QUANTUM_SUBJECT.pattern + r"|\bPQC?\b|\bFIPS\s*20[345]\b|\bcategory\s*[1-5]\b",
+    re.IGNORECASE,
+)
+#: A word after the figure that makes it a strength: "192-bit security",
+#: "192-bit PQ security", "256-bit post-quantum", "192 bits of quantum security",
+#: "the 192-bit level", "192-bit classical and quantum security".
+_STRENGTH_WORD = re.compile(
+    r"\s*(?:of\s+)?(?:classical\s*(?:and|&|\+|/)\s*)?"
+    r"(?:(?:post[-\s]?)?quantum|PQC?\b|secur|strength|level)",
+    re.IGNORECASE,
+)
+#: A figure nothing qualifies, so the sentence's subject is what it measures:
+#: "Quantum security: ~192-bit", "quantum-resistant (192-bit, FIPS 204)", a
+#: table cell, an item between dashes or bullets.  A sentence ends at
+#: ``_SENTENCE_END``, so its last character may be the punctuation that ended it.
+_FIGURE_ENDS_CLAUSE = re.compile("\\s*(?:[,:|\u2013\u2014\u2022]|[.;!?]?$)")
+#: "~192-bit (Dilithium)": a parenthetical after the figure glosses it, and what
+#: follows the parenthetical qualifies the figure.
+_GLOSS = re.compile(r"\s*\([^()]*\)")
+#: "(256-bit) seed", "category 3 (192-bit)": the figure closes a parenthetical,
+#: and what follows it qualifies the figure.
+_CLOSING_BRACKET = re.compile(r"\s*[)\]]")
+#: "**192-bit**", "`192-bit`", a string literal that ends with the figure: the
+#: marks close around it and qualify nothing.
+_CLOSING_MARK = re.compile("\\s*[*`\"'\u2019\u201d]+")
+#: "32 bytes (256 bits)": a size restated in bits, not a strength.
+_BYTES_RESTATED = re.compile(r"\b[0-9]+[-\s]?bytes?\s*[(\[]\s*$", re.IGNORECASE)
+#: "Shared secret: 256 bits", "seed (256-bit)", "| Shared secret | 256-bit |":
+#: the figure is the value of the size it follows.
+_SIZE_LABEL = re.compile(
+    r"\b(?:secret|seed|key|hash|digest|output|size|length)s?(?:\s+(?:is|are|of))?\W*$",
+    re.IGNORECASE,
+)
+#: A preposition or conjunction after the figure qualifies nothing: "~192-bit
+#: for ML-DSA-65", "192 bits against quantum adversaries".
+_FUNCTION_WORD = re.compile(
+    r"\s*(?:for|against|via|with|in|on|under|at|from|by|per|to|as|when|if|and|or|but|"
+    r"than|versus|vs|where|while|which|that|including)\b",
+    re.IGNORECASE,
+)
+#: "Quantum security: ~192-bit", "security of 192 bits", "strength (192 bits)":
+#: the figure is the value of the strength it follows.
+_STRENGTH_LABEL = re.compile(r"\b(?:secur\w*|strength)(?:\s+(?:is|of|at))?\W*$", re.IGNORECASE)
+
+
+def _states_a_strength(sentence: str, figure: re.Match[str]) -> bool:
+    """Whether a bit figure is a strength rather than a size.
+
+    A strength word after the figure makes it one.  A noun after it ("256-bit
+    key", "256-bit hash", "256-bit classical"), or a size it is the value of
+    ("Shared secret: 256 bits", "32 bytes (256 bits)"), says what it measures,
+    and that is not a quantum strength.  Otherwise nothing after it qualifies
+    it: it measures what the sentence is about when its clause ends there, and
+    the strength it follows when a preposition does ("Quantum security: ~192-bit
+    for ML-DSA-65").
+    """
+    if _BYTES_RESTATED.search(sentence, 0, figure.start()):
+        return False
+    position = figure.end()
+    skipped = True
+    while skipped:
+        skipped = False
+        for skip in (_GLOSS, _CLOSING_BRACKET, _CLOSING_MARK):
+            closed = skip.match(sentence, position)
+            if closed:
+                position, skipped = closed.end(), True
+    if _STRENGTH_WORD.match(sentence, position):
+        return True
+    if _SIZE_LABEL.search(sentence, 0, figure.start()):
+        return False
+    if _FIGURE_ENDS_CLAUSE.match(sentence, position):
+        return True
+    return bool(
+        _FUNCTION_WORD.match(sentence, position)
+        and _STRENGTH_LABEL.search(sentence, 0, figure.start())
+    )
+
+
+def _rule_quantum_bit_strength(line: str, authority: Authority) -> Optional[str]:
+    """A strength above 128 bits in a sentence about quantum attack or a
+    post-quantum scheme: a figure a strength word follows, one that is the
+    value of a strength label, or one nothing qualifies (:func:`_states_a_strength`).
+
+    The retired-claim entry read only "192-bit quantum" and "256-bit quantum"
+    in that order, and the work-factor rule reads only powers of two.  Five
+    lines passed every rule, measured on the tree at ``1ef0c93``:
+    "Quantum security: ~192-bit (Dilithium)", "quantum-resistant (192-bit,
+    FIPS 204)", "ML-DSA-65 (Dilithium) provides 192-bit security", "128-bit
+    classical + 192-bit PQ security" and SLH-DSA's "Security: 256-bit
+    post-quantum".  128 bits is Grover's bound on an AES-256 key search, as for
+    the work-factor rule, so AES-256's "128-bit quantum security" passes; so
+    does a figure :func:`_states_a_strength` reads as a size or as classical.
+    Not read: a figure qualified only by a phrase that is none of these
+    ("192 bits against a quantum attacker", "192-bit equivalent security");
+    a claim split across lines, since the gate reads one line at a time.
+    """
+    start = 0
+    for end in [mark.end() for mark in _SENTENCE_END.finditer(line)] + [len(line)]:
+        sentence, start = line[start:end], end
+        if not _BIT_STRENGTH_SUBJECT.search(sentence):
+            continue
+        for figure in _BIT_FIGURE.finditer(sentence):
+            if int(figure.group(1)) > _GROVER_AES256_EXPONENT and _states_a_strength(
+                sentence, figure
+            ):
+                return f"reintroduces a corrected claim \u2014 {_QUANTUM_CATEGORY_WHY}"
+    return None
 
 
 def _rule_fallback(line: str, authority: Authority) -> Optional[str]:
@@ -1052,13 +1266,15 @@ def _rule_retired(line: str, authority: Authority) -> Optional[str]:
 
 
 #: Most rules look for an ASSERTION, and each asks :func:`_asserted` for a
-#: match its own words do not deny.  Two rules never consult a denial: the LMS
+#: match its own words do not deny.  Four rules never consult a denial: the LMS
 #: rule is looking for one ("AMA does not implement HSS/LMS"), and the
-#: retired-claim registry pins wording that teaches a dead name whether or not
-#: the sentence around it is a denial.  Letting a denial excuse those two
-#: would make them permanently vacuous — which is exactly what happened on the
-#: first run of this gate, where the HSS/LMS claim it was written for passed
-#: because "does not" tripped the then line-wide negation waiver.
+#: retired-claim registry and the two quantum-strength rules pin wording that
+#: teaches a dead name or a retired figure whether or not the sentence around
+#: it is a denial ("Category 3 is not a claim of 2^192 quantum work" shipped).
+#: Letting a denial excuse those would make them permanently vacuous — which
+#: is exactly what happened on the first run of this gate, where the HSS/LMS
+#: claim it was written for passed because "does not" tripped the then
+#: line-wide negation waiver.
 RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_fallback,
     _rule_memzero_passes,
@@ -1068,6 +1284,8 @@ RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_lms,
     _rule_c11_atomics,
     _rule_retired,
+    _rule_quantum_work_factor,
+    _rule_quantum_bit_strength,
 )
 
 
@@ -1193,16 +1411,27 @@ def _display_path(path: Path, repo: Path) -> str:
 
 
 def scanned_files(repo: Path = REPO) -> list[Path]:
+    """The documents this gate reads: in a checkout, the files git tracks.
+
+    It used to walk the directory, which also read what a build leaves
+    behind.  Once C was scanned that included the Cython-generated
+    ``src/cython/*.c``, each carrying its ``.pyx`` docstring, so a corrected
+    docstring still failed from a stale generated copy until a rebuild.
+    Raises ``tools._repo.TrackedFilesError`` if git cannot list the tree.
+    """
+    _tools_importable()
+    from tools._repo import worktree_names
+
     seen: list[Path] = []
-    for path in sorted(repo.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
+    for name in worktree_names(repo):
+        relative = Path(name)
+        if relative.suffix.lower() not in SCAN_SUFFIXES:
             continue
-        relative = path.relative_to(repo)
         if any(part in EXCLUDED_DIRS for part in relative.parts):
             continue
-        if _is_historical_record(relative) or relative.as_posix() in SELF_REFERENTIAL:
+        if _is_historical_record(relative) or name in SELF_REFERENTIAL:
             continue
-        seen.append(path)
+        seen.append(repo / relative)
     return seen
 
 
@@ -1354,7 +1583,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
-    files = [repo / name for name in args.files] if args.files else None
+    _tools_importable()
+    from tools._repo import TrackedFilesError
+
+    try:
+        files = [repo / name for name in args.files] if args.files else scanned_files(repo)
+    except TrackedFilesError as exc:
+        print(f"FATAL: cannot list the documents to check: {exc}", file=sys.stderr)
+        return 2
     findings = find_claims(authority, repo, files)
 
     if findings:
@@ -1376,9 +1612,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    scanned = files if files is not None else scanned_files(repo)
     print(
-        f"OK    {len(scanned)} document(s); constructions agree with the implementation "
+        f"OK    {len(files)} document(s); constructions agree with the implementation "
         f"(posture {authority.posture_weights} / thresholds {authority.posture_thresholds}, "
         f"ETHICAL_VECTOR len {authority.ethical_vector_length}, "
         f"combiner fails closed: {authority.combine_raises_on_missing_native}, "

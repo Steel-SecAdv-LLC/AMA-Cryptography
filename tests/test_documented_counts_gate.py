@@ -25,8 +25,10 @@ as useless as one that never does, and rather more likely to be switched off.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -919,3 +921,276 @@ class TestPerFamilyFloor:
     def test_meeting_every_floor_passes(self, tool: ModuleType) -> None:
         exact = dict(tool.CLAIM_FAMILY_FLOORS)
         assert tool.families_below_floor(exact) == []
+
+
+class TestCollectionFailuresAreNamed:
+    """A gate that cannot measure must say so, not report a drift.
+
+    Before this, a pytest that was not importable, or a collection that
+    failed, came back as ``pytest collection produced no count`` for every
+    documented file — the shape of a documentation drift, when nothing about
+    the documentation had changed.  Measured with an interpreter lacking
+    pytest: six such rows on this repository.
+    """
+
+    @staticmethod
+    def _repo_claiming(tmp_path: Path, test_source: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "tests").mkdir(parents=True)
+        (repo / "docs").mkdir()
+        (repo / "tests" / "test_probe.py").write_text(test_source, encoding="utf-8")
+        (repo / "docs" / "NOTES.md").write_text(
+            "Coverage: `tests/test_probe.py` — 1 tests.\n", encoding="utf-8"
+        )
+        return repo
+
+    def test_a_missing_pytest_is_one_finding_naming_the_interpreter(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        monkeypatch.setattr(tool, "pytest_is_importable", lambda: False)
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1, problems
+        assert "pytest is not importable" in problems[0]
+        assert sys.executable in problems[0]
+        assert "pip install" in problems[0]
+        assert "produced no count" not in problems[0]
+        assert isinstance(problems[0], tool.CannotMeasure), "reported as documentation drift"
+
+    def test_a_failed_collection_reports_pytest_s_reason(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_claiming(
+            tmp_path, "import module_that_does_not_exist_anywhere\n\ndef test_a():\n    pass\n"
+        )
+        count, reason = tool.collect_test_count_or_reason(repo, "tests/test_probe.py")
+        assert count is None
+        assert reason.startswith("exit ")
+        # The cause, not pytest's closing summary ("no tests collected, 1
+        # error in 0.15s"), which names a count of errors and a duration.
+        assert "ModuleNotFoundError" in reason, reason
+        assert "module_that_does_not_exist_anywhere" in reason, reason
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1, problems
+        assert problems[0].startswith("tests/test_probe.py: cannot be collected"), problems[0]
+
+    def test_a_missing_module_is_an_environment_problem_not_drift(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A collection ModuleNotFoundError names the module and the environment.
+
+        It used to read "pytest collection produced no count" under the
+        heading "documented count(s) have drifted", and the refresher then
+        said "Regenerate them with" -- for a hook interpreter that simply
+        lacked a module one documented test file imported at module scope.
+        """
+        repo = self._repo_claiming(
+            tmp_path, "import module_that_does_not_exist_anywhere\n\ndef test_a():\n    pass\n"
+        )
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1, problems
+        assert isinstance(problems[0], tool.CannotMeasure), "reported as documentation drift"
+        assert "module 'module_that_does_not_exist_anywhere'" in problems[0], problems[0]
+        assert "not a documentation drift" in problems[0], problems[0]
+        assert "hook's environment" in problems[0], problems[0]
+
+    def test_a_successful_collection_carries_no_reason(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        assert tool.collect_test_count_or_reason(repo, "tests/test_probe.py") == (1, "")
+        assert tool.collect_test_count(repo, "tests/test_probe.py") == 1
+        assert tool.check_test_counts(repo) == []
+
+    def test_pytest_is_importable_here(self, tool: ModuleType) -> None:
+        """The suite itself runs under pytest, so the predicate must say yes."""
+        assert tool.pytest_is_importable() is True
+
+
+class TestTheCallersEnvironmentDoesNotDecideTheCount:
+    """Measured on this repository: ``PYTEST_ADDOPTS=-q`` (which turned the
+    gate's ``-q`` into ``-qq`` and removed the "N tests collected" line) and
+    ``AMA_POST_DIAGNOSTIC_IMPORT=0`` (which the refresher's ``setdefault``
+    kept, so a checkout without its native library failed the conftest's
+    import) each produced six "no count" rows against correct counts."""
+
+    _repo_claiming = staticmethod(TestCollectionFailuresAreNamed._repo_claiming)
+
+    def test_pytest_addopts_does_not_change_the_count(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pins the PROPERTY, which two guards enforce redundantly: the
+        collection drops ``PYTEST_ADDOPTS``, and ``--verbosity=-1`` sets the
+        verbosity absolutely after any ``-q`` that reaches the command line.
+        Measured by mutation: removing either alone leaves this passing;
+        removing both fails it."""
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        monkeypatch.setenv("PYTEST_ADDOPTS", "-q")
+        assert tool.collect_test_count_or_reason(repo, "tests/test_probe.py") == (1, "")
+        assert tool.check_test_counts(repo) == []
+
+    def test_a_callers_diagnostic_import_opt_out_is_overridden(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo_claiming(
+            tmp_path,
+            "import os\n\n"
+            "if os.environ.get('AMA_POST_DIAGNOSTIC_IMPORT') != '1':\n"
+            "    raise ImportError('collected without the diagnostic import')\n\n"
+            "def test_a():\n    pass\n",
+        )
+        monkeypatch.setenv("AMA_POST_DIAGNOSTIC_IMPORT", "0")
+        assert tool.collect_test_count_or_reason(repo, "tests/test_probe.py") == (1, "")
+        assert tool.check_test_counts(repo) == []
+
+    def test_a_clean_exit_without_a_count_is_unparseable_not_drift(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exit 0 and no "N tests collected" line (what ``-qq`` prints) is a
+        tool problem: the gate could not read the answer, and says so."""
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 0, "tests/test_probe.py: 1\n", "")
+
+        monkeypatch.setattr(tool.subprocess, "run", fake_run)
+        count, reason = tool.collect_test_count_or_reason(repo, "tests/test_probe.py")
+        assert count is None
+        assert "could not parse collection output" in reason, reason
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1 and isinstance(problems[0], tool.CannotMeasure), problems
+
+
+class TestAFailedConftestNamesItsRootCause:
+    def test_an_internal_error_reports_the_exception_not_its_remedy(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A conftest that raises in ``pytest_configure`` is an INTERNALERROR
+        traceback, and none of its lines starts with ``E``.  The reason used
+        to be the output's last line: for ``ama_cryptography``'s POST failure
+        that is the re-sign command at the end of the message, not the "no
+        native library found" line that says what is wrong."""
+        repo = TestCollectionFailuresAreNamed._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        (repo / "tests" / "conftest.py").write_text(
+            "def pytest_configure(config):\n"
+            "    raise RuntimeError(\n"
+            "        'refused to initialise: self-tests FAILED.\\n\\n'\n"
+            "        '  Root cause: no native library found in 3 directories\\n\\n'\n"
+            "        '  Remedy:\\n'\n"
+            "        '      rebuild and re-sign'\n"
+            "    )\n",
+            encoding="utf-8",
+        )
+        count, reason = tool.collect_test_count_or_reason(repo, "tests/test_probe.py")
+        assert count is None
+        assert "RuntimeError: refused to initialise" in reason, reason
+        assert "no native library found" in reason, reason
+        assert "re-sign" not in reason, reason
+
+
+class TestMainSeparatesDriftFromUnmeasurable:
+    def test_an_unmeasurable_count_exits_2_under_its_own_heading(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        drift = "README.md: says 3 C test suites; `tests/c/**/test_*.c` counts 4"
+        unmeasured = tool.CannotMeasure("tests/test_x.py: cannot be collected in this environment")
+        floors = dict(tool.CLAIM_FAMILY_FLOORS)
+        monkeypatch.setattr(tool, "audit", lambda: ([unmeasured], floors))
+        assert tool.main() == 2
+        err = capsys.readouterr().err
+        assert "could not be measured" in err and "drifted" not in err, err
+
+        monkeypatch.setattr(tool, "audit", lambda: ([drift], floors))
+        assert tool.main() == 1
+        err = capsys.readouterr().err
+        assert "have drifted" in err and "could not be measured" not in err, err
+
+        monkeypatch.setattr(tool, "audit", lambda: ([drift, unmeasured], floors))
+        assert tool.main() == 2
+        err = capsys.readouterr().err
+        assert drift in err and unmeasured in err, err
+
+    def test_a_git_that_cannot_list_the_tracked_files_exits_2(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        if str(REPO_ROOT) not in sys.path:
+            monkeypatch.syspath_prepend(str(REPO_ROOT))
+        tracked_files_error = importlib.import_module("tools._repo").TrackedFilesError
+
+        def broken_audit() -> tuple[list[str], dict[str, int]]:
+            raise tracked_files_error("git ls-files failed")
+
+        monkeypatch.setattr(tool, "audit", broken_audit)
+        assert tool.main() == 2
+        assert "cannot enumerate the tracked files" in capsys.readouterr().err
+
+
+class TestCountsAreTakenOverTrackedFiles:
+    """The pre-commit hook runs against the working tree, and an untracked
+    ``tests/test_scratch.py`` moved the static test counts: nine count rows
+    and the visual assets failed a commit CI would pass, and the regenerator
+    the failure named refused to run over the same untracked file.  In a git
+    checkout the counts now read the index -- what the commit carries -- and
+    a staged new file is counted."""
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def test_an_untracked_file_is_not_counted_and_a_staged_one_is(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        (repo / "tests" / "c").mkdir(parents=True)
+        (repo / "tests" / "test_kept.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+        (repo / "tests" / "c" / "test_kept.c").write_text("int x;\n", encoding="utf-8")
+        self._git(repo, "init", "-q")
+        self._git(repo, "add", "tests")
+        (repo / "tests" / "test_scratch.py").write_text(
+            "def test_b():\n    pass\n", encoding="utf-8"
+        )
+        (repo / "tests" / "c" / "test_scratch.c").write_text("int y;\n", encoding="utf-8")
+
+        assert tool.measure_static_test_counts(repo) == (1, 1)
+        assert tool.measure_c_suite_counts(repo) == (1, 1)
+
+        self._git(repo, "add", "tests/test_scratch.py", "tests/c/test_scratch.c")
+        assert tool.measure_static_test_counts(repo) == (2, 2)
+        assert tool.measure_c_suite_counts(repo) == (2, 2)
+
+    def test_an_untracked_document_is_not_held_to_the_counts(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The documents are read on the same terms as the counts: an
+        untracked scratch note is not part of the commit, and a stale figure
+        in it used to refuse the commit anyway."""
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "kept.md").write_text("kept\n", encoding="utf-8")
+        self._git(repo, "init", "-q")
+        self._git(repo, "add", "docs")
+        (repo / "docs" / "scratch.md").write_text("scratch\n", encoding="utf-8")
+
+        names = {path.name for path in tool._markdown_files(repo)}
+        assert names == {"kept.md"}
+
+        self._git(repo, "add", "docs/scratch.md")
+        assert {path.name for path in tool._markdown_files(repo)} == {"kept.md", "scratch.md"}
+
+    def test_outside_git_every_file_on_disk_is_counted(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A source tarball has no index to ask; the walk is the answer there."""
+        repo = tmp_path / "tarball"
+        (repo / "tests" / "c").mkdir(parents=True)
+        for name in ("test_one.py", "test_two.py"):
+            (repo / "tests" / name).write_text("def test_a():\n    pass\n", encoding="utf-8")
+        (repo / "tests" / "c" / "test_one.c").write_text("int x;\n", encoding="utf-8")
+        assert tool.measure_static_test_counts(repo) == (2, 2)
+        assert tool.measure_c_suite_counts(repo) == (1, 1)

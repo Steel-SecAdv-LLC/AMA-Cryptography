@@ -247,12 +247,43 @@ def _fake_sudo(tmp_path: Path) -> Path:
             [ -n "${FAKE_APT_LOG:-}" ] && echo "$1 $2" >> "$FAKE_APT_LOG"
             case "$1 $2" in
               "rm -f") exit 0 ;;
+              "dpkg --configure")
+                  # Replays the journal; does not finish a half-unpacked
+                  # package (measured against dpkg on noble).
+                  [ -n "${FAKE_DPKG_STATE:-}" ] && rm -f "$FAKE_DPKG_STATE/journal"
+                  exit 0 ;;
               "apt-get update")
                   [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100
                   [ -n "${FAKE_APT_LOG:-}" ] && touch "${FAKE_APT_LOG}.updated"
                   exit 0 ;;
               "apt-get install")
                   [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100
+                  if [ -n "${FAKE_DPKG_STATE:-}" ]; then
+                      st="$FAKE_DPKG_STATE"
+                      # The first install is killed mid-unpack, as the
+                      # attempt bound did to cmake-data on run 36739915970.
+                      if [ ! -e "$st/killed" ]; then
+                          touch "$st/killed" "$st/journal"
+                          echo cmake-data > "$st/reinstreq"
+                          exit 137
+                      fi
+                      if [ -e "$st/journal" ]; then
+                          echo "E: dpkg was interrupted, you must manually" \
+                               "run 'sudo dpkg --configure -a' to correct" \
+                               "the problem." >&2
+                          exit 100
+                      fi
+                      if [ -e "$st/reinstreq" ]; then
+                          if [[ " ${*:3} " == *" --reinstall "* &&
+                                " ${*:3} " == *" $(cat "$st/reinstreq") "* ]]; then
+                              rm -f "$st/reinstreq"
+                              echo "reinstalled: ${*:3}"; exit 0
+                          fi
+                          echo "dpkg: dependency problems prevent" \
+                               "configuration of cmake" >&2
+                          exit 100
+                      fi
+                  fi
                   # Stands in for lists that cannot resolve the request until
                   # they are refreshed.
                   if [ "${FAKE_APT_NEEDS_UPDATE:-0}" = "1" ] &&
@@ -267,7 +298,28 @@ def _fake_sudo(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    _fake_dpkg_query(binroot)
     return binroot
+
+
+def _fake_dpkg_query(binroot: Path) -> None:
+    """A `dpkg-query` in the helper's output shape, so no test reads the host's.
+
+    It reports `cmake-data` as `reinstreq` while FAKE_DPKG_STATE says a killed
+    unpack left it half-installed, and a clean database otherwise.
+    """
+    fake = binroot / "dpkg-query"
+    fake.write_text(
+        textwrap.dedent("""\
+            #!/usr/bin/env bash
+            echo "ok cmake"
+            if [ -n "${FAKE_DPKG_STATE:-}" ] && [ -e "$FAKE_DPKG_STATE/reinstreq" ]; then
+              echo "reinstreq $(cat "$FAKE_DPKG_STATE/reinstreq")"
+            fi
+            """),
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
 
 def _run_helper(tmp_path: Path, args: list[str], **env: str) -> subprocess.CompletedProcess[str]:
@@ -566,10 +618,18 @@ def test_the_final_attempt_is_not_unbounded(tmp_path: Path) -> None:
             continue
         invocations += 1
         assert "timeout" in code, f"apt-get without a timeout bound: {stripped!r}"
-    # Not vacuous, and not silently reduced: `attempt_install` runs `update`
-    # and `install_only` runs `install`.  A third call site has to come here
-    # and be accounted for rather than inheriting a pass.
-    assert invocations == 2, f"expected 2 apt-get invocations, found {invocations}"
+    # Not vacuous, and not silently reduced: `attempt_install` runs `update`,
+    # `install_only` runs `install`, and `recover_dpkg` runs the `--reinstall`
+    # of what a killed attempt left half-installed.  A fourth call site has to
+    # come here and be accounted for rather than inheriting a pass.
+    assert invocations == 3, f"expected 3 apt-get invocations, found {invocations}"
+    # The recovery's own dpkg call is bounded too: `dpkg --configure -a` runs
+    # maintainer scripts, and nothing else in the script would stop it.
+    code_lines = [line.strip() for line in joined.splitlines() if not line.strip().startswith("#")]
+    configure = [line for line in code_lines if "dpkg --configure" in _outside_double_quotes(line)]
+    assert configure, "recover_dpkg's `dpkg --configure -a` is gone"
+    for line in configure:
+        assert "timeout" in line, f"dpkg --configure without a timeout bound: {line.strip()!r}"
     assert 'attempt_install ""' not in body, "an unbounded attempt arm is still reachable"
     assert 'install_only ""' not in body, "an unbounded install arm is still reachable"
 
@@ -611,6 +671,24 @@ def test_the_bounded_phase_fits_inside_a_job_budget() -> None:
 def test_helper_rejects_a_nonsense_attempt_count(tmp_path: Path) -> None:
     r = _run_helper(tmp_path, ["cmake"], APT_ATTEMPTS="0")
     assert r.returncode == 2
+
+
+@_LINUX_ONLY
+@pytest.mark.parametrize(
+    "var", ["APT_ATTEMPT_TIMEOUT", "APT_ATTEMPT_KILL_AFTER", "APT_TOTAL_BUDGET"]
+)
+def test_helper_rejects_a_zero_duration(tmp_path: Path, var: str) -> None:
+    """GNU ``timeout 0`` means NO bound, and ``--kill-after=0`` no SIGKILL.
+
+    Measured before the guard existed: with a SIGTERM-trapping fake apt,
+    ``APT_ATTEMPT_TIMEOUT=0`` ran the fake's full 30 seconds against a
+    3-second total budget — every per-command bound silently gone, which is
+    the exact hang this script exists to prevent.  A zero duration is
+    refused like a zero attempt count, not honoured as an unbounded run.
+    """
+    r = _run_helper(tmp_path, ["cmake"], **{var: "0"})
+    assert r.returncode == 2
+    assert "at least 1" in r.stderr
 
 
 # --------------------------------------------------------------------------
@@ -668,6 +746,57 @@ def test_the_fast_path_cannot_mask_a_missing_package(tmp_path: Path) -> None:
         APT_ATTEMPT_TIMEOUT="1",
     )
     assert r.returncode != 0
+
+
+# --------------------------------------------------------------------------
+# A killed attempt must not poison the retries
+#
+# Measured, `Test ubuntu-latest / Python 3.14` on run 36739915970: the fast
+# path's 120s bound fired while dpkg was unpacking cmake-data, and every retry
+# then failed with "E: dpkg was interrupted, you must manually run 'sudo dpkg
+# --configure -a'" and apt's exit 100.  Reproduced with real apt 2.8.3 and a
+# local repository, where each of the helper's two recovery steps was measured
+# to be insufficient alone; the fake below models exactly those two facts.
+# --------------------------------------------------------------------------
+
+
+@_LINUX_ONLY
+def test_a_retry_recovers_from_an_unpack_the_bound_killed(tmp_path: Path) -> None:
+    """PIN: removing either `dpkg --configure -a` or the reinstall fails this."""
+    state = tmp_path / "dpkg"
+    state.mkdir()
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_DPKG_STATE=str(state),
+        FAKE_APT_LOG=str(log),
+        APT_ATTEMPTS="2",
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "installed on attempt 1: cmake" in r.stdout
+    assert "half-installed: cmake-data" in r.stdout
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    # The journal is replayed before anything else apt does on the retry.
+    first_retry = verbs.index("dpkg --configure")
+    assert verbs[:first_retry] == ["rm -f", "apt-get install"], verbs
+
+
+@_LINUX_ONLY
+def test_a_clean_database_reinstalls_nothing(tmp_path: Path) -> None:
+    """The recovery is a no-op unless dpkg reports a `reinstreq` package."""
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["libclang-rt-dev"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_NEEDS_UPDATE="1",
+    )
+    assert r.returncode == 0, r.stderr
+    assert "half-installed" not in r.stdout
+    installs = [v for v in log.read_text(encoding="utf-8").split("\n") if v == "apt-get install"]
+    # The fast path's install and the refresh arm's install; no reinstall.
+    assert len(installs) == 2, installs
 
 
 # --------------------------------------------------------------------------

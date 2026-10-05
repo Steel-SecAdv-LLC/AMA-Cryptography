@@ -39,6 +39,7 @@ Run with:  pytest tests/test_post_failclosed.py -v
 from __future__ import annotations
 
 import hashlib
+import importlib
 import os
 import secrets
 import shutil
@@ -57,7 +58,7 @@ from tests.conftest import native_library_present
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
 
-pytestmark = pytest.mark.fips
+pytestmark = [pytest.mark.fips, pytest.mark.usefixtures("post_state_restored")]
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +419,254 @@ class TestImportFailsClosed:
         assert "IMPORTED" not in result.stdout
         assert "SHA3-256" in result.stdout + result.stderr
 
+    def test_a_raising_stage_fails_the_import_through_the_gate(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """A stage that raises is a failed POST, and the import gate treats it
+        as one.  The exception used to escape the gate: the import failed
+        without the root cause and results table, and
+        ``AMA_POST_DIAGNOSTIC_IMPORT=1`` could not complete it for triage."""
+        root = tmp_path / "raising_stage"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        # The backend stage runs first, so POST fails before the integrity
+        # stage would notice the edit.
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(marker, marker + '    raise RuntimeError("injected stage fault")\n', 1),
+            encoding="utf-8",
+        )
+        root_cause = "stage 'native-backend' raised RuntimeError: injected stage fault"
+
+        refused = _run_python("import ama_cryptography", cwd=root)
+        assert refused.returncode != 0, refused.stdout
+        assert "CryptoModuleError" in refused.stderr, refused.stderr
+        assert root_cause in refused.stderr, refused.stderr
+        assert "direct cause of the following exception" in refused.stderr, refused.stderr
+
+        diagnosed = _run_python(
+            """
+            import ama_cryptography as a
+            att = a.module_attestation()
+            assert att["state"] == "ERROR", att
+            assert [name for name, _ in att["failed"]] == ["POST"], att
+            print("DIAGNOSED")
+            """,
+            cwd=root,
+            env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
+        )
+        assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
+        assert "DIAGNOSED" in diagnosed.stdout
+
+    def test_no_way_out_of_a_raising_stage_keeps_what_it_held(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """Nothing a raising POST stage held survives the import, on either
+        way out of it.  Its exception used to be kept twice over: as a module
+        global when the import completed (the diagnostic hatch here), and
+        chained, traceback and all, onto the refusal when it did not, where a
+        caller that caught the refusal kept every frame of the stage alive --
+        locals included, which in a KAT stage can be key material.  The stage
+        below raises inside an ``except``, so both exceptions on the chain
+        carry a traceback into its frame."""
+        root = tmp_path / "raising_stage_held"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(
+                marker,
+                marker + '    _held = ["post-stage-held-7c1e"]\n'
+                "    try:\n"
+                '        raise ValueError(f"inner fault holding {len(_held)}")\n'
+                "    except ValueError:\n"
+                '        raise RuntimeError("injected stage fault")\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        held_check = """
+            gc.collect()
+            held = [
+                o for o in gc.get_objects()
+                if type(o) is list and len(o) == 1 and o[0] == "post-stage-held-7c1e"
+            ]
+            assert not held, "the raising stage's frame is still reachable"
+            """
+
+        refused = _run_python(
+            """
+            import gc
+            try:
+                import ama_cryptography
+            except Exception as refusal:
+                err = refusal
+            else:
+                raise SystemExit("the import was not refused")
+            cause = err.__cause__
+            assert isinstance(cause, RuntimeError), repr(cause)
+            assert "injected stage fault" in str(cause)
+            assert isinstance(cause.__context__, ValueError), repr(cause.__context__)
+            assert "Stage traceback" in str(err) and "_run_backend_stage" in str(err), str(err)
+            """
+            + held_check
+            + """
+            print("REFUSED-RELEASED")
+            """,
+            cwd=root,
+        )
+        assert refused.returncode == 0, refused.stdout + refused.stderr
+        assert "REFUSED-RELEASED" in refused.stdout
+
+        released = _run_python(
+            """
+            import gc
+            import ama_cryptography as a
+            assert a.module_status() == "ERROR", a.module_status()
+            kept = [n for n, v in vars(a).items() if isinstance(v, BaseException)]
+            assert not kept, kept
+            """
+            + held_check
+            + """
+            print("DIAGNOSED-RELEASED")
+            """,
+            cwd=root,
+            env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
+        )
+        assert released.returncode == 0, released.stdout + released.stderr
+        assert "DIAGNOSED-RELEASED" in released.stdout
+
+    @pytest.mark.skipif(
+        sys.version_info < (3, 11), reason="ExceptionGroup is a builtin only from Python 3.11"
+    )
+    def test_no_member_of_a_raised_exception_group_keeps_what_the_stage_held(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """An exception group reaches its members through ``exceptions``, which
+        the ``__cause__``/``__context__`` walk does not follow, and a member
+        raised in the stage carries a traceback into the stage's frame.  With
+        only the chain stripped, a caller that caught the refusal still held
+        the stage's locals through ``err.__cause__.exceptions[i].__traceback__``.
+        Each exception the stage below raises carries a traceback into its
+        frame and is reachable from the refusal one way only: as the group's
+        context, as a member, as that member's context (a
+        ``BaseExceptionGroup``, since its own member is a
+        ``KeyboardInterrupt``), as that group's member, and as a nested
+        group's member.  Only the refused import is driven: an import that
+        completes keeps no exception at all, and releases the frame with or
+        without the group walk."""
+        root = tmp_path / "raising_stage_group"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        stage = """
+            _held = ["post-stage-held-7c1e"]
+            try:
+                raise KeyboardInterrupt(f"base member holding {len(_held)}")
+            except KeyboardInterrupt as _base_member:
+                _base = BaseExceptionGroup("base group", [_base_member])
+            try:
+                try:
+                    raise _base
+                except BaseExceptionGroup:
+                    raise RuntimeError("member fault")
+            except RuntimeError as _member:
+                _members = [_member]
+            try:
+                raise KeyError("nested member")
+            except KeyError as _nested_member:
+                _members.append(ExceptionGroup("nested group", [_nested_member]))
+            try:
+                raise OSError("group context")
+            except OSError:
+                raise ExceptionGroup("injected stage faults", _members)
+            """
+        self_test.write_text(
+            source.replace(marker, marker + textwrap.indent(textwrap.dedent(stage), "    "), 1),
+            encoding="utf-8",
+        )
+
+        refused = _run_python(
+            """
+            import gc
+            try:
+                import ama_cryptography
+            except Exception as refusal:
+                err = refusal
+            else:
+                raise SystemExit("the import was not refused")
+            group = err.__cause__
+            assert type(group) is ExceptionGroup, repr(group)
+            assert isinstance(group.__context__, OSError), repr(group.__context__)
+            member, nested = group.exceptions
+            assert isinstance(member, RuntimeError), repr(member)
+            assert type(member.__context__) is BaseExceptionGroup, repr(member.__context__)
+            assert isinstance(member.__context__.exceptions[0], KeyboardInterrupt)
+            assert isinstance(nested.exceptions[0], KeyError), repr(nested)
+            gc.collect()
+            held = [
+                o for o in gc.get_objects()
+                if type(o) is list and len(o) == 1 and o[0] == "post-stage-held-7c1e"
+            ]
+            assert not held, "the raising stage's frame is still reachable"
+            print("REFUSED-RELEASED")
+            """,
+            cwd=root,
+        )
+        assert refused.returncode == 0, refused.stdout + refused.stderr
+        assert "REFUSED-RELEASED" in refused.stdout
+
+    def test_an_exceptions_attribute_does_not_make_an_exception_a_group(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """Only a ``BaseExceptionGroup`` has its ``exceptions`` walked.  Any
+        other exception can carry an attribute of that name, holding anything:
+        measured with the walk keyed on ``hasattr(_link, "exceptions")``, the
+        stage below made the import raise ``AttributeError: 'str' object has
+        no attribute '__traceback__'`` in place of the refusal.  The stage
+        raises no group, so this runs on Python 3.10 as well."""
+        root = tmp_path / "raising_stage_carrier"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(
+                marker,
+                marker + '    _fault = RuntimeError("injected stage fault")\n'
+                '    _fault.exceptions = ("not an exception",)\n'
+                "    raise _fault\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        refused = _run_python(
+            """
+            try:
+                import ama_cryptography
+            except Exception as refusal:
+                err = refusal
+            else:
+                raise SystemExit("the import was not refused")
+            assert type(err).__name__ == "CryptoModuleError", repr(err)
+            cause = err.__cause__
+            assert isinstance(cause, RuntimeError), repr(cause)
+            assert cause.exceptions == ("not an exception",), repr(cause.exceptions)
+            print("REFUSED")
+            """,
+            cwd=root,
+        )
+        assert refused.returncode == 0, refused.stdout + refused.stderr
+        assert "REFUSED" in refused.stdout
+
 
 # ---------------------------------------------------------------------------
 # 2. Error state inhibits cryptographic output (FIPS 140-3 §4.9.2)
@@ -559,7 +808,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate  # type: ignore[import-not-found]  # loaded from tools/ via runtime sys.path insert; mypy cannot see it (PFC-001)
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -614,7 +863,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -669,7 +918,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -700,7 +949,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -737,7 +986,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -778,7 +1027,7 @@ class TestErrorStateInhibitsOutput:
         """The gate's .pyx auditor must flag an ungated cy_* binding function."""
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -1080,7 +1329,7 @@ class TestClassAndCrossModuleInhibition:
 
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -1184,21 +1433,43 @@ class TestCheckCryptoPermitted:
 
         ms._MODULE_STATE = "SELF_TEST"
         ms._SELF_TEST_THREAD = threading.get_ident()
-        st.check_crypto_permitted()  # this thread is the POST thread
+        with ms._POST_LOCK:
+            st.check_crypto_permitted()  # this thread is the POST thread
 
-        outcome: list[object] = []
+            outcome: list[object] = []
 
-        def other_thread() -> None:
-            try:
-                st.check_crypto_permitted()
-                outcome.append("permitted")
-            except CryptoModuleError:
-                outcome.append("refused")
+            def other_thread() -> None:
+                try:
+                    st.check_crypto_permitted()
+                    outcome.append("permitted")
+                except CryptoModuleError:
+                    outcome.append("refused")
 
-        worker = threading.Thread(target=other_thread)
-        worker.start()
-        worker.join(timeout=30)
+            worker = threading.Thread(target=other_thread)
+            worker.start()
+            worker.join(timeout=30)
         assert outcome == ["refused"]
+
+    def test_the_pinned_thread_must_also_hold_the_post_lock(self) -> None:
+        """The pin is dropped in a ``finally`` a second interrupt can skip; the
+        POST lock is released by the ``with`` that holds it.  A pin without
+        the lock -- one that outlived its run -- grants nothing."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        ms._MODULE_STATE = "SELF_TEST"
+        ms._SELF_TEST_THREAD = threading.get_ident()
+        with pytest.raises(CryptoModuleError, match="SELF_TEST"):
+            st.check_crypto_permitted()
+
+    def test_a_lock_that_cannot_name_its_owner_is_refused(self) -> None:
+        """The module does not load with a POST lock it cannot ask."""
+        from ama_cryptography import _module_state as ms
+
+        assert ms._lock_ownership_query(threading.RLock())() is False
+        with pytest.raises(ImportError, match="cannot report which thread holds it"):
+            ms._lock_ownership_query(threading.Lock())
 
     def test_post_clears_the_thread_allowance(self) -> None:
         """The allowance must not survive the run that granted it."""

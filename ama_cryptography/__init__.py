@@ -20,7 +20,7 @@ import importlib as _importlib
 import logging as _logging
 import os as _os
 import sys as _sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 __version__ = "5.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
@@ -66,7 +66,9 @@ if _sys.platform == "win32":
     if _os.path.isdir(_here):
         try:
             _AMA_DLL_DIR_COOKIES.append(
-                _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
+                _os.add_dll_directory(  # type: ignore[attr-defined]  # Windows-only API (WIN-001)
+                    _here
+                )
             )
         except (OSError, AttributeError):
             # AttributeError on Python <3.8 (we require >=3.10 so this is
@@ -461,7 +463,59 @@ from ama_cryptography.exceptions import (
 # completes so an operator can call ``module_attestation()`` and read the full
 # picture, but the module stays in ERROR and ``check_crypto_permitted()``
 # refuses every cryptographic operation.  It buys introspection, not crypto.
-if not _post():
+#
+# A stage that RAISES is a failed POST as well: ``_run_self_tests`` records it
+# (ERROR, a failing row, ``last_failure()``) and re-raises.  The exception used
+# to escape straight through this statement, which failed the import without
+# the root cause and results table below and left the diagnostic hatch unable
+# to complete it.  It is routed through the same gate and chained onto the
+# refusal.
+#
+# What is chained is the exception without its frames.  A traceback holds
+# every frame of the stage that raised, locals included, and a KAT stage's
+# locals can be key material: chained as raised, it stayed reachable from the
+# refusal (``err.__cause__.__traceback__``) for as long as a caller that
+# caught the import failure kept it.  The trace is formatted first -- file,
+# line and source text, no locals -- and carried in the refusal's message; then
+# every exception linked to it is stripped of its traceback: the
+# ``__cause__``/``__context__`` chain, and the members of an exception group
+# (``BaseExceptionGroup``, a builtin from Python 3.11).  A group reaches its
+# members through ``exceptions``, which the chain does not follow, and a
+# member raised in the stage has a traceback of its own into the stage's
+# frame: walking the chain alone left the stage's locals reachable through
+# ``err.__cause__.exceptions[i].__traceback__``.  A group is recognised by its
+# type, not by an ``exceptions`` attribute, which any exception can carry
+# holding anything: keyed on the attribute, the walk reached a string held
+# there and raised AttributeError from this block in place of the refusal.
+# Nothing else an exception holds is walked -- its arguments, any other
+# attribute -- so an exception held there keeps its traceback.
+_post_exc: Optional[Exception] = None
+_post_trace = ""
+try:
+    _post_ok = _post()
+except Exception as _exc:
+    import builtins as _builtins
+    import traceback as _traceback
+
+    _post_ok = False
+    _post_trace = "".join(_traceback.format_exception(type(_exc), _exc, _exc.__traceback__))
+    # An empty tuple on Python 3.10, which has no such builtin: nothing is an
+    # instance of it.
+    _group = getattr(_builtins, "BaseExceptionGroup", ())
+    _pending: list[BaseException] = [_exc]
+    _stripped: set[int] = set()
+    while _pending:
+        _link = _pending.pop()
+        if id(_link) in _stripped:
+            continue
+        _stripped.add(id(_link))
+        _link.__traceback__ = None
+        _pending.extend(e for e in (_link.__cause__, _link.__context__) if e is not None)
+        if isinstance(_link, _group):
+            _pending.extend(_link.exceptions)
+    _post_exc = _exc
+    del _pending, _stripped, _link, _group, _builtins, _traceback
+if not _post_ok:
     _reason = module_error_reason() or "unknown"
     _results = module_self_test_results()
     _rows = "\n".join(
@@ -635,11 +689,26 @@ if not _post():
             f"  POST results:\n{_rows}\n\n"
             "  All cryptographic operations are inhibited (FIPS 140-3 "
             "§4.9.2). Correct the fault and re-import.\n\n"
-            f"  Diagnosis: set {_diag_env}=1 to import anyway (crypto stays "
+            + (
+                "  Stage traceback (frames only; the stage's locals are not kept):\n"
+                + "".join(f"    {_line}\n" for _line in _post_trace.splitlines())
+                + "\n"
+                if _post_trace
+                else ""
+            )
+            + f"  Diagnosis: set {_diag_env}=1 to import anyway (crypto stays "
             "refused) and call module_attestation().\n"
             "  Stale digest after editing package sources? Refresh it with:\n"
             f"      {_build_env}=1 python -m ama_cryptography.integrity --update --sign"
-        )
+        ) from _post_exc
+
+# Reached only when the import completes: POST passed, or one of the two
+# branches above let a failed POST through.  The exception POST raised, if any,
+# is dropped here instead of staying a module global: its traceback holds
+# every frame of the stage that raised, locals included, and a KAT stage's
+# locals can be key material.  Its type and text are already in the root
+# cause the gate logged.
+del _post_exc, _post_trace
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.

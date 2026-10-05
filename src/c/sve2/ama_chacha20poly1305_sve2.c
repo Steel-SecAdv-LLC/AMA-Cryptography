@@ -8,7 +8,7 @@
  * on SVE2-capable ARM systems dispatches through the NEON path
  * (`src/c/neon/ama_chacha20poly1305_neon.c`), which is byte-identical to
  * the scalar reference (verified by `tests/c/test_chacha20poly1305.c` and
- * `tests/c/test_chacha20poly1305_neon_equiv.c`) and is the production path
+ * `tests/c/test_chacha20_x8_neon_equiv.c`) and is the production path
  * on every shipped AArch64 host — including SVE2-capable ones.
  *
  * The previous content of this file was a `ama_chacha20_block_sve2`

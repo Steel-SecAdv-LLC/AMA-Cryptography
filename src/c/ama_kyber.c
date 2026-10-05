@@ -16,7 +16,7 @@
  *   cmake -DAMA_USE_NATIVE_PQC=ON ..
  *
  * Parameters (Kyber-1024 / ML-KEM-1024):
- * - Security level: NIST Level 5 (~256-bit classical, ~128-bit quantum)
+ * - Security level: NIST security category 5 (~256-bit classical, ~128-bit quantum)
  * - Public key: 1568 bytes
  * - Secret key: 3168 bytes
  * - Ciphertext: 1568 bytes
@@ -47,6 +47,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 #include "internal/ama_testing_exports.h"
 
 /* Forward declarations from ama_sha3.c */
@@ -841,27 +842,11 @@ ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
                                               const uint8_t m[32],
                                               uint8_t *ct, size_t *ct_len,
                                               uint8_t *ss, size_t ss_len);
-
-/**
- * Random bytes hook for KAT testing.
- * When non-NULL, all random byte generation uses this function instead of
- * /dev/urandom, allowing deterministic KAT vector reproduction.
- * Only available in test builds (AMA_TESTING_MODE).
- */
-ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
 #endif
 
-/**
- * Get random bytes from OS (or from test hook if set)
- */
-static ama_error_t kyber_randombytes(uint8_t* buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_kyber_randombytes_hook) {
-        return ama_kyber_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+/* Random bytes from the OS, or from the KAT-replay hook a test has set
+ * (AMA_TESTING_MODE only; see internal/ama_test_csprng.h). */
+AMA_TEST_CSPRNG(ama_kyber_randombytes_hook, kyber_randombytes)
 
 /**
  * Generate Kyber-1024 keypair
@@ -913,6 +898,10 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
         } else {
             err = kyber_randombytes(d, 32);
             if (err != AMA_SUCCESS) {
+                /* A failed draw may already have written CSPRNG output:
+                 * ama_randombytes' getrandom(2) and getentropy(3) paths
+                 * loop and can fail after earlier iterations succeeded. */
+                ama_secure_memzero(d, sizeof(d));
                 return err;
             }
         }
@@ -1165,6 +1154,8 @@ static ama_error_t kyber_encapsulate_internal(
         } else {
             err = kyber_randombytes(m, 32);
             if (err != AMA_SUCCESS) {
+                /* m determines the shared secret; see the keygen draw. */
+                ama_secure_memzero(m, sizeof(m));
                 return err;
             }
         }

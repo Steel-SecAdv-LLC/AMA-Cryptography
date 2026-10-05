@@ -17,11 +17,11 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 ## Algorithm Summary
 
-| Algorithm | Type | Security Level | Standard | Implementation | Status |
+| Algorithm | Type | Security category | Standard | Implementation | Status |
 |-----------|------|----------------|----------|----------------|--------|
-| ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit) | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
-| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit) | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Native C (`ama_slhdsa.c`) | Backend Ready |
+| ML-DSA-65 (Dilithium) | Digital Signature | NIST security category 3 | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
+| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST security category 5 | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST security category 5 | FIPS 205 | Native C (`ama_slhdsa.c`) | Backend Ready |
 | AES-256-GCM | Authenticated Encryption | 256-bit | SP 800-38D | Native C (`ama_aes_gcm.c`) | Full |
 | Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | Native C (`ama_ed25519.c`) | Classical + Hybrid |
 | SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Native C (`ama_sha3.c`) | Content Hashing |
@@ -39,7 +39,7 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 ### ML-DSA-65 (CRYSTALS-Dilithium)
 
-ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit quantum security based on the Module Learning With Errors (MLWE) problem.
+ML-DSA-65 is the primary post-quantum signature algorithm, at NIST security category 3 (FIPS 204), based on the Module Learning With Errors (MLWE) problem.
 
 **Key Sizes (FIPS 204):**
 - Public Key: 1,952 bytes
@@ -49,7 +49,7 @@ ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit qua
 **Security Properties:**
 - EUF-CMA secure in the Quantum Random Oracle Model (QROM)
 - Based on MLWE hardness assumption
-- Quantum attack cost: ~2^190 operations (Grover-accelerated BKZ)
+- NIST security category 3: at least as hard to break as a key search on AES-192 (FIPS 204)
 
 **Standard:** NIST FIPS 204 (2024)
 
@@ -69,7 +69,7 @@ ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared s
 **Security Properties:**
 - IND-CCA2 secure in the QROM
 - Based on MLWE hardness assumption
-- NIST Security Level 5 (256-bit quantum)
+- NIST security category 5 (FIPS 203)
 
 **Standard:** NIST FIPS 203 (2024)
 
@@ -197,7 +197,7 @@ HMAC with SHA3-256 provides message authentication.
 **Properties:**
 - 256-bit tag
 - PRF security under key secrecy
-- Forgery resistance: 2^256 operations
+- Key search: 2^256 classical operations for a 256-bit key; about 2^128 under Grover's algorithm
 
 **Standard:** RFC 2104 (HMAC construction) with SHA3-256
 
@@ -255,7 +255,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 **4-Layer Defense (as implemented in `crypto_api`):**
 1. **SHA3-256 Hash** — Content integrity with 128-bit collision resistance (FIPS 202)
 2. **HMAC-SHA3-256** — Keyed message authentication (RFC 2104)
-3. **Hybrid Ed25519 + ML-DSA-65 Signature** — Combined classical (128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204) digital signature
+3. **Hybrid Ed25519 + ML-DSA-65 Signature** — Combined classical (128-bit, RFC 8032) and quantum-resistant (NIST security category 3, FIPS 204) digital signature
 4. **HKDF-SHA3-256 Key Independence** — Key re-derivation and verification ensuring cryptographic key independence (RFC 5869)
 
 **Optional Add-ons (not core layers):**
@@ -263,7 +263,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 - **SLH-DSA / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
 - **RFC 3161 Timestamp** — Token bound to content by the §2.4.2 message imprint. Not third-party attestation and not proof of existence: AMA verifies no TSA signature, so `genTime` is unauthenticated (INVARIANT-37)
 
-**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
+**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical; against a quantum adversary, ML-DSA-65's NIST security category 3 when it is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 

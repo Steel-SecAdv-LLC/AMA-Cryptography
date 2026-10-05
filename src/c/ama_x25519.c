@@ -45,6 +45,8 @@
 #include "../include/ama_cpuid.h"
 #include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -754,6 +756,11 @@ AMA_API const char *ama_x25519_field_path(void) {
 #endif
 }
 
+/* CSPRNG override for tests (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h).  Without it the failure exit of
+ * ama_x25519_keypair was executed by no suite. */
+AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
+
 /**
  * @brief Generate X25519 keypair.
  *
@@ -774,8 +781,13 @@ AMA_API ama_error_t ama_x25519_keypair(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    err = ama_randombytes(secret_key, 32);
+    err = x25519_randombytes(secret_key, 32);
     if (err != AMA_SUCCESS) {
+        /* The draw writes straight into the caller's secret_key, and
+         * ama_randombytes is not all-or-nothing (its getrandom(2) and
+         * getentropy(3) loops can fail after writing output): an error
+         * return must not hand the caller partial key material. */
+        ama_secure_memzero(secret_key, 32);
         return err;
     }
 

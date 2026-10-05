@@ -130,9 +130,9 @@ class Vec:
             if isinstance(value, Vec):
                 self._data[idx] = value._data
             else:
-                self._data[idx] = list(value)  # type: ignore[arg-type]  # nested generic variance in List[float|Vec] (NM-001)
+                self._data[idx] = list(value)  # type: ignore[arg-type]  # generic variance (NM-001)
         else:
-            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar float narrowing in Vec.__setitem__ (NM-002)
+            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar narrowing (NM-002)
 
     def __iter__(self) -> Iterator[float]:
         return iter(self._data)
@@ -246,7 +246,7 @@ class Vec:
                 for k in range(n):
                     s += self._data[k] * other._data[k][j]
                 out[j] = s
-            return Vec._wrap(out)  # type: ignore[return-value]  # List[float]->Vec transformation unverifiable (NM-003)
+            return Vec._wrap(out)  # type: ignore[return-value]  # Vec transform (NM-003)
         return NotImplemented
 
     # -- comparison helpers --------------------------------------------------
@@ -337,7 +337,7 @@ class Mat:
     def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
-            self._data[r][c] = float(value)  # type: ignore[arg-type]  # nested List generic in Mat.__setitem__ (NM-004)
+            self._data[r][c] = float(value)  # type: ignore[arg-type]  # List generic (NM-004)
         else:
             if isinstance(value, list):
                 self._data[idx] = [float(x) for x in value]
@@ -455,8 +455,8 @@ def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
         return Vec._wrap([])
     first = data[0]
     if isinstance(first, (list, tuple)):
-        return Mat(data)  # type: ignore[arg-type]  # discriminated union not statically resolvable at runtime (NM-006)
-    return Vec(data)  # type: ignore[arg-type]  # fallback Vec branch in array(), same runtime pattern (NM-007)
+        return Mat(data)  # type: ignore[arg-type]  # union not resolvable (NM-006)
+    return Vec(data)  # type: ignore[arg-type]  # fallback Vec branch (NM-007)
 
 
 #: Types that are sequences but are never a vector of numbers.  Kept separate
@@ -481,7 +481,7 @@ def _shape_of(data: object) -> Tuple[int, ...] | None:
 def _to_float(value: object, where: str) -> float:
     """Convert one element to float, or raise naming the offending value."""
     try:
-        return float(value)  # type: ignore[arg-type]  # duck-typed numeric coercion, guarded by the except (NM-011)
+        return float(value)  # type: ignore[arg-type]  # duck-typed coercion (NM-011)
     except (TypeError, ValueError) as exc:
         raise TypeError(
             f"{where}: elements must be real numbers, got "
@@ -539,7 +539,7 @@ def asvec(data: object, *, copy: bool = True) -> Vec:
         data = to_list()
 
     try:
-        values = list(data)  # type: ignore[call-overload]  # arbitrary iterable, guarded by the except (NM-012)
+        values = list(data)  # type: ignore[call-overload]  # guarded iterable (NM-012)
     except TypeError:
         raise TypeError(
             f"cannot build a Vec from {type(data).__name__}: it is neither a "
@@ -592,7 +592,7 @@ def asmat(data: object, *, copy: bool = True) -> Mat:
         data = to_list()
 
     try:
-        rows = list(data)  # type: ignore[call-overload]  # arbitrary iterable, guarded by the except (NM-013)
+        rows = list(data)  # type: ignore[call-overload]  # guarded iterable (NM-013)
     except TypeError:
         raise TypeError(
             f"cannot build a Mat from {type(data).__name__}: it is neither a "
@@ -1031,7 +1031,7 @@ def fft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=False)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # fft returns List[complex], field typed List[float|complex] (NM-008)
+    out._data = result  # type: ignore[assignment]  # fft complex result (NM-008)
     return out
 
 
@@ -1051,7 +1051,7 @@ def ifft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=True)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # ifft same complex-result pattern as fft (NM-009)
+    out._data = result  # type: ignore[assignment]  # ifft complex result (NM-009)
     return out
 
 
@@ -1064,7 +1064,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 -- stdlib Random intentional for non-crypto math only (NM-010)
+        self._rng = _stdlib_random.Random()  # noqa: S311 # nosec B311 -- not key material (NM-010)
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

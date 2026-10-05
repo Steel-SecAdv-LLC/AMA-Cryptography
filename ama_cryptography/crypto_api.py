@@ -381,7 +381,7 @@ class MLDSAProvider(CryptoProvider):
     Provides real post-quantum signatures via native C backend.
     Raises PQCUnavailableError if no PQC backend is installed.
 
-    Security: NIST Security Level 3 (192-bit quantum security)
+    Security: NIST security category 3
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
@@ -729,7 +729,7 @@ class KyberProvider(KEMProvider):
         - Ciphertext: 1568 bytes
         - Shared secret: 32 bytes
 
-    Security: 256-bit classical / 128-bit quantum (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum (NIST security category 5)
     Standard: NIST FIPS 203 (ML-KEM)
 
     Raises:
@@ -832,7 +832,7 @@ class SphincsProvider(CryptoProvider):
         - Secret key: 128 bytes
         - Signature: 49856 bytes
 
-    Security: 256-bit classical / 128-bit quantum (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum (NIST security category 5)
     Standard: NIST FIPS 205 (SLH-DSA)
 
     Note: SPHINCS+ signatures are large but provide strong security
@@ -1153,7 +1153,9 @@ class AESGCMProvider:
         try:
             import msvcrt  # Windows-only stdlib module
 
-            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr (CA-004)
+            msvcrt.locking(  # type: ignore[attr-defined]  # Windows-only (CA-004)
+                lock_fd, msvcrt.LK_LOCK, 1  # type: ignore[attr-defined]  # Windows-only (CA-004)
+            )
             return
         except (ImportError, OSError) as _lock_err:
             raise RuntimeError(
@@ -2370,7 +2372,7 @@ class CryptoPackageResult:
     Layer 3 — Digital Signature (Ed25519 + ML-DSA-65, RFC 8032 + NIST FIPS 204):
         Non-repudiation via hybrid classical + post-quantum dual signature.
         Both signatures must verify.  Ed25519 provides 128-bit classical
-        security; ML-DSA-65 provides 192-bit quantum security (NIST Level 3).
+        security; ML-DSA-65 is NIST security category 3.
         The signed message is a canonical transcript of every other field on
         this object (:func:`package_transcript`), so no field here is outside
         the signature and no optional layer can be removed unnoticed.
@@ -2449,12 +2451,14 @@ class CryptoPackageResult:
     #: the table that replaces stripped fields — so the finding is exactly
     #: inverted.  Suppressed line-scoped with a tracking ID per INVARIANT-13;
     #: the values are pinned by
-    #: tests/test_crypto_api_packages.py::test_pickle_strips_the_private_signing_key.
+    #: tests/test_crypto_api_packages.py::
+    #: TestCryptoPackageSerialization::
+    #: test_pickle_strips_the_private_signing_key.
     _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
         "hmac_key": b"",
-        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder (CAPI-002)
         "derived_keys": [],
-        "kem_shared_secret": None,  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+        "kem_shared_secret": None,  # nosec B105 -- empty placeholder (CAPI-002)
     }
 
     @staticmethod
@@ -2727,7 +2731,7 @@ def create_crypto_package(
 
     Layer 3 — Digital Signature (Ed25519 + ML-DSA-65):
         Hybrid classical + post-quantum non-repudiation.  128-bit classical
-        security (RFC 8032) + 192-bit quantum security (NIST FIPS 204).
+        security (RFC 8032) + NIST security category 3 (FIPS 204).
 
         The signature covers a canonical transcript of the **entire package**
         — the content digest, every embedded public key, the add-on

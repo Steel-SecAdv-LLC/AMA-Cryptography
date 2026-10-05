@@ -66,6 +66,16 @@ from typing import Any, Callable, Dict, Generator, Literal, Mapping, NoReturn, O
 from urllib.parse import urlparse
 
 from ama_cryptography import pqc_backends
+from ama_cryptography._asn1 import (
+    DerReader,
+    der_integer,
+    der_null,
+    der_octet_string,
+    der_sequence,
+    oid_from_string,
+)
+from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography.exceptions import AmaCryptographyError
 
 _logger = logging.getLogger(__name__)
 
@@ -82,18 +92,6 @@ _logger = logging.getLogger(__name__)
 # longer depends on anything being installed. Existing `if RFC3161_AVAILABLE:`
 # call sites keep working and simply stop being a gate.
 RFC3161_AVAILABLE = True
-
-
-from ama_cryptography._asn1 import (
-    DerReader,
-    der_integer,
-    der_null,
-    der_octet_string,
-    der_sequence,
-    oid_from_string,
-)
-from ama_cryptography._module_state import secure_token_bytes
-from ama_cryptography.exceptions import AmaCryptographyError
 
 # ---------------------------------------------------------------------------
 # RFC 3161 wire format, encoded and decoded by AMA

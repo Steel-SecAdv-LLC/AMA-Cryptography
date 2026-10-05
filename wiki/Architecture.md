@@ -45,7 +45,7 @@ Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, H
 Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise overall system security. Each layer provides distinct security properties from different mathematical foundations.
 
 ### Quantum Readiness
-Primary signature algorithms are selected for resistance to known quantum attacks. The system remains secure against adversaries with access to large-scale quantum computers for 50+ years.
+Primary signature algorithms are selected for resistance to known quantum attacks: the core package signs with ML-DSA-65 (FIPS 204) beside Ed25519, and SLH-DSA (FIPS 205) is available as an add-on. No claim is made about how long any algorithm will remain secure.
 
 ### Ethical Integration
 Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
@@ -153,7 +153,7 @@ Provides symmetric authentication using a key derived via HKDF. Enables efficien
 Compact 64-byte digital signature with 128-bit classical security. Ensures compatibility with existing verification infrastructure.
 
 **Layer 4 — ML-DSA-65 Quantum-Resistant Signature:**
-Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks. Provides 192-bit quantum security (NIST Level 3, FIPS 204).
+Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks. NIST security category 3 (FIPS 204).
 
 ### Supporting Cryptographic Infrastructure
 

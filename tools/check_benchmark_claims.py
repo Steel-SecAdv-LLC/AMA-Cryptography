@@ -69,6 +69,16 @@ than no gate. What it enforces instead is everything that is *not* hardware:
    "native C, expanded key" — the per-call 64-byte path INVARIANT-51 makes
    re-derive ``A`` — while ``ed25519_sign_expanded``, the separate row, is the
    expanded-key path; the two rows exist to show that difference.
+8. **No overhead is published as an unmeasured bound.** A sentence that
+   states an overhead as ``<``, ``≤``, "under", "below", "less than" or "at
+   most" a percentage or duration fails, on every tracked Markdown page
+   outside the historical record.  A measurement is a value on a named host;
+   ``MONITORING.md`` published "<0.5% overhead per monitored operation" and
+   "<1% overhead" under a section saying no overhead had been measured, and
+   the wiki "< 2% on typical workloads".  A correction note quoting the
+   wording it retires carries the whole-line
+   ``<!-- claim-check: quoting-retired-wording -->`` marker, which waives its
+   paragraph, as it does for tools/check_crypto_construction_docs.py.
 
 Exit status
 -----------
@@ -100,9 +110,26 @@ ARM_BASELINE_JSON = "benchmarks/arm-baseline.json"
 REQUIRED_PROVENANCE: tuple[tuple[str, str], ...] = (
     ("command", "the exact benchmark command"),
     ("host", "the platform and architecture"),
+    (
+        "build_configuration",
+        "the compiler and configure line that built the measured library (AGENTS.md 8.7)",
+    ),
     ("sampling", "the sample methodology"),
     ("aggregation", "how repeated observations were reduced"),
 )
+
+#: How benchmarks/benchmark_runner.py begins a provenance value it could not
+#: establish (its BUILD_CONFIGURATION_NOT_RECORDED).  Such a value is present
+#: but carries nothing a reader can reproduce from, so it counts as absent.
+NOT_RECORDED_PREFIX = "not recorded"
+
+#: The shape a recorded value must have where the runner writes a structured
+#: one: ``build_configuration`` is ``"<compiler> <version>; cmake -D..."``.  A
+#: value without the compiler's version, or without the configure line, does
+#: not say what built the measured bytes, however non-empty it is.
+PROVENANCE_SHAPES: dict[str, re.Pattern[str]] = {
+    "build_configuration": re.compile(r"^\S+ \d[\w.+-]*; cmake -D"),
+}
 
 #: Every floor entry must declare these, or the number it enforces is a
 #: constant with no meaning attached.
@@ -248,10 +275,20 @@ def _measured_ops(value: object) -> Optional[float]:
 def check_provenance(report: Report, results: dict[str, Any]) -> None:
     provenance = results.get("provenance") or {}
     for key, what in REQUIRED_PROVENANCE:
-        value = str(provenance.get(key, "")).strip()
-        if not value:
+        # Only a string is a recorded value.  ``str()`` on a JSON null gives
+        # "None", which is non-empty and would pass for provenance.
+        raw = provenance.get(key)
+        value = raw.strip() if isinstance(raw, str) else ""
+        shape = PROVENANCE_SHAPES.get(key)
+        if (
+            not value
+            or value.startswith(NOT_RECORDED_PREFIX)
+            or (shape is not None and not shape.match(value))
+        ):
             report.fail(
-                f"{RESULTS_JSON} records no {key!r} — documentation draws numbers "
+                f"{RESULTS_JSON} records no {key!r}"
+                + (f" ({raw!r})" if key in provenance else "")
+                + " — documentation draws numbers "
                 f"from this record and a reader needs {what} to reproduce them. "
                 "Re-run benchmarks/benchmark_runner.py, which writes the full "
                 "provenance block."
@@ -812,6 +849,88 @@ def check_record_figures(report: Report, repo: Path) -> None:
             report.ok()
 
 
+#: An overhead given as a bound: "<0.5% overhead", "overhead: < 2%", "under
+#: 1% ... overhead".  Scoped to sentences that say "overhead", which is where
+#: the unmeasured figures were; a target such as "< 5 ms" in a latency table is
+#: a requirement, not a measurement, and does not say "overhead".
+_OVERHEAD_BOUND = re.compile(
+    r"(?:<|≤|\bunder\b|\bbelow\b|\bless than\b|\bat most\b)\s*~?\d+(?:\.\d+)?\s*"
+    r"(?:%|ms\b|µs\b|us\b|ns\b|\u00d7|x\b)",
+    re.IGNORECASE,
+)
+
+#: The whole-line marker a correction note carries to quote the wording it
+#: retires (INVARIANT-53); it waives the paragraph it opens, up to the next
+#: blank line, exactly as tools/check_crypto_construction_docs.py reads it.
+RETIRED_WORDING_WAIVER = "<!-- claim-check: quoting-retired-wording -->"
+
+
+def _waived_lines(text: str) -> set[int]:
+    """Line numbers inside a paragraph the retired-wording marker opens."""
+    waived: set[int] = set()
+    active = False
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            active = False
+        elif line == RETIRED_WORDING_WAIVER:
+            active = True
+        elif active:
+            waived.add(number)
+    return waived
+
+
+def unmeasured_overhead_bounds(text: str) -> list[tuple[int, str, str]]:
+    """``(line, bound, sentence)`` for each overhead a page states as a bound."""
+    waived = _waived_lines(text)
+    found: list[tuple[int, str, str]] = []
+    for block in _blocks(text):
+        joined, marks = _join(block)
+        for offset, sentence in _sentences(joined):
+            if "overhead" not in sentence.lower():
+                continue
+            for match in _OVERHEAD_BOUND.finditer(sentence):
+                line = _line_at(marks, offset + match.start())
+                if line not in waived:
+                    found.append((line, match.group(0), sentence))
+    return found
+
+
+def check_overhead_bounds(report: Report, repo: Path) -> None:
+    """No page publishes an overhead as a bound nobody measured (INVARIANT-53, 4).
+
+    Every tracked Markdown page outside the historical record, from git's own
+    list, so a new page is covered by the commit that adds it.  A tree whose
+    tracked files git cannot list is a failure, not a pass.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import TrackedFilesError, tracked_names
+
+    try:
+        names = tracked_names(repo, "*.md")
+    except TrackedFilesError as exc:
+        report.fail(f"cannot list the tracked Markdown pages to check overhead claims: {exc}")
+        return
+    for name in names:
+        if _is_historical_record(Path(name)):
+            continue
+        text = (repo / name).read_text(encoding="utf-8")
+        found = unmeasured_overhead_bounds(text)
+        for line, bound, sentence in found:
+            report.fail(
+                f"{name}:{line} states an overhead as a bound ({bound!r}) with no "
+                "measurement behind it. Publish the measured value with the host "
+                "and command that produced it, or say that no figure is published; "
+                "a correction note quoting retired wording carries "
+                f"`{RETIRED_WORDING_WAIVER}` on the line above it."
+                f"\n      {sentence[:200]}"
+            )
+        if not found:
+            report.ok()
+
+
 def check_record_descriptions(report: Report, results: dict[str, Any], x86: dict[str, Any]) -> None:
     """A record row's description must be its ledger entry's description.
 
@@ -912,6 +1031,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     check_generated_tables(report, repo, results)
     check_documented_floors(report, repo, x86, arm)
     check_record_figures(report, repo)
+    check_overhead_bounds(report, repo)
     check_record_descriptions(report, results, x86)
     check_measured_against_floor(report, results, x86)
 

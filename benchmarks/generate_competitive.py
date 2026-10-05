@@ -552,7 +552,8 @@ h2 .num{{color:var(--muted);font-weight:400;margin-right:8px}}
 .meta{{color:var(--muted);font-size:12.5px;margin:14px 0 0;padding-top:12px;
   border-top:1px solid var(--border);line-height:1.7}}
 .lede{{color:var(--text-secondary);margin:8px 0 0;max-width:78ch}}
-.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0 0}}
+.tiles{{display:grid;gap:12px;margin:22px 0 0;
+  grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}}
 .tile{{background:var(--plane);border:1px solid var(--border);border-radius:10px;padding:14px 16px}}
 .tile .v{{font-size:27px;font-weight:640;letter-spacing:-.02em;line-height:1.1}}
 .tile .k{{color:var(--text-secondary);font-size:12.5px;margin-top:3px}}
@@ -607,8 +608,10 @@ code{{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var
 pre{{background:var(--plane);border:1px solid var(--border);border-radius:9px;padding:14px 16px;
   overflow-x:auto;font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;
   color:var(--text-secondary)}}
-.toggle{{position:fixed;top:14px;right:14px;background:var(--plane);color:var(--text-secondary);
-  border:1px solid var(--border);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer}}
+.toggle{{position:fixed;top:14px;right:14px;
+  background:var(--plane);color:var(--text-secondary);
+  border:1px solid var(--border);border-radius:8px;
+  padding:6px 11px;font-size:12.5px;cursor:pointer}}
 </style></head><body>
 <button class="toggle" onclick="var r=document.documentElement,
   d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));

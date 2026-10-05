@@ -47,7 +47,8 @@ STATIC_ANALYSIS_YML = REPO_ROOT / ".github" / "workflows" / "static-analysis.yml
 GUARD_H = REPO_ROOT / "tests" / "c" / "kat_slot_guard.h"
 
 _CELL_RE = re.compile(
-    r"^ama_kat_sweep_cell\((?P<slot>\S+)\s+(?P<exe>\S+)\s+(?P<required>\S+)\s+\"(?P<extra>[^\"]*)\"\)",
+    r"^ama_kat_sweep_cell\((?P<slot>\S+)\s+(?P<exe>\S+)"
+    r"\s+(?P<required>\S+)\s+\"(?P<extra>[^\"]*)\"\)",
     re.M,
 )
 

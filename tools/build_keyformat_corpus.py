@@ -281,7 +281,9 @@ JOSE_COSE = {
             "d_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
             "x_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
             # RFC 8037 A.3.
-            "thumbprint_sha256_hex": "90facafea9b1556698540f70c0117a22ea37bd5cf3ed3c47093c1707282b4b89",
+            "thumbprint_sha256_hex": (
+                "90facafea9b1556698540f70c0117a22" "ea37bd5cf3ed3c47093c1707282b4b89"
+            ),
             "thumbprint_b64u": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
             "thumbprint_input": '{"crv":"Ed25519","kty":"OKP",'
             '"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}',

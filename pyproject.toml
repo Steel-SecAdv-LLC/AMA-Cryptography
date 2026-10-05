@@ -192,15 +192,32 @@ docs = [
     "sphinx-autodoc-typehints>=3.0.1",
 ]
 dev = [
-    "pytest>=9.1.1",
+    # Floor and cap at the lane pins (the mypy case below, applied to every
+    # tool a gate executes): ci.yml::security-checks runs the documented-counts
+    # re-derivation under pytest==9.1.1 while the test lanes install this
+    # extra, and pytest collection semantics move on minors.  Raise the cap
+    # with the pins.
+    "pytest>=9.1.1,<9.2",
     "pytest-cov>=4.0.0",
     "hypothesis>=6.168.0",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
-    "black>=26.5.1",
-    "ruff>=0.16.8",
-    "mypy>=2.3.1",
+    # black and ruff: the lint lanes pin ==26.5.1/==0.16.8, and
+    # tests/test_ci_gate_negative.py asserts the accept side of each tool's
+    # DEFAULT behaviour -- the surface that moves between releases (black
+    # revises its stable style on calendar majors; ruff's default rule set
+    # moves on minors).  Capped so one CI run measures one black and one ruff.
+    "black>=26.5.1,<27",
+    "ruff>=0.16.8,<0.17",
+    # Capped below 2.4: the lint job, pre-commit and requirements-lock.txt run
+    # 2.3.1, and this extra floated past them.  mypy 2.4.0 stopped honouring a
+    # `# mypy:` inline-config line inside a docstring (measured: the same file
+    # and flags exit 0 under 2.3.1 and 1 under 2.4.0), so the test lanes that
+    # install this extra measured a different mypy from the one CI type-checks
+    # with, and test_suppression_hygiene_gate.py's premise test went red on
+    # them alone.  Raise the cap with the pins, after re-measuring that test.
+    "mypy>=2.3.1,<2.4",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
     # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
@@ -211,7 +228,7 @@ dev = [
     # no silent-Any outcome to have: reaching it would need an
     # `ignore_missing_imports` override for setuptools, and the override list
     # below does not contain one.)
-    "types-setuptools>=84.0.0.20260812",
+    "types-setuptools>=84.0.0.20260812,<84.1",
     # PyYAML is imported directly by thirteen modules under tests/ and tools/
     # (the workflow, gate-coverage, secret-scan and severity-gate checkers all
     # parse YAML structurally rather than by regex).  It arrived only as a
@@ -223,9 +240,20 @@ dev = [
     # measured as 13 `Library stubs not installed for "yaml"` errors in every
     # test job.  requirements-dev.txt already declared both; this extra was the
     # outlier.
-    "PyYAML>=6.0.3",
-    "types-PyYAML>=6.0.12.20260906",
-    "bandit>=1.7.0",
+    # PyYAML, types-PyYAML and types-setuptools are capped like the tools
+    # above: each is pinned in the workflows and the lock, executed by gates
+    # (INVARIANT-25's workflow parser; mypy --strict through the stubs), and
+    # floated only here.  test_every_gate_tool_is_pinned_coherently holds all
+    # of them to the lock.
+    "PyYAML>=6.0.3,<6.1",
+    "types-PyYAML>=6.0.12.20260906,<6.1",
+    # Floor raised to the enforcement pin and capped below the next minor:
+    # ci.yml pins bandit==1.9.4, and the suppression-hygiene premise tests
+    # assert bandit's nosec attribution, which MOVED inside the old
+    # >=1.7.0 range (measured: bandit 1.7.0 reports the comment-only and
+    # hidden markers' functions, 1.9.4 suppresses them -- both premise tests
+    # fail under 1.7.0).  Raise the cap with the pin, re-measuring those tests.
+    "bandit>=1.9.4,<1.10",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
     # already covered by `pip-audit` (run with `--strict --requirement
@@ -353,7 +381,6 @@ ignore = [
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
 #   S101: assert used in internal validation
 #   S106/S107: hardcoded defaults for optional password parameters
-#   E501: long lines in crypto constant definitions
 #   B028: no-explicit-stacklevel in warnings (existing pattern)
 #   RUF012: mutable class defaults (dataclass pattern)
 #   N818: exception naming convention (existing names)
@@ -366,7 +393,7 @@ ignore = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022",
     "S101", "S106", "S107",
-    "E402", "E501",
+    "E402",
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
@@ -382,7 +409,7 @@ ignore = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022",
     "S101", "S106", "S107",
-    "E402", "E501",
+    "E402",
     "B028",
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
@@ -396,12 +423,12 @@ ignore = [
 "tools/monitoring/ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
 # benchmarks/benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
-"benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
-"setup.py" = ["E501", "RUF005", "S603", "S607"]
+"benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E402"]  # C901: generate_markdown complexity
+"setup.py" = ["RUF005", "S603", "S607"]
 # benchmarks/* — chart generation and bench-harness scripts:
 #   C901: matplotlib chart builders unavoidably exceed McCabe complexity (many panels, axes, annotations).
 #   RUF001: chart captions and axis labels use the Unicode multiplication sign (×) and Greek letters intentionally.
-#   E501/F541/I001/RUF059/UP006/UP035: same legacy-formatting / typing-imports patterns the
+#   F541/I001/RUF059/UP006/UP035: same legacy-formatting / typing-imports patterns the
 #         rest of the codebase carries (see "ama_cryptography/*" header above).
 #   S603/S607: subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling.
 #   E402 and S311 are NOT file-scoped here: the sys.path-then-import shape and the
@@ -409,7 +436,7 @@ ignore = [
 #         `noqa` at the site (INVARIANT-13), and RUF100 keeps every such directive live.
 "benchmarks/*" = [
     "C901",
-    "E501", "F541", "I001",
+    "F541", "I001",
     "RUF001", "RUF059",
     "S603", "S607",
     "UP006", "UP035",
@@ -425,7 +452,6 @@ ignore = [
 "tools/*" = [
     "B007", "B904",
     "C408", "C901",
-    "E501",
     "I001",
     "RUF059",
     "S603", "S607",
@@ -506,6 +532,9 @@ ignore_missing_imports = true
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]
 module = [
+    "ama_cryptography.dilithium_binding",
+    "ama_cryptography.ed25519_binding",
+    "ama_cryptography.hkdf_binding",
     "ama_cryptography.hmac_binding",
     "ama_cryptography.math_engine",
 ]

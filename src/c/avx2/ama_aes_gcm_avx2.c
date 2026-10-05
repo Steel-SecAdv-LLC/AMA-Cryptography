@@ -548,8 +548,9 @@ void ama_aes256_gcm_encrypt_avx2(
     __m128i tag_val = _mm_xor_si128(bswap128(ghash_acc), enc_j0);
     _mm_storeu_si128((__m128i *)tag, tag_val);
 
-    /* Scrub sensitive key material from stack (mirrors generic C path
-     * in ama_aes_gcm.c:434-438).  Round-key schedule, GHASH key H, and
+    /* Scrub sensitive key material from stack (mirrors the "Scrub sensitive
+     * material" block at the end of ama_aes256_gcm_encrypt() in
+     * ama_aes_gcm.c).  Round-key schedule, GHASH key H, and
      * the J0 keystream block (tag-mask) all leak the AES-256 key class
      * via tag forgery if recovered.  The H power table htab[] is the
      * same class of secret as H itself — every entry is a power of the

@@ -242,7 +242,10 @@ def check_integrity_anchoring() -> None:
             "release wheel is anchored to a long-lived trust anchor",
             anchored,
             error
-            or "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is set but the compiled library carries no anchor",
+            or (
+                "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is set"
+                " but the compiled library carries no anchor"
+            ),
         )
     else:
         # Off the canonical path unanchored is allowed, but the status must be

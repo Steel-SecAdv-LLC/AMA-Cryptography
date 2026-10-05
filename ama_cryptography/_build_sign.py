@@ -845,8 +845,10 @@ def main() -> int:
         # The two discoveries must have agreed on the file: with the signing
         # opt-in active nothing is digest-refused, so both select the first
         # existing candidate (under AMA_CRYPTO_LIB_PATH, the first one the
-        # override names — both confine the search to it).  A disagreement would mean signing a digest for a
-        # different object than the one just loaded, so it is an error rather
+        # override names -- both confine the search to it).
+        # A disagreement would mean signing a digest for a
+        # different object than the one just loaded, so it is an
+        # error rather
         # than a warning.
         from ama_cryptography.pqc_backends import _LOAD_DIAGNOSTICS as _LD
 

@@ -15,7 +15,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 
 | Asset | Sensitivity | Storage |
 |-------|------------|---------|
-| Master secret (IKM) | **CRITICAL** | HSM/TPM (FIPS 140-2 Level 3+) |
+| Master secret (IKM) | **CRITICAL** | HSM validated to FIPS 140-3 Level 3+ (SECURITY.md) |
 | Ed25519 private key | **CRITICAL** | HSM/TPM or encrypted at rest |
 | ML-DSA-65 private key | **CRITICAL** | HSM/TPM or encrypted at rest |
 | HMAC key material | **HIGH** | Derived via HKDF; ephemeral |
@@ -69,10 +69,10 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T1.2 | HMAC-SHA3-256 forgery | Authentication layer | Negligible (2^128 ops) | HIGH | **LOW** |
 | T1.3 | Ed25519 forgery (classical) | Signature layer | Negligible (2^126 ops) | CRITICAL | **LOW** |
 | T1.4 | Ed25519 forgery (quantum) | Signature layer | Medium (future) | CRITICAL | **MEDIUM** |
-| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | Negligible (2^190 ops) | CRITICAL | **LOW** |
-| T1.6 | HKDF key recovery | Key derivation | Negligible (2^256 ops) | CRITICAL | **LOW** |
+| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | Negligible (NIST category 3, FIPS 204) | CRITICAL | **LOW** |
+| T1.6 | HKDF key recovery | Key derivation | Negligible (2^128 quantum) | CRITICAL | **LOW** |
 | T1.7 | AES-256-GCM key recovery | Encryption layer | Negligible (2^128 quantum) | HIGH | **LOW** |
-| T1.8 | ML-KEM-1024 decapsulation | KEM layer | Negligible (2^254 ops) | HIGH | **LOW** |
+| T1.8 | ML-KEM-1024 decapsulation | KEM layer | Negligible (NIST category 5, FIPS 203) | HIGH | **LOW** |
 
 ### T2: Implementation Attacks
 
@@ -124,10 +124,10 @@ concrete instance of this pattern. See M3.5.
 | T1.2 | HMAC-SHA3-256 (RFC 2104) — keyed authentication | **IMPLEMENTED** | `ama_hkdf.c`, constant-time comparison |
 | T1.3 | Ed25519 (RFC 8032) — 128-bit classical security | **IMPLEMENTED** | `ama_ed25519.c`, deterministic signing |
 | T1.4 | ML-DSA-65 (FIPS 204) — quantum-resistant backup | **IMPLEMENTED** | `ama_dilithium.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
-| T1.5 | ML-DSA-65 lattice hardness — 192-bit quantum security | **IMPLEMENTED** | MLWE assumption, FIPS 204 compliant |
+| T1.5 | ML-DSA-65 lattice hardness — NIST security category 3 | **IMPLEMENTED** | MLWE assumption, FIPS 204 compliant |
 | T1.6 | HKDF-SHA3-256 (RFC 5869) — one-way derivation | **IMPLEMENTED** | `ama_hkdf.c`, domain-separated contexts |
 | T1.7 | AES-256-GCM (SP 800-38D) — 128-bit quantum security | **IMPLEMENTED** | `ama_aes_gcm.c`, NIST test vectors |
-| T1.8 | ML-KEM-1024 (FIPS 203) — 256-bit quantum security | **IMPLEMENTED** | `ama_kyber.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
+| T1.8 | ML-KEM-1024 (FIPS 203) — NIST security category 5 | **IMPLEMENTED** | `ama_kyber.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
 
 ### M2: Side-Channel Mitigations
 
