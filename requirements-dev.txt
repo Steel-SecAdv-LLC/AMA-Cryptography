@@ -16,13 +16,13 @@ numpy>=1.24.0
 # Testing
 pytest>=9.1.1,<9.2
 pytest-cov>=4.0.0
-hypothesis>=6.168.0
+hypothesis>=6.168.3
 
 # Code Quality
 black>=26.5.1,<27
-ruff>=0.16.8,<0.17
+ruff>=0.16.10,<0.17
 # Capped below 2.4 with pyproject.toml's [dev] extra; see the note there.
-mypy>=2.3.1,<2.4
+mypy>=2.4.0,<2.5
 # PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
 # .github/workflows/** structurally rather than by regex.  types-PyYAML keeps
 # that tool and its tests inside `mypy --strict` instead of behind an override.
