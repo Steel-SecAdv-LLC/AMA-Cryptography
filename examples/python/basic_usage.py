@@ -16,7 +16,6 @@ Usage:
     python basic_usage.py
 
 Requirements:
-    pip install cryptography
     # Optional: build native C library for quantum-resistant signatures
 
 .. warning::

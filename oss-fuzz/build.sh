@@ -40,7 +40,17 @@ cmake -B "$BUILD_DIR" \
     -DCMAKE_C_FLAGS="$CFLAGS" \
     -DCMAKE_CXX_FLAGS="$CXXFLAGS"
 
-cmake --build "$BUILD_DIR" -j$(nproc)
+# OSS-Fuzz's contract delivers CC/CXX, their FLAGS, and LIB_FUZZING_ENGINE as
+# space-separated strings that must word-split into argv.  The split is made
+# explicit here once, into arrays, so every later use is fully quoted
+# (shellcheck SC2086 at source, not by directive).
+read -ra CC_ARGV <<< "$CC"
+read -ra CXX_ARGV <<< "$CXX"
+read -ra CFLAGS_ARGV <<< "${CFLAGS:-}"
+read -ra CXXFLAGS_ARGV <<< "${CXXFLAGS:-}"
+read -ra ENGINE_ARGV <<< "${LIB_FUZZING_ENGINE:-}"
+
+cmake --build "$BUILD_DIR" -j"$(nproc)"
 
 # Find the static library
 AMA_LIB=$(find "$BUILD_DIR" -name "libama_cryptography_static.a" | head -1)
@@ -82,7 +92,7 @@ for target in "${FUZZ_TARGETS[@]}"; do
     fi
 
     echo "Building fuzz target: $target"
-    $CC $CFLAGS -I"$INCLUDE_DIR" \
+    "${CC_ARGV[@]}" "${CFLAGS_ARGV[@]}" -I"$INCLUDE_DIR" \
         -c "$src_file" -o "$BUILD_DIR/${target}.o"
 
     # Per-target extras.  fuzz_frost uses --wrap=ama_randombytes to
@@ -92,16 +102,16 @@ for target in "${FUZZ_TARGETS[@]}"; do
     extra_objs=()
     extra_link_flags=()
     if [ "$target" = "fuzz_frost" ]; then
-        $CC $CFLAGS -I"$INCLUDE_DIR" \
+        "${CC_ARGV[@]}" "${CFLAGS_ARGV[@]}" -I"$INCLUDE_DIR" \
             -c "fuzz/fuzz_rng.c" -o "$BUILD_DIR/fuzz_rng.o"
         extra_objs+=("$BUILD_DIR/fuzz_rng.o")
         extra_link_flags+=("-Wl,--wrap=ama_randombytes")
     fi
 
-    $CXX $CXXFLAGS \
+    "${CXX_ARGV[@]}" "${CXXFLAGS_ARGV[@]}" \
         "$BUILD_DIR/${target}.o" "${extra_objs[@]}" \
         "$AMA_LIB" \
-        $LIB_FUZZING_ENGINE \
+        "${ENGINE_ARGV[@]}" \
         "${extra_link_flags[@]}" \
         -lm -lpthread \
         -o "$OUT/${target}"

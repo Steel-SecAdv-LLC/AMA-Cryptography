@@ -66,7 +66,7 @@ echo "=== Building dudect tests ==="
 cmake -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DAMA_ENABLE_DUDECT=ON \
-    -DAMA_USE_NATIVE_PQC=$([ $PQC -eq 1 ] && echo 'ON' || echo 'OFF') \
+    -DAMA_USE_NATIVE_PQC="$([ "$PQC" -eq 1 ] && echo ON || echo OFF)" \
     -DAMA_AES_CONSTTIME=ON \
     -DAMA_ENABLE_LTO=OFF \
     -DAMA_BUILD_EXAMPLES=OFF \

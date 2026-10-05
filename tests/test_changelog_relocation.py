@@ -55,7 +55,7 @@ BASE_COMMIT = "974cb019a2cf098495aaa6bbf4622b8cc8115484"
 BASE_CHANGELOG_SHA256 = "58c84ba3ec3d9355db129636b031f198dbbf7232d7462cf7976699604faad9d7"
 
 OLD_HEADING = "## [5.0.0] - 2026-09-10\n"
-#: Dated on 2026-10-04, the release-roll that filed every [Unreleased] entry
+#: Dated on 2026-10-05, the release-roll that filed every [Unreleased] entry
 #: under it (the heading read Unreleased from the relocation until then).
 NEW_HEADING = "## [5.0.0] - 2026-10-05\n"
 UNRELEASED_GROUP = "## Entries recorded under [Unreleased]\n\n"

@@ -28,26 +28,63 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
-    """``(lineno, module)`` for each unaliased re-import of a top-level import."""
+    """``(lineno, module)`` for each plain re-import in CodeQL's class.
+
+    Three shapes, each measured against the rule's own documentation and
+    examples (its canonical case is two plain top-level imports): a second
+    unaliased ``import X`` directly at module top level; an unaliased local
+    ``import X`` whose ``X`` the top level already plainly imports; and a
+    second unaliased ``import X`` among the direct statements of one
+    function or class body.  Only unaliased imports count on BOTH sides:
+    ``import os as _os`` binds ``_os``, not ``os``, so a local plain
+    ``import os`` beside it is load-bearing, not a duplicate — measured,
+    deleting it raises NameError.  A module-level import guarded by
+    ``try``/``if`` is conditional, never counted as the earlier binding.
+    """
     tree = ast.parse(source)
-    top: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            top.update(alias.name for alias in node.names)
-    found: list[tuple[int, str]] = []
-    top_level = set(map(id, tree.body))
+    top_ids = set(map(id, tree.body))
+    found: set[tuple[int, str]] = set()
+    top_seen = _scan_direct_imports(tree.body, found)
     for walked in ast.walk(tree):
-        if id(walked) in top_level or not isinstance(walked, ast.Import):
+        if isinstance(walked, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _scan_direct_imports(walked.body, found)
+        if id(walked) in top_ids or not isinstance(walked, ast.Import):
             continue
         for alias in walked.names:
-            if alias.asname is None and alias.name in top:
-                found.append((walked.lineno, alias.name))
-    return found
+            if alias.asname is None and alias.name in top_seen:
+                found.add((walked.lineno, alias.name))
+    return sorted(found)
 
 
-def test_a_planted_duplicate_is_found() -> None:
+def _scan_direct_imports(body: list[ast.stmt], found: set[tuple[int, str]]) -> set[str]:
+    """Flag repeats among one statement list's unaliased plain imports;
+    return the names it binds."""
+    seen: set[str] = set()
+    for stmt in body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                if alias.asname is not None:
+                    continue
+                if alias.name in seen:
+                    found.add((stmt.lineno, alias.name))
+                seen.add(alias.name)
+    return seen
+
+
+def test_a_planted_nested_duplicate_is_found() -> None:
     source = "import os\n\n\ndef f() -> str:\n    import os\n\n    return os.sep\n"
     assert duplicate_plain_imports(source) == [(5, "os")]
+
+
+def test_a_second_top_level_import_is_found() -> None:
+    """CodeQL's canonical example: the same module twice at top level."""
+    source = "import os\nimport sys\nimport os\n\nprint(os.sep, sys.path)\n"
+    assert duplicate_plain_imports(source) == [(3, "os")]
+
+
+def test_a_same_scope_duplicate_is_found() -> None:
+    source = "def f() -> str:\n    import os\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(source) == [(3, "os")]
 
 
 def test_an_aliased_or_from_import_is_not_in_scope() -> None:
@@ -55,6 +92,22 @@ def test_an_aliased_or_from_import_is_not_in_scope() -> None:
         "import os\nimport ast\n\n\ndef f() -> str:\n"
         "    import os as _os\n    from ast import parse\n\n"
         "    return _os.sep + str(parse('1'))\n"
+    )
+    assert duplicate_plain_imports(source) == []
+
+
+def test_a_plain_local_beside_an_aliased_top_import_is_load_bearing() -> None:
+    """``import os as _os`` does not bind ``os``: the local import is the only
+    binding the function has, and deleting it raises NameError — measured.
+    The checker must not pressure that deletion."""
+    source = "import os as _os\n\n\ndef f() -> str:\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(source) == []
+
+
+def test_a_guarded_top_import_with_a_local_retry_is_not_counted() -> None:
+    source = (
+        "try:\n    import fcntl\nexcept ImportError:\n    fcntl = None\n\n\n"
+        "def f() -> object:\n    import fcntl\n\n    return fcntl\n"
     )
     assert duplicate_plain_imports(source) == []
 

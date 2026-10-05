@@ -17,7 +17,7 @@ Features:
 - Key rotation support
 
 Usage:
-    pip install fastapi uvicorn cryptography
+    pip install fastapi uvicorn
     # Optional: build native C library for quantum-resistant signatures
     python fastapi_integration.py
 
