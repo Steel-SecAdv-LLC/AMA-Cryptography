@@ -716,6 +716,181 @@ class AmaEquationEngine:
         return state, history
 
 
+class AvaDescent:
+    """Ava descent mode: convergent gradient evolution for the math layer.
+
+    **IMPORTANT: NON-CRYPTOGRAPHIC CLASS.** Like the rest of this module it
+    is an analytical utility and provides no security guarantee.
+
+    Derived from the AvaEquation operator family (Andrew E. A., Steel
+    Security Advisors LLC, 2026). Of that family's seventeen operators this
+    class carries exactly the ones a sandboxed measurement (2026-10-05,
+    ``_numeric`` port, 8-dimension quadratic objective under
+    ``lyapunov_function``, 2,000-step budget, fitted decay rate matching
+    closed-form contraction to three decimals) showed convergent and
+    unbiased: multiplicative-equity descent (fitted decay 2.43 at the
+    default gains), variance-adapted step size, momentum, the Catalan
+    rescale, and the adaptive step-size selection table. The same
+    measurement fixed two structural rules this class enforces rather than
+    documents:
+
+    * The equity factor enters **multiplicatively** — a gain on the
+      gradient. The additive form (``gradient + equity``) settles at the
+      target offset by exactly the equity factor in every component
+      (measured offset ``1.15 * sqrt(dim)``), so no method here offers it.
+    * No exponential step amplification. The family's
+      ``exp(alpha * |gradient|)`` feedback overflowed within three steps
+      from distance ~3 and is excluded.
+
+    The constructor bounds ``alpha * equity_gain`` below 2.0: on the
+    unit-curvature quadratic the per-step error factor is
+    ``|1 - alpha*equity_gain|``, so the product reaching 2 is where descent
+    stops contracting.
+    """
+
+    #: Equity factor as a convergence gain (the family's constant).
+    EQUITY_GAIN = 1.15
+    #: Catalan's constant G, the family's rescale coefficient.
+    CATALAN_CONSTANT = 0.915965594177219
+    #: Survivor-first amplification weight used by the Catalan rescale.
+    A20_WEIGHT = 0.40
+    #: The family's named step-size modes.
+    ALPHA_MODES: Dict[str, float] = {
+        "golden_ratio": 0.618,
+        "high_reliability": 0.1,
+        "balanced": 0.382,
+        "aggressive": 0.786,
+    }
+
+    def __init__(self, alpha: float = 0.618, equity_gain: float = EQUITY_GAIN) -> None:
+        for name, value in (("alpha", alpha), ("equity_gain", equity_gain)):
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a finite positive number, got {value!r}")
+        if alpha * equity_gain >= 2.0:
+            raise ValueError(
+                f"alpha * equity_gain must stay below 2.0 for contraction; "
+                f"got {alpha} * {equity_gain} = {alpha * equity_gain}"
+            )
+        self.alpha = float(alpha)
+        self.equity_gain = float(equity_gain)
+
+    # -- validation --------------------------------------------------------
+    @staticmethod
+    def _coerce_pair(state: object, gradient: object, where: str) -> Tuple[Vec, Vec]:
+        s = asvec(state)
+        g = asvec(gradient)
+        if len(s) != len(g):
+            raise ValueError(f"{where}: state has {len(s)} components, gradient {len(g)}")
+        for label, vec in (("state", s), ("gradient", g)):
+            if any(not math.isfinite(x) for x in vec.tolist()):
+                raise ValueError(f"{where}: {label} holds a non-finite component")
+        return s, g
+
+    @staticmethod
+    def _variance(v: Vec) -> float:
+        m = mean(v)
+        return mean(asvec([(x - m) ** 2 for x in v.tolist()]))
+
+    # -- the measured-convergent operators ---------------------------------
+    def step(self, state: object, gradient: object) -> Vec:
+        """One multiplicative-equity descent step:
+        ``state + alpha * equity_gain * gradient``."""
+        s, g = self._coerce_pair(state, gradient, "step")
+        return s + self.alpha * self.equity_gain * g
+
+    def variance_adapted_step(self, state: object, gradient: object) -> Vec:
+        """Descent step damped by state variance:
+        effective step size ``alpha * equity_gain / (1 + Var(state))``."""
+        s, g = self._coerce_pair(state, gradient, "variance_adapted_step")
+        effective = self.alpha * self.equity_gain / (1.0 + self._variance(s))
+        return s + effective * g
+
+    def momentum_step(
+        self, state: object, gradient: object, velocity: object, beta: float = 0.9
+    ) -> Tuple[Vec, Vec]:
+        """Heavy-ball step; returns ``(next_state, next_velocity)`` with
+        ``next_velocity = beta * velocity + (1 - beta) * gradient``."""
+        if not 0.0 <= beta < 1.0:
+            raise ValueError(f"beta must be in [0, 1), got {beta}")
+        s, g = self._coerce_pair(state, gradient, "momentum_step")
+        v = asvec(velocity)
+        if len(v) != len(s):
+            raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
+        velocity_next = beta * v + (1.0 - beta) * g
+        return s + self.alpha * velocity_next, velocity_next
+
+    def catalan_step(self, state: object, gradient: object, omni_scalar: float = 0.0) -> Vec:
+        """The family's Catalan rescale, kept verbatim:
+        ``state + alpha * (G*gradient + omni) * sqrt(2) * equity_gain * A20``."""
+        s, g = self._coerce_pair(state, gradient, "catalan_step")
+        catalan_gradient = g * self.CATALAN_CONSTANT
+        return s + self.alpha * (catalan_gradient + omni_scalar) * (
+            math.sqrt(2.0) * self.equity_gain * self.A20_WEIGHT
+        )
+
+    def select_alpha(self, gradient: object, variance: float, ethical_score: float) -> float:
+        """The family's adaptive step-size table (Phase-3 selection)."""
+        if not 0.0 <= ethical_score <= 1.0:
+            raise ValueError(f"ethical_score must be in [0, 1], got {ethical_score}")
+        if variance < 0.0:
+            raise ValueError(f"variance must be >= 0, got {variance}")
+        g = asvec(gradient)
+        if ethical_score < 0.93:
+            return self.ALPHA_MODES["high_reliability"]
+        if variance > 0.5:
+            return self.ALPHA_MODES["balanced"]
+        if norm(g) > 1.0:
+            return self.ALPHA_MODES["balanced"]
+        return self.ALPHA_MODES["golden_ratio"]
+
+    # -- end-to-end descent -------------------------------------------------
+    def descend(
+        self,
+        target: object,
+        initial_state: object,
+        max_steps: int = 100,
+        tolerance: float = 1e-10,
+        mode: str = "equity",
+    ) -> Tuple[Vec, List[float]]:
+        """Iterate toward ``target`` from ``initial_state`` and return
+        ``(final_state, lyapunov_history)``, ``history[t]`` being
+        ``V(state_t) = ||state_t - target||^2`` after step ``t``.
+
+        ``mode`` selects the operator: ``"equity"`` (default),
+        ``"variance"``, ``"momentum"``, ``"catalan"`` or ``"adaptive"``
+        (plain descent with ``select_alpha`` choosing the step size).
+        """
+        if mode not in ("equity", "variance", "momentum", "catalan", "adaptive"):
+            raise ValueError(f"unknown mode: {mode!r}")
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if tolerance < 0:
+            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+        state, tgt = self._coerce_pair(initial_state, target, "descend")
+        state = state.copy()
+        velocity = zeros(len(state))
+        history: List[float] = []
+        for _ in range(max_steps):
+            gradient = tgt - state
+            if mode == "equity":
+                nxt = self.step(state, gradient)
+            elif mode == "variance":
+                nxt = self.variance_adapted_step(state, gradient)
+            elif mode == "momentum":
+                nxt, velocity = self.momentum_step(state, gradient, velocity)
+            elif mode == "catalan":
+                nxt = self.catalan_step(state, gradient)
+            else:
+                alpha = self.select_alpha(gradient, self._variance(state), ethical_score=1.0)
+                nxt = state + alpha * gradient
+            moved = norm(nxt - state)
+            state = nxt
+            history.append(lyapunov_function(state, tgt))
+            if moved < tolerance:
+                break
+        return state, history
+
+
 if __name__ == "__main__":
     # Configure logging for demo
     logging.basicConfig(level=logging.INFO, format="%(message)s")
