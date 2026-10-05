@@ -1095,7 +1095,6 @@ class AESGCMProvider:
     @classmethod
     def _get_persist_path(cls) -> Any:
         """Get path for counter persistence file."""
-        import pathlib
 
         if cls._counters_persist_path:
             return pathlib.Path(cls._counters_persist_path)

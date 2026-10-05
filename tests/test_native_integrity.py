@@ -200,7 +200,6 @@ class TestSignerVerifierAgreement:
 
     def test_entry_framing_is_identical(self) -> None:
         """The two mirrors must absorb an entry into the same bytes."""
-        import hashlib
 
         from ama_cryptography import _build_sign, _self_test
 
@@ -259,7 +258,6 @@ class TestAllThreeDigestMirrorsAgree:
         above, so the three did agree transitively, but a test that says
         "all three" must fail when any one of them drifts, not two of them.
         """
-        import hashlib
 
         from ama_cryptography import _build_sign, _self_test
 
@@ -734,7 +732,6 @@ class TestPostKatVectors:
 
     def test_provenance_gate_passes_and_is_not_vacuous(self) -> None:
         """`build_post_kats.py --check` re-derives from the vendored sources."""
-        import subprocess
 
         tool = REPO_ROOT / "tools" / "build_post_kats.py"
         assert tool.is_file()

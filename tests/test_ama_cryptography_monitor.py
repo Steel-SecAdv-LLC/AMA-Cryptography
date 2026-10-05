@@ -981,7 +981,6 @@ class TestMonitorIntegration:
     def test_end_to_end_monitoring(self) -> None:
         """Test complete workflow with monitoring and baseline convergence."""
         # Import here to avoid circular dependency
-        import sys
         from pathlib import Path
 
         # Add parent directory to path

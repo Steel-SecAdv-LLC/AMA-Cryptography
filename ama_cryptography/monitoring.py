@@ -3591,7 +3591,6 @@ class RefactoringAnalyzer:
     def _initialize_import_baselines(self) -> None:
         """Record resolved filesystem paths of all imported crypto modules."""
         try:
-            import importlib
 
             for mod_name in _IMPORT_BASELINE_MODULES:
                 try:
@@ -3680,7 +3679,6 @@ class RefactoringAnalyzer:
         Returns:
             List of ImportHijackViolation for any modules resolving to different paths
         """
-        import importlib
 
         violations: List[ImportHijackViolation] = []
         for mod_name in _IMPORT_BASELINE_MODULES:

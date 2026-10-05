@@ -209,7 +209,6 @@ class TestNoHarnessOverheadInsideATimedThunk:
     """
 
     def test_no_nested_function_in_benchmarks_contains_an_import(self) -> None:
-        import ast
 
         benchmarks_dir = Path(__file__).resolve().parent.parent / "benchmarks"
         offenders: list[str] = []

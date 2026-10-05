@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-04 |
+| Last Updated | 2026-10-05 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,9 +19,9 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-10-04
+## [5.0.0] - 2026-10-05
 
-> **Released 2026-10-04.** Until 2026-09-24 this heading carried the date
+> **Released 2026-10-05.** Until 2026-09-24 this heading carried the date
 > 2026-09-10, on which no release was cut; dating it is part of cutting the
 > release, and `tools/check_release_state.py` refuses the tag while the
 > shipped documents still call the version unreleased. What follows is the
@@ -33,6 +33,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05
+
+- **A module imported twice, 26 sites (`ama_cryptography/monitoring.py`, `crypto_api.py`, `legacy_compat.py`, 11 test modules, the Wycheproof runner).** Low; CodeQL filed `py/repeated-import` as Notes #750/#751 against `monitoring.py`'s two function-local `import importlib` re-imports, and a tree-wide AST sweep by the same rule found 24 more of the class — each a plain, unaliased `import X` whose module the file already imports at top level, each a pure redundancy, each deleted. Seven aliased locals (`import os as _os`) bind a different name, are outside CodeQL's class, and were examined and left; local `from X import name` is frequently deliberate late binding and is out of scope. Because Note-severity CodeQL does not block CI, the class is now gated: `tests/test_import_hygiene.py` scans every tracked `.py` and refuses the exact shape, pinned by a planted duplicate (replanting `monitoring.py`'s own removed import fails it) and a negative control for the aliased and `from` forms. The release date moves to 2026-10-05 across the five release-state documents and the relocation suite's constants, since this merge, not the 10-04 one, is now the last before the tag.
 
 ### Re-investigation of the branch against `main` and the #394 ledger; the SLH-DSA keygens stop minting an interim secret-key copy — 2026-10-03
 
@@ -8723,7 +8727,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.0.0 | 2026-10-04 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
+| 5.0.0 | 2026-10-05 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
 | 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |

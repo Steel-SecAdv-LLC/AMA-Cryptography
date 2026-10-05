@@ -1401,7 +1401,6 @@ class TestRuntimeSeesWhatTheImportLoads:
 
 
 def _clean_env() -> dict[str, str]:
-    import os
 
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
