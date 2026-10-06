@@ -228,7 +228,10 @@ class TestCalibration:
         for _ in range(600):
             monitor.record_timing("op", rng.lognormvariate(-3.9, 0.22))
         generous = monitor._calibrated_score_threshold("op", 0.30)
-        monitor._calibrated_threshold.pop("op")  # bypass the cache between budgets
+        # No cache eviction: the budget is part of the cache key, so the
+        # second call must recompute on its own (the eviction this test used
+        # to perform was hiding exactly the stale-budget bug the key fixes —
+        # review finding, 2026-10-06).
         strict = monitor._calibrated_score_threshold("op", 0.01)
         assert generous is not None and strict is not None
         assert 0.0 < generous <= strict, (

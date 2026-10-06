@@ -39,7 +39,11 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     at module top level; a nested ``import`` repeating a binding the top
     level already creates; and a repeat among the direct statements of any
     one block (function, class, ``try``, ``if``, loop and ``with`` suites
-    alike).  Keying by binding preserves the load-bearing exemption by
+    alike) — the last a deliberate superset of the upstream query, whose
+    ``py/repeated-import`` requires the ORIGINAL import to be
+    module-scoped, while a verbatim same-list repeat inside one function
+    or block is equally dead code and is refused here on the same terms
+    as the dotted superset below.  Keying by binding preserves the load-bearing exemption by
     construction: ``import os as _os`` binds ``_os``, so a local plain
     ``import os`` beside it creates a different binding and is never
     flagged — measured, deleting it raises NameError.  Two deliberate edges:

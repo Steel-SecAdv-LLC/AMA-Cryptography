@@ -238,6 +238,37 @@ class TestReviewHardening:
             with pytest.raises(ValueError, match="omni_scalar"):
                 d.catalan_step([0.0], [1.0], omni_scalar=bad)
 
+    def test_a_subnormal_contraction_factor_is_refused(self) -> None:
+        """PIN (review finding): operand positivity does not survive floating
+        point — alpha = equity_gain = 1e-308 underflows the product to 0,
+        and a product below ~1.1e-16 rounds 1 - gain back to exactly 1, so
+        every step is a no-op that "converges" wherever it started.  The
+        representable contraction factor is validated."""
+        with pytest.raises(ValueError, match="resolution"):
+            AvaDescent(alpha=1e-308, equity_gain=1e-308)
+        with pytest.raises(ValueError, match="resolution"):
+            AvaDescent(alpha=1e-308, equity_gain=1.0)
+        assert AvaDescent(alpha=1e-6, equity_gain=1.0).alpha == 1e-6
+
+    def test_variance_overflow_is_a_defined_refusal(self) -> None:
+        """PIN (review finding): [1e200, -1e200] leaked an incidental
+        OverflowError from the squared deviation ahead of every defined
+        refusal; it is now a named ValueError."""
+        d = AvaDescent()
+        with pytest.raises(ValueError, match="variance overflowed"):
+            d.variance_adapted_step([1e200, -1e200], [0.0, 0.0])
+        with pytest.raises(ValueError, match="variance overflowed"):
+            d.descend([0.0, 0.0], [1e200, -1e200], mode="variance")
+
+    def test_catalan_combines_scalar_gains_before_the_gradient(self) -> None:
+        """PIN (review finding): alpha * gradient first overflowed for a
+        huge alpha whose product with the tiny equity gain was fine; the
+        scalar coefficient now multiplies first, so the constructor-approved
+        combined gain is what touches the gradient."""
+        d = AvaDescent(alpha=1e308, equity_gain=1e-308)
+        out = d.catalan_step([0.0], [2.0])
+        assert all(math.isfinite(x) for x in out.tolist()), out.tolist()
+
     def test_momentum_outside_its_stability_bound_is_refused(self) -> None:
         """PIN (review finding): the constructor bounds alpha * equity_gain,
         but momentum applies alpha alone — alpha=100 with equity_gain=0.01

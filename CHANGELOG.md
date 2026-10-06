@@ -36,7 +36,32 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05/06
 
-- **3R resonance gains a split-line channel, adopted from Mercury Agent's
+- **Confirmation review round: four runtime defects at the floating-point
+  extremes and a calibration cache-key bug, each fixed and
+  mutation-pinned; six records aligned (2026-10-06).** The defects, all
+  from review of the preceding pushes: `AvaDescent`'s constructor
+  validated operand positivity but not the REPRESENTABLE contraction
+  factor (`alpha = equity_gain = 1e-308` underflows the product to 0, and
+  any product below ~1.1e-16 rounds `1 - gain` back to exactly 1 — every
+  step a no-op "converging" wherever it started); the variance helper
+  raised an incidental `OverflowError` for `[1e200, -1e200]` ahead of
+  every defined refusal (squares now multiply to inf and a named
+  ValueError refuses); `catalan_step` multiplied `alpha` into the gradient
+  before the equity gain, overflowing for a huge alpha whose
+  constructor-approved product was fine (the scalar coefficient now
+  combines first); and `_calibrated_score_threshold`'s cache held only
+  `(sample_total, threshold)`, so a second call under a different
+  caller-supplied `alarm_budget` inside the recompute interval was served
+  the first budget's bar (the budget joins the cache key, as the ratio
+  threshold's cache already did, and the test that papered over it with a
+  manual eviction now exercises the key). Records corrected per §6.6: the
+  original import-gate entry above now states the final binding-keyed
+  policy and its two documented supersets; the gate's same-list scan is
+  documented as a deliberate superset of the upstream module-scope
+  requirement; `wiki/Security-Model.md`'s support matrix rolls with the
+  authoritative `SECURITY.md`; `detect_resonance`'s Returns documentation
+  carries the four split-line fields; and the two remaining "always"
+  claims for `history[-1]` are qualified for `max_steps=0`. adopted from Mercury Agent's
   3R and re-derived to this repository's evidence standard (2026-10-06).**
   `detect_resonance`'s Fisher g-test judges the single largest periodogram
   ordinate, so periodic energy split across two comparable spectral lines
@@ -185,7 +210,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **Pre-emptive review round, before the bots (same date).** Three measured additions. First, the new gate's own adversarial review found it covered one of CodeQL's three shapes: two plain top-level imports (the rule's canonical example) and a same-scope duplicate both evaded it, and an ALIASED top-level import wrongly counted as the earlier binding — a latent false positive whose "fix" would delete a load-bearing local import (measured: NameError). `duplicate_plain_imports` now flags all three shapes and counts only unaliased imports on both sides, with guarded (`try`/`if`) module-level imports never counted as the earlier binding; six unit pins plus the tree assertion, and three mutants (a planted top-level pair, a planted same-scope pair, the aliased guard dropped) each fail exactly their tests — the third also fails the tree assertion, which is the measurement that the tree really contains the load-bearing aliased pattern the guard protects. Second, `oss-fuzz/build.sh` and `tools/run_dudect.sh` — the two tracked scripts no shellcheck lane reads — carried six findings; the four `$CC $CFLAGS` word-splits are OSS-Fuzz's own contract and are now explicit `read -ra` argv arrays (split-equivalence probed; the exact rewritten compile and link lines executed against a real fuzz target and the probe binary runs; the script's full run is validated by the ClusterFuzzLite lane, since this container lacks OSS-Fuzz's `/src` layout and `fuzzer-no-link` runtime), and the two command-substitution quotings are behavior-identical. Both scripts are shellcheck-clean at style level. Third, three example docstrings instructed `pip install cryptography` — the third-party PyCA package — though nothing in the examples imports it (measured: `basic_usage.py` runs to completion with that import blocked); a library whose first invariant is zero external crypto dependencies does not tell its consumers to install one. The hints now name only what each example uses. Also executed this round, all clean: bandit and semgrep with their severity gates, the secret scan (1,623 files), full-scope `mypy --strict` (416 modules) with the scope gate, ctest 155/155, and a five-class note-level detector sweep (unused/redefined, constant-condition, import-shadowing, bare-except, mutable defaults) over the package and tools: zero findings.
 
-- **A module imported twice, 26 sites (`ama_cryptography/monitoring.py`, `crypto_api.py`, `legacy_compat.py`, 11 test modules, the Wycheproof runner).** Low; CodeQL filed `py/repeated-import` as Notes #750/#751 against `monitoring.py`'s two function-local `import importlib` re-imports, and a tree-wide AST sweep by the same rule found 24 more of the class — each a plain, unaliased `import X` whose module the file already imports at top level, each a pure redundancy, each deleted. Seven aliased locals (`import os as _os`) bind a different name, are outside CodeQL's class, and were examined and left; local `from X import name` is frequently deliberate late binding and is out of scope. Because Note-severity CodeQL does not block CI, the class is now gated: `tests/test_import_hygiene.py` scans every tracked `.py` and refuses the exact shape, pinned by a planted duplicate (replanting `monitoring.py`'s own removed import fails it) and a negative control for the aliased and `from` forms. The release date moved to 2026-10-05 across the five release-state documents and the relocation suite's constants when this entry was filed, and rolled once more to 2026-10-06 when the same pull request grew the 10-06 review round — the merge before the tag carries the date of its last validated push, per this entry's own rule.
+- **A module imported twice, 26 sites (`ama_cryptography/monitoring.py`, `crypto_api.py`, `legacy_compat.py`, 11 test modules, the Wycheproof runner).** Low; CodeQL filed `py/repeated-import` as Notes #750/#751 against `monitoring.py`'s two function-local `import importlib` re-imports, and a tree-wide AST sweep by the same rule found 24 more of the class — each a plain, unaliased `import X` whose module the file already imports at top level, each a pure redundancy, each deleted. Seven aliased locals (`import os as _os`) bind a different name than the plain top-level imports beside them and were examined and left (the final gate keys on bindings, so a VERBATIM repeated alias is in scope — see the review rounds below); local `from X import name` is frequently deliberate late binding and is out of scope. Because Note-severity CodeQL does not block CI, the class is now gated: `tests/test_import_hygiene.py` scans every tracked `.py` and refuses the class — in its final form keyed by the `(module, asname)` binding, with two documented deliberate supersets (verbatim dotted repeats and same-list repeats inside one function or block, which the upstream query's module-scope requirement leaves out) — pinned by a planted duplicate (replanting `monitoring.py`'s own removed import fails it) and a negative control for the aliased and `from` forms. The release date moved to 2026-10-05 across the five release-state documents and the relocation suite's constants when this entry was filed, and rolled once more to 2026-10-06 when the same pull request grew the 10-06 review round — the merge before the tag carries the date of its last validated push, per this entry's own rule.
 
 ### Re-investigation of the branch against `main` and the #394 ledger; the SLH-DSA keygens stop minting an interim secret-key copy — 2026-10-03
 

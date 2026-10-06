@@ -618,8 +618,9 @@ class AmaEquationEngine:
             ``final_state.tolist()``.
 
             ``convergence_history`` is the list of Lyapunov values, one per
-            *retained* step, so ``convergence_history[-1]`` is always
-            ``V(final_state)``.
+            *retained* step, so ``convergence_history[-1]`` is
+            ``V(final_state)`` whenever at least one step ran
+            (``max_steps=0`` returns an empty history).
 
         Stopping conditions, in the order they are tested each step:
 
@@ -787,10 +788,22 @@ class AvaDescent:
         for name, value in (("alpha", alpha), ("equity_gain", equity_gain)):
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a finite positive number, got {value!r}")
-        if alpha * equity_gain >= 2.0:
+        gain = alpha * equity_gain
+        if gain >= 2.0:
             raise ValueError(
                 f"alpha * equity_gain must stay below 2.0 for contraction; "
-                f"got {alpha} * {equity_gain} = {alpha * equity_gain}"
+                f"got {alpha} * {equity_gain} = {gain}"
+            )
+        if 1.0 - gain >= 1.0:
+            # Source-operand positivity does not survive floating point:
+            # alpha = equity_gain = 1e-308 underflows the product to 0, and
+            # a product below ~1.1e-16 rounds 1 - gain back to exactly 1,
+            # so every step is a no-op that "converges" wherever it started
+            # (review finding, 2026-10-06).  The REPRESENTABLE contraction
+            # factor is what is validated.
+            raise ValueError(
+                f"alpha * equity_gain = {gain} is below floating-point "
+                f"resolution: 1 - gain rounds to 1 and descent cannot progress"
             )
         self.alpha = float(alpha)
         self.equity_gain = float(equity_gain)
@@ -812,7 +825,22 @@ class AvaDescent:
     @staticmethod
     def _variance(v: Vec) -> float:
         m = mean(v)
-        return mean(asvec([(x - m) ** 2 for x in v.tolist()]))
+        # d * d, not d ** 2: Python's float power RAISES OverflowError past
+        # the range while multiplication yields inf, and inf is what the
+        # finiteness refusal below can see (review finding, 2026-10-06:
+        # [1e200, -1e200] leaked an incidental OverflowError ahead of every
+        # defined refusal in the class).
+        total = 0.0
+        for x in v.tolist():
+            d = x - m
+            total += d * d
+        var = total / len(v)
+        if not math.isfinite(var):
+            raise ValueError(
+                "variance overflowed the float range; variance-adapted "
+                "descent is undefined for inputs of this magnitude"
+            )
+        return var
 
     # -- the measured-convergent operators ---------------------------------
     def step(self, state: object, gradient: object) -> Vec:
@@ -886,10 +914,14 @@ class AvaDescent:
         return self._catalan_core(s, g, omni_scalar)
 
     def _catalan_core(self, s: Vec, g: Vec, omni_scalar: float) -> Vec:
+        # The scalar gains multiply FIRST: alpha * equity_gain is bounded
+        # below 2 by the constructor, so the combined coefficient is always
+        # representable, while alpha-times-gradient first overflowed for a
+        # huge alpha paired with a tiny equity gain whose product was fine
+        # (review finding, 2026-10-06).
+        coefficient = self.alpha * self.equity_gain * math.sqrt(2.0) * self.A20_WEIGHT
         catalan_gradient = g * self.CATALAN_CONSTANT
-        return s + self.alpha * (catalan_gradient + omni_scalar) * (
-            math.sqrt(2.0) * self.equity_gain * self.A20_WEIGHT
-        )
+        return s + (catalan_gradient + omni_scalar) * coefficient
 
     def select_alpha(self, gradient: object, variance: float, ethical_score: float) -> float:
         """The family's adaptive step-size table (Phase-3 selection).

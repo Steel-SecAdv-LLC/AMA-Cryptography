@@ -1578,7 +1578,7 @@ class ResonanceTimingMonitor:
         # quantile is recomputed every _THRESHOLD_RECOMPUTE_INTERVAL
         # observations instead of per call.
         self._score_history: Dict[str, Deque[float]] = {}
-        self._calibrated_threshold: Dict[str, Tuple[int, Optional[float]]] = {}
+        self._calibrated_threshold: Dict[str, Tuple[int, Optional[float], float]] = {}
         # Monotone per-operation count of every score ever ingested into
         # _score_history.  The recompute cadence must be driven by THIS and
         # never by len(_score_history): the history is a bounded deque, so
@@ -2013,7 +2013,17 @@ class ResonanceTimingMonitor:
         # window is the sample); total is WHEN to recompute.
         total = self._score_sample_total.get(operation, n)
         cached = self._calibrated_threshold.get(operation)
-        if cached is not None and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
+        # The budget is part of the cache identity: the entry used to hold
+        # only (sample_total, threshold), so a second call under a DIFFERENT
+        # alarm_budget inside the recompute interval was served the first
+        # budget's bar — and profiles are caller-extensible at runtime
+        # (review finding, 2026-10-06; _calibrated_ratio_threshold already
+        # keys its cache this way).
+        if (
+            cached is not None
+            and cached[2] == alarm_budget
+            and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL
+        ):
             return cached[1]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
@@ -2036,7 +2046,7 @@ class ResonanceTimingMonitor:
             # so the cap is inapplicable and the raw quantile governs, which
             # is the pre-guard behaviour, not a new failure mode.
             threshold = ordered[k]
-        self._calibrated_threshold[operation] = (total, threshold)
+        self._calibrated_threshold[operation] = (total, threshold, alarm_budget)
         return threshold
 
     def snapshot_baselines(self) -> Dict[str, Dict[str, float]]:
@@ -2296,6 +2306,13 @@ class ResonanceTimingMonitor:
                 - false_alarm_rate: The per-call rate that threshold targets
                 - scanned_bins: Number of periodogram ordinates examined
                 - has_resonance: Boolean flag (ratio > threshold_ratio)
+                - multiline_ratio: Sum of the top ``multiline_ordinates``
+                  ordinates over the mean (the split-line channel)
+                - multiline_threshold: The measured null bar
+                  ``has_multiline_resonance`` compares against
+                - multiline_ordinates: How many ordinates the channel sums (2)
+                - has_multiline_resonance: Boolean flag
+                  (multiline_ratio > multiline_threshold)
 
         Two properties this had to acquire before the flag meant anything.
 
