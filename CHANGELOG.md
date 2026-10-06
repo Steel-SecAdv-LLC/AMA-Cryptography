@@ -36,6 +36,45 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05
 
+- **3R point-recall loss root-caused and fixed at source: the calibrated
+  threshold could be captured by the anomalies it was calibrating against
+  (2026-10-06, same pull request).** `benchmarks/r3_efficacy.tsv` recorded
+  the shipped detector flagging isolated 10x outliers 82% of the time
+  against the trivial z-score baseline's 100%, and the README read it as
+  "for isolated outliers a z-score does better." Measured mechanism, on a
+  synthetic trace shaped exactly like the canonical host's (median
+  0.1236 ms, MAD 0.0028): anomalies injected on 1% of samples against the
+  1% alarm budget place ~1% of the score history at their own score level,
+  so the `(1 - budget)` order statistic lands inside the anomaly cluster —
+  the calibrated threshold climbed 2.7 → 49.0 toward the anomaly score
+  level of ~60 within 4,000 samples, and asymptotic recall tends to ~50%.
+  The comment defending the design ("a quantile over the trailing window is
+  robust to the alarm fraction itself") is measured false at contamination
+  rates near the budget and is corrected in place per §6.6. Fix:
+  `_calibrated_score_threshold` now caps the tail quantile at 4x a
+  contamination-immune lower order statistic (the `(1 - max(5b, 0.05))`
+  rank, unreachable by contamination below ~4%); clean heavy tails pass
+  untouched because every measured clean trace's quantile growth across
+  those ranks stays below ~2.5 (the repository's own Ed25519 evidence:
+  ~628 at a 1% budget, ~1073 at 0.1%), and no decision feeds back into the
+  estimate, so the tightening ratchet that motivated ingest-everything
+  cannot arise. Re-measured with the guard (deterministic probe): recall
+  1.000 at x1.5/x3/x10 including a 12,000-sample saturated run, threshold
+  stable at 8.4 vs the unguarded 49-and-climbing; all five
+  `detector_baseline_eval.py --gate` lanes pass with unchanged figures
+  (clean-FAR 0.0078, spike-ranking 0.987). The efficacy table was
+  re-measured end to end on real ML-DSA-65 sign timings (this host named in
+  the README note): isolated 10x outliers 100% (baseline 100%) at 0.2% FPR
+  (baseline 0.8%), x3 99.5%, bursts at 2x 99% (baseline 52%), steps at +5%
+  detected in 20 samples (baseline: never). Honestly retained: 1.5-2x
+  isolated outliers remain the z-score's territory — the guard caps
+  sensitivity at a multiple of the clean bulk, and buying that band back
+  would spend false-alarm budget the heavy-tail evidence says real hosts
+  cannot afford. The guard is mutation-pinned
+  (`tests/test_timing_detector_calibration.py`: the unguarded mutant fails
+  exactly the new test), README and `MONITORING.md` restate the measured
+  rule, and the README↔table pins hold.
+
 - **`AvaDescent` — the math layer's convergent descent mode (same date,
   same pull request).** The AvaEquation operator family (Andrew E. A.,
   2026) was ported whole onto `_numeric` in a sandbox and all seventeen

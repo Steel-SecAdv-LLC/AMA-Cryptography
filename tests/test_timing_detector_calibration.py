@@ -17,6 +17,7 @@ returns.
 
 from __future__ import annotations
 
+import math
 import random
 from pathlib import Path
 from typing import ClassVar
@@ -141,6 +142,43 @@ class TestCalibration:
             f"low={low_threshold} high={high_threshold} — the recompute "
             f"cadence is reading the bounded window's len() again"
         )
+
+    def test_contamination_at_the_budget_rate_cannot_capture_the_threshold(self) -> None:
+        """PIN (mutation-earned 2026-10-06): the contamination guard in
+        ``_calibrated_score_threshold``.
+
+        Anomalies arriving at the alarm-budget rate place ~budget of the
+        score history at their own score level, so the raw ``(1 - b)`` order
+        statistic lands inside the anomaly cluster and the threshold
+        converges onto the anomalies (measured unguarded on this stream:
+        threshold ~49 against an anomaly score level of ~60 by 4,000
+        samples, still climbing, with asymptotic recall tending to ~50% —
+        the loss ``benchmarks/r3_efficacy.tsv`` recorded against the trivial
+        baseline).  The guard caps the threshold at ``_TAIL_GUARD_RATIO``
+        times a contamination-immune lower order statistic; this drives a
+        long contaminated stream and requires the threshold to stay with
+        the clean bulk and the recall to stay high.  Fails against the
+        unguarded order statistic.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(394)  # noqa: S311 -- test stream, not key material (TDC-001)
+        inject = random.Random(777)  # noqa: S311 -- test stream, not key material (TDC-001)
+        n = 12000
+        trace = [0.1236 * math.exp(0.0337 * rng.gauss(0.0, 1.0)) for _ in range(n)]
+        injected = set(inject.sample(range(100, n), n // 100))
+        alarms = []
+        for i, x in enumerate(trace):
+            value = x * 3.0 if i in injected else x
+            alarms.append(monitor.record_timing("op", value) is not None)
+        recall = sum(1 for i in injected if alarms[i]) / len(injected)
+        threshold = monitor._calibrated_score_threshold("op", 0.01)
+        assert threshold is not None
+        # The x3 anomaly cluster scores ~60 robust sigmas on this trace
+        # shape; the clean q95 is ~2 and the guard ratio 4, so a guarded
+        # threshold stays an order of magnitude below the cluster.  The
+        # unguarded mutant crosses 15 long before the stream ends.
+        assert threshold < 15.0, f"threshold {threshold} was captured by the contamination"
+        assert recall >= 0.90, f"recall {recall} — the threshold absorbed the anomalies"
 
     def test_uncalibrated_severity_is_capped_at_warning(self) -> None:
         """Criticality claims a measured tail; before calibration a gross
@@ -479,8 +517,6 @@ class TestThePairwiseBarDoesNotDependOnArrivalOrder:
         and ``random.seed(n)`` seed the same algorithm identically, so the
         values — and the figures measured from them above — are unchanged.
         """
-        import math
-
         rng = random.Random(seed)  # noqa: S311 -- test stream, not key material (TDC-001)
         out: list[tuple[str, float]] = []
         for _ in range(records):

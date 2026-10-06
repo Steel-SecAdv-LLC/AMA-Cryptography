@@ -76,9 +76,12 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
    observation enters it
 3. Alarm when the score exceeds `max(threshold_sigma, calibrated)`, where
    `calibrated` is the empirical `(1 - alarm_budget)` quantile of recently
-   observed scores — the sigma floor governs on near-normal data, the
-   calibrated quantile on the heavy-tailed distributions real timings
-   exhibit
+   observed scores, capped against a contamination-immune lower order
+   statistic — the sigma floor governs on near-normal data, the calibrated
+   quantile on the heavy-tailed distributions real timings exhibit, and the
+   cap (measured 2026-10-06) keeps anomalies arriving at the budget rate
+   from dragging the quantile onto their own score level and halving
+   asymptotic recall
 4. Detect sustained regime changes with a two-sided sign CUSUM against a
    reference median locked after 200 observations — raised as edge-triggered
    *events* (alert once, escalate once, re-baseline after persistence), not

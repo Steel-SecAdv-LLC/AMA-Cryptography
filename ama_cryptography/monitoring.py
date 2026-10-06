@@ -1247,8 +1247,12 @@ class ResonanceTimingMonitor:
       ``|x - median| / (1.4826 * MAD)`` computed against the trailing window
       *before* the observation enters it.  The alarm threshold per operation
       is ``max(threshold_sigma, calibrated)`` where ``calibrated`` is the
-      empirical ``(1 - alarm_budget)`` quantile of recently observed clean
-      scores.  ``threshold_sigma`` is therefore a sensitivity floor that
+      empirical ``(1 - alarm_budget)`` quantile of recently observed scores,
+      capped against a contamination-immune lower order statistic
+      (2026-10-06, measured: anomalies arriving at the budget rate otherwise
+      drag the quantile onto their own score level and halve asymptotic
+      recall — see ``_calibrated_score_threshold``).  ``threshold_sigma``
+      is therefore a sensitivity floor that
       governs on well-behaved (near-normal) data, and the empirical quantile
       governs on the heavy-tailed distributions real timings exhibit — where
       any fixed Gaussian-calibrated constant is wrong by orders of magnitude
@@ -1378,6 +1382,18 @@ class ResonanceTimingMonitor:
     _SCORE_HISTORY_LEN: ClassVar[int] = 4096
     #: Recompute the cached calibrated threshold every N observations.
     _THRESHOLD_RECOMPUTE_INTERVAL: ClassVar[int] = 32
+    #: Contamination guard for the calibrated threshold (2026-10-06,
+    #: measured — see ``_calibrated_score_threshold``).  The tail quantile is
+    #: capped at ``_TAIL_GUARD_RATIO`` times the ``(1 - max(5b,
+    #: _TAIL_GUARD_FRACTION))`` quantile: the guard rank sits where
+    #: anomalies at rates up to ~4% of samples cannot reach, and the ratio
+    #: of 4 clears the heaviest measured clean tail's quantile growth
+    #: (~2.5 across the ranks involved, Ed25519 wall-clock evidence) by a
+    #: 1.6x margin.  Without the cap, anomalies injected at the budget rate
+    #: drag the ``(1 - b)`` order statistic onto their own score level and
+    #: halve asymptotic point recall.
+    _TAIL_GUARD_RATIO: ClassVar[float] = 4.0
+    _TAIL_GUARD_FRACTION: ClassVar[float] = 0.05
 
     # Two-sided SIGN CUSUM parameters for the sustained-shift path.  The
     # statistic accumulates sign(x - mu0), not a standardized magnitude:
@@ -1685,9 +1701,14 @@ class ResonanceTimingMonitor:
             # The observed score joins the calibration history AFTER the
             # decision, so a sample can never raise the threshold it is
             # judged against.  Calibration deliberately ingests every score
-            # (alarming ones included): a quantile over the trailing window
-            # is robust to the alarm fraction itself, and excluding flagged
-            # samples would create a ratchet that can only tighten.
+            # (alarming ones included), because excluding flagged samples
+            # would create a ratchet that can only tighten.  The sentence
+            # this comment used to carry — that a quantile over the trailing
+            # window "is robust to the alarm fraction itself" — was measured
+            # false on 2026-10-06 for anomaly rates near the budget (the
+            # (1-b) rank lands inside the anomaly cluster); robustness is
+            # provided in _calibrated_score_threshold by the contamination
+            # guard, not by the ingest policy.
             self._score_history[operation].append(point_verdict[2])
             self._score_sample_total[operation] = self._score_sample_total.get(operation, 0) + 1
 
@@ -1931,16 +1952,45 @@ class ResonanceTimingMonitor:
         return event
 
     def _calibrated_score_threshold(self, operation: str, alarm_budget: float) -> Optional[float]:
-        """Empirical ``(1 - alarm_budget)`` quantile of the operation's
-        trailing robust scores, or ``None`` until enough scores exist.
+        """Contamination-guarded empirical ``(1 - alarm_budget)`` quantile of
+        the operation's trailing robust scores, or ``None`` until enough
+        scores exist.
 
         Activation requires ``max(100, ceil(1/alarm_budget))`` observed
         scores: estimating the (1 - b) tail from fewer than 1/b samples is
         extrapolation, and until then the ``threshold_sigma`` floor governs
-        alone (the documented warmup posture).  The quantile is the
+        alone (the documented warmup posture).  The tail quantile is the
         conservative order statistic ``ceil((1 - b) * (n + 1))`` and is
         recomputed every ``_THRESHOLD_RECOMPUTE_INTERVAL`` observations,
         cached in between.
+
+        The guard (2026-10-06, measured): the raw ``(1 - b)`` order statistic
+        is NOT robust to anomalies at a rate near the budget itself.  With
+        anomalies injected on 1% of samples against a 1% budget, the rank
+        falls inside the anomaly cluster, so the threshold converges onto the
+        anomaly scores and asymptotic recall tends to ~50% — measured on a
+        trace shaped like the canonical host's (median 0.1236 ms, MAD 0.0028):
+        the calibrated threshold climbed 2.7 -> 49.0 toward the x3 anomaly
+        score level of ~60, and ``benchmarks/r3_efficacy.tsv`` recorded the
+        resulting point-recall loss against the trivial baseline.  The
+        returned threshold is therefore capped at
+        ``_TAIL_GUARD_RATIO * q_guard`` where ``q_guard`` is the
+        ``(1 - max(5b, 0.05))`` quantile — an order statistic at least 4-5%
+        of the window away from the top, which contamination at rates up to
+        ~4% cannot reach.  Clean heavy tails pass the cap untouched: measured
+        quantile ratios on the heaviest clean trace in the repository's
+        evidence (Ed25519 wall-clock, ``benchmarks/detector_baseline_eval.py``:
+        a 1% budget needs ~628 and 0.1% ~1073) put the tail's growth near
+        1.7 per tenfold tail-probability decade, bounding every relevant
+        ``q_tail / q_guard`` below ~2.5, against the ratio of 4 allowed here.
+        A clean distribution would need a quantile ratio no measured trace
+        exhibits before the cap binds, and when it binds the direction is
+        MORE alarms, which the budget-monotonicity and clean-FAR gates in
+        ``benchmarks/detector_baseline_eval.py`` bound on the streams they
+        pin.  No decision feeds back into the estimate — both ranks are plain
+        order statistics of the same ingest-everything window, so the
+        tightening ratchet that excluding flagged scores would create cannot
+        arise here.
         """
         history = self._score_history.get(operation)
         if history is None:
@@ -1963,7 +2013,9 @@ class ResonanceTimingMonitor:
             return cached[1]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
-        threshold = ordered[k]
+        guard_tail = max(5.0 * alarm_budget, self._TAIL_GUARD_FRACTION)
+        k_guard = min(n - 1, max(0, math.ceil((1.0 - guard_tail) * (n + 1)) - 1))
+        threshold = min(ordered[k], self._TAIL_GUARD_RATIO * ordered[k_guard])
         self._calibrated_threshold[operation] = (total, threshold)
         return threshold
 
