@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""No module is plainly imported twice: once at top level and again inside a scope.
+"""No import binding is created twice where the second is dead code.
 
 CodeQL filed its ``py/repeated-import`` Note twice against
 ``ama_cryptography/monitoring.py`` (alerts #750/#751, 2026-10-05): ``import
@@ -10,12 +10,20 @@ rule found 26 such sites across the tree; every one was a pure redundancy and
 was deleted.  CodeQL's Note severity does not block CI, so without this test
 the class could accumulate again unseen.
 
-Scope matches the measured defect class exactly: a function-local ``import X``
-(no alias) whose ``X`` the module already imports at top level.  An ALIASED
-local re-import (``import os as _os``) binds a different name, is not in
-CodeQL's class, and seven such sites were examined and left; a local
-``from X import name`` is frequently deliberate late binding (a monkeypatch
-seam, or a fresh read of a rebindable module attribute) and is out of scope.
+The gate's final scope (hardened across the review rounds, each refinement
+mutation-pinned): comparisons are keyed on the ``(module, asname)`` BINDING
+an import creates, the way the upstream query compares statements — so a
+verbatim repeated alias (``import os as _os`` twice) is in scope, while a
+plain local ``import os`` beside an aliased top-level import creates a
+different binding and is load-bearing (measured: deleting it raises
+NameError).  Two documented deliberate supersets go beyond the upstream
+query: verbatim repeated dotted imports, and same-list repeats inside one
+function or block (the upstream rule requires the original import to be
+module-scoped).  Two measured exemptions: a module-level import guarded by
+``try``/``if`` is a deliberate late-binding seam (this tree carries the
+pattern at ``crypto_api.py``'s ``import fcntl`` and CodeQL has never filed
+against it), and a class-suite import binds a class attribute that deleting
+the statement would remove.
 """
 
 from __future__ import annotations

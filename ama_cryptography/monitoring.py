@@ -2516,11 +2516,26 @@ class ResonanceTimingMonitor:
         seed = 0x3C0 + m
         rng = random.Random(seed)  # noqa: S311 -- fixed-seed null bar, not key material (RTM-001)
         trials = cls._MULTILINE_NULL_TRIALS
-        j = cls.MULTILINE_ORDINATES
         stats = []
         for _ in range(trials):
-            draw = [rng.expovariate(1.0) for _ in range(m)]
-            stats.append(cls._top_ordinates_ratio(draw, j))
+            # One pass per trial: total plus the two largest, no materialised
+            # draw list and no per-trial sort.  At the largest advertised
+            # window (10,000 samples -> 8,192 scanned bins) the sorted form
+            # performed 4,000 full 8,192-element sorts before first return
+            # (review finding, 2026-10-06); the draws themselves are the
+            # irreducible cost and run once per spectrum size per process.
+            total = 0.0
+            top1 = 0.0
+            top2 = 0.0
+            for _i in range(m):
+                x = rng.expovariate(1.0)
+                total += x
+                if x > top1:
+                    top2 = top1
+                    top1 = x
+                elif x > top2:
+                    top2 = x
+            stats.append((top1 + top2) / (total / m) if total > 0.0 else 0.0)
         stats.sort()
         rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
         threshold = stats[rank]

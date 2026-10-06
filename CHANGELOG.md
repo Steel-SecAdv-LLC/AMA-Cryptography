@@ -36,6 +36,30 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05/06
 
+- **Pre-merge vet: CodeQL #753 satisfied by restructure, output-side
+  overflow refused on every public operator, two more OverflowError leak
+  paths converted to the named refusal, the null derivation made one-pass,
+  and the gate's module contract restated (2026-10-06).** CodeQL read the
+  representability refusal (``1.0 - gain >= 1.0``) as always-false — true
+  in real arithmetic, false in floats, and the mutation-pinned test drives
+  the branch — so per §5 the condition is restated as the decidable
+  constant comparison ``gain < sys.float_info.epsilon`` with identical
+  protective semantics (a shade conservative: gains progressing at most
+  eps per step are refused as indistinguishable from stuck). Input
+  finiteness does not survive the arithmetic: ``step([1e308], [1e308])``
+  overflowed to inf from validated operands, so every public operator now
+  validates its RESULT through one shared helper; ``_numeric.mean``'s
+  fsum raised "intermediate overflow" for ``[1e308, 1e308]`` ahead of the
+  variance refusal, and ``Vec.__pow__`` raised past the range (1e200²)
+  instead of yielding inf, bypassing descend's guard — both now feed the
+  API's named ValueError. Each fix is mutation-pinned. The split-line
+  null derivation tracks total and top-two in one pass per trial instead
+  of 4,000 full sorts (at the largest advertised window, 8,192-element
+  sorts dominated the one-time cost; the seeded draws are unchanged, so
+  the bars remain byte-reproducible). The import gate's module docstring
+  now states the final binding-keyed scope, its two documented supersets
+  and its two measured exemptions, matching the checker and its tests.
+
 - **Confirmation review round: four runtime defects at the floating-point
   extremes and a calibration cache-key bug, each fixed and
   mutation-pinned; six records aligned (2026-10-06).** The defects, all

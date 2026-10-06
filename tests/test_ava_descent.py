@@ -269,6 +269,32 @@ class TestReviewHardening:
         out = d.catalan_step([0.0], [2.0])
         assert all(math.isfinite(x) for x in out.tolist()), out.tolist()
 
+    def test_an_overflowing_result_is_refused_on_every_public_operator(self) -> None:
+        """PIN (review finding): input finiteness does not survive the
+        arithmetic — step([1e308], [1e308]) overflowed to inf from finite,
+        validated operands.  Every public operator validates its result."""
+        d = AvaDescent(alpha=1.7, equity_gain=1.0)
+        with pytest.raises(ValueError, match="overflowed the finite"):
+            d.step([1e308], [1e308])
+        with pytest.raises(ValueError, match="overflowed the finite"):
+            d.catalan_step([1e308], [1e308])
+        with pytest.raises(ValueError, match="overflowed the finite"):
+            AvaDescent().momentum_step([1.7e308], [1.7e308], [1.7e308], beta=0.0)
+
+    def test_fsum_mean_overflow_is_the_named_refusal(self) -> None:
+        """PIN (review finding): _numeric.mean sums with math.fsum, which
+        raises 'intermediate overflow' for [1e308, 1e308] before the
+        variance check could run; it is now the API's named ValueError."""
+        with pytest.raises(ValueError, match="variance overflowed"):
+            AvaDescent().variance_adapted_step([1e308, 1e308], [0.0, 0.0])
+
+    def test_lyapunov_square_overflow_in_descend_is_the_named_refusal(self) -> None:
+        """PIN (review finding): Vec.__pow__ raises past the float range
+        (1e200 ** 2) instead of yielding inf, bypassing descend's guard;
+        the square's overflow now feeds the same named refusal."""
+        with pytest.raises(ValueError, match="descend overflowed"):
+            AvaDescent().descend([0.0], [1e200], max_steps=3, mode="equity")
+
     def test_momentum_outside_its_stability_bound_is_refused(self) -> None:
         """PIN (review finding): the constructor bounds alpha * equity_gain,
         but momentum applies alpha alone — alpha=100 with equity_gain=0.01

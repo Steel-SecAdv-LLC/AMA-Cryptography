@@ -41,6 +41,7 @@ AI Co-Architects:
 
 import logging
 import math
+import sys
 from typing import Dict, List, Optional, Tuple
 
 from ama_cryptography._numeric import (
@@ -794,16 +795,22 @@ class AvaDescent:
                 f"alpha * equity_gain must stay below 2.0 for contraction; "
                 f"got {alpha} * {equity_gain} = {gain}"
             )
-        if 1.0 - gain >= 1.0:
+        if gain < sys.float_info.epsilon:
             # Source-operand positivity does not survive floating point:
             # alpha = equity_gain = 1e-308 underflows the product to 0, and
-            # a product below ~1.1e-16 rounds 1 - gain back to exactly 1,
-            # so every step is a no-op that "converges" wherever it started
-            # (review finding, 2026-10-06).  The REPRESENTABLE contraction
-            # factor is what is validated.
+            # any product below about eps/2 rounds 1 - gain back to exactly
+            # 1, so every step is a no-op that "converges" wherever it
+            # started (review finding, 2026-10-06).  The bar is one ulp of
+            # 1.0 — a shade conservative (gains in (eps/2, eps) progress,
+            # at most eps per step, which is indistinguishable from stuck)
+            # and stated as a plain constant comparison because the exact
+            # rounds-to-one test (``1.0 - gain >= 1.0``) is unprovable in
+            # real arithmetic and CodeQL alert #753 read it as always
+            # false; the mutation-pinned test drives both refused
+            # constructions either way.
             raise ValueError(
                 f"alpha * equity_gain = {gain} is below floating-point "
-                f"resolution: 1 - gain rounds to 1 and descent cannot progress"
+                f"resolution (< {sys.float_info.epsilon}): descent cannot progress"
             )
         self.alpha = float(alpha)
         self.equity_gain = float(equity_gain)
@@ -823,8 +830,32 @@ class AvaDescent:
         return s, g
 
     @staticmethod
+    def _require_finite_result(vec: Vec, where: str) -> Vec:
+        """Refuse a non-finite operator RESULT with the API's named error.
+
+        Input finiteness does not survive floating-point arithmetic: with
+        the default gains, ``step([1e308], [1e308])`` overflows to inf from
+        finite, validated operands (review finding, 2026-10-06).  Every
+        public operator passes its result through here, so the finite
+        contract fails as a ValueError rather than publishing inf or nan.
+        """
+        if any(not math.isfinite(x) for x in vec.tolist()):
+            raise ValueError(f"{where}: the result overflowed the finite float range")
+        return vec
+
+    @staticmethod
     def _variance(v: Vec) -> float:
-        m = mean(v)
+        try:
+            m = mean(v)
+        except OverflowError:
+            # _numeric.mean sums with math.fsum, which raises
+            # "intermediate overflow" for finite inputs like [1e308, 1e308]
+            # before the finiteness refusal below can run (review finding,
+            # 2026-10-06).
+            raise ValueError(
+                "variance overflowed the float range; variance-adapted "
+                "descent is undefined for inputs of this magnitude"
+            ) from None
         # d * d, not d ** 2: Python's float power RAISES OverflowError past
         # the range while multiplication yields inf, and inf is what the
         # finiteness refusal below can see (review finding, 2026-10-06:
@@ -847,7 +878,7 @@ class AvaDescent:
         """One multiplicative-equity descent step:
         ``state + alpha * equity_gain * gradient``."""
         s, g = self._coerce_pair(state, gradient, "step")
-        return self._step_core(s, g)
+        return self._require_finite_result(self._step_core(s, g), "step")
 
     def _step_core(self, s: Vec, g: Vec) -> Vec:
         return s + self.alpha * self.equity_gain * g
@@ -856,7 +887,9 @@ class AvaDescent:
         """Descent step damped by state variance:
         effective step size ``alpha * equity_gain / (1 + Var(state))``."""
         s, g = self._coerce_pair(state, gradient, "variance_adapted_step")
-        return self._variance_adapted_core(s, g)
+        return self._require_finite_result(
+            self._variance_adapted_core(s, g), "variance_adapted_step"
+        )
 
     def _variance_adapted_core(self, s: Vec, g: Vec) -> Vec:
         effective = self.alpha * self.equity_gain / (1.0 + self._variance(s))
@@ -890,7 +923,11 @@ class AvaDescent:
             raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
         if any(not math.isfinite(x) for x in v.tolist()):
             raise ValueError("momentum_step: velocity holds a non-finite component")
-        return self._momentum_core(s, g, v, beta)
+        nxt, velocity_next = self._momentum_core(s, g, v, beta)
+        return (
+            self._require_finite_result(nxt, "momentum_step"),
+            self._require_finite_result(velocity_next, "momentum_step velocity"),
+        )
 
     def _momentum_core(self, s: Vec, g: Vec, v: Vec, beta: float) -> Tuple[Vec, Vec]:
         velocity_next = beta * v + (1.0 - beta) * g
@@ -911,7 +948,7 @@ class AvaDescent:
         if not math.isfinite(omni_scalar):
             raise ValueError(f"omni_scalar must be finite, got {omni_scalar}")
         s, g = self._coerce_pair(state, gradient, "catalan_step")
-        return self._catalan_core(s, g, omni_scalar)
+        return self._require_finite_result(self._catalan_core(s, g, omni_scalar), "catalan_step")
 
     def _catalan_core(self, s: Vec, g: Vec, omni_scalar: float) -> Vec:
         # The scalar gains multiply FIRST: alpha * equity_gain is bounded
@@ -1015,7 +1052,13 @@ class AvaDescent:
                 nxt = state + alpha * gradient
             moved = norm(nxt - state)
             state = nxt
-            value = lyapunov_function(state, tgt)
+            try:
+                value = lyapunov_function(state, tgt)
+            except OverflowError:
+                # Vec.__pow__ raises past the float range (1e200 ** 2)
+                # instead of yielding inf, which would bypass the refusal
+                # below (review finding, 2026-10-06).
+                value = math.inf
             if not math.isfinite(value):
                 # Finite operands are not closed under floating-point
                 # arithmetic: descend([1e308], [-1e308]) passes entry
