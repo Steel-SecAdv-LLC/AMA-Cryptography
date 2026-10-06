@@ -150,9 +150,7 @@ class TestEngineWiring:
         from ama_cryptography.double_helix_engine import AmaEquationEngine
 
         eng = AmaEquationEngine(state_dim=DIM, random_seed=42)
-        final, history = eng.converge(
-            zeros(DIM), max_steps=200, tolerance=1e-10, method="descent"
-        )
+        final, history = eng.converge(zeros(DIM), max_steps=200, tolerance=1e-10, method="descent")
         distance = math.sqrt(
             sum((a - b) ** 2 for a, b in zip(final.tolist(), eng.target_state.tolist()))
         )

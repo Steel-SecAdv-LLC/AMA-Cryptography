@@ -46,8 +46,18 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     found: set[tuple[int, str]] = set()
     top_seen = _scan_direct_imports(tree.body, found)
     for walked in ast.walk(tree):
-        if isinstance(walked, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            _scan_direct_imports(walked.body, found)
+        # Same-list repeats are flagged in EVERY statement list the module
+        # holds — function, class, try, if, loop and with bodies alike: a
+        # pair inside one ``try`` body is as much a repeat as a pair at top
+        # level, and scanning only function/class bodies left that corner of
+        # the class open (found in review, 2026-10-06).  Scanning each list
+        # independently keeps the guarded-import semantics: a ``try``-guarded
+        # module-level import still never joins ``top_seen``, so a later
+        # retry of it is still not counted.
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(walked, field, None)
+            if isinstance(block, list) and block is not tree.body:
+                _scan_direct_imports(block, found)
         if id(walked) in top_ids or not isinstance(walked, ast.Import):
             continue
         for alias in walked.names:
@@ -112,6 +122,14 @@ def test_a_guarded_top_import_with_a_local_retry_is_not_counted() -> None:
     assert duplicate_plain_imports(source) == []
 
 
+def test_a_same_block_duplicate_inside_try_or_if_is_found() -> None:
+    source = (
+        "try:\n    import os\n    import os\nexcept ImportError:\n    pass\n\n"
+        "if True:\n    import sys\n    import sys\n"
+    )
+    assert duplicate_plain_imports(source) == [(3, "os"), (9, "sys")]
+
+
 def test_the_tree_carries_no_duplicate_plain_import() -> None:
     tracked = subprocess.run(
         ["git", "ls-files", "*.py"],
@@ -119,7 +137,7 @@ def test_the_tree_carries_no_duplicate_plain_import() -> None:
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.split()
+    ).stdout.splitlines()
     assert len(tracked) > 300, "scope collapsed"
     offenders = [
         f"{name}:{lineno}: import {module}"

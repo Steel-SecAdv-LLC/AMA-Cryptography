@@ -2013,9 +2013,25 @@ class ResonanceTimingMonitor:
             return cached[1]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
-        guard_tail = max(5.0 * alarm_budget, self._TAIL_GUARD_FRACTION)
+        # The guard rank must stay a tail statistic: 5b uncapped crosses 1.0
+        # for budgets above 0.2 (the profile dict is caller-extensible), which
+        # would degenerate k_guard to the window MINIMUM and cap the threshold
+        # at 4x the smallest score ever seen.  Clamped at the median — for
+        # budgets that large the (1 - b) rank itself sits below it anyway.
+        guard_tail = min(max(5.0 * alarm_budget, self._TAIL_GUARD_FRACTION), 0.5)
         k_guard = min(n - 1, max(0, math.ceil((1.0 - guard_tail) * (n + 1)) - 1))
-        threshold = min(ordered[k], self._TAIL_GUARD_RATIO * ordered[k_guard])
+        guard_base = ordered[k_guard]
+        if guard_base > 0.0:
+            threshold = min(ordered[k], self._TAIL_GUARD_RATIO * guard_base)
+        else:
+            # Degenerate scale: >= guard_tail of the window scored exactly 0
+            # (a quantized or strongly bimodal bulk where most samples equal
+            # the trailing median).  A zero guard carries no tail information
+            # — capping at 4 * 0 would collapse the bar to the sigma floor
+            # and spend false alarms on every legitimate slow-path sample —
+            # so the cap is inapplicable and the raw quantile governs, which
+            # is the pre-guard behaviour, not a new failure mode.
+            threshold = ordered[k]
         self._calibrated_threshold[operation] = (total, threshold)
         return threshold
 

@@ -171,7 +171,12 @@ class TestCalibration:
             value = x * 3.0 if i in injected else x
             alarms.append(monitor.record_timing("op", value) is not None)
         recall = sum(1 for i in injected if alarms[i]) / len(injected)
-        threshold = monitor._calibrated_score_threshold("op", 0.01)
+        # Read the OPERATIONAL cache — the threshold the alarms above were
+        # actually judged against — rather than calling the method with a
+        # literal budget: the cache is computed under the monitor's own
+        # profile budget, and a literal that drifted from it would make this
+        # assertion measure a threshold no decision used.
+        threshold = monitor._calibrated_threshold["op"][1]
         assert threshold is not None
         # The x3 anomaly cluster scores ~60 robust sigmas on this trace
         # shape; the clean q95 is ~2 and the guard ratio 4, so a guarded
@@ -179,6 +184,57 @@ class TestCalibration:
         # unguarded mutant crosses 15 long before the stream ends.
         assert threshold < 15.0, f"threshold {threshold} was captured by the contamination"
         assert recall >= 0.90, f"recall {recall} — the threshold absorbed the anomalies"
+
+    def test_a_quantized_bulk_does_not_collapse_the_guarded_threshold(self) -> None:
+        """Degenerate-scale behaviour of the contamination guard, pinned.
+
+        On a coarse-timer or strongly bimodal operation most samples equal
+        the trailing median, so most robust scores are exactly 0 and the
+        guard's lower order statistic is 0.  A cap of ``4 * 0`` would
+        collapse the bar to the sigma floor and alarm on every legitimate
+        slow-path sample; the guard must instead stand aside and let the raw
+        ``(1 - b)`` quantile govern.  This drives a 98%-constant /
+        2%-slow-path stream — the slow path must stay UNDER the 5% guard
+        fraction, or the guard statistic itself lands in the slow cluster
+        and the zero branch is never reached (the first version of this test
+        used 10% and measured as constraining nothing: the always-cap mutant
+        passed it) — and requires the threshold to sit at the quantile of
+        the real score distribution, not at zero.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(1201)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for i in range(2000):
+            value = 0.1000 if i % 50 else 0.1000 * (1.5 + rng.random())
+            monitor.record_timing("op", value)
+        threshold = monitor._calibrated_score_threshold("op", 0.01)
+        assert threshold is not None
+        # The slow-path scores are hundreds of robust sigmas (MAD of the
+        # bulk is ~0, floored by the EWMA scale); a collapsed cap would
+        # report ~0 here and the sigma floor would govern every decision.
+        assert threshold > monitor.threshold, (
+            f"guarded threshold {threshold} collapsed below the sigma floor "
+            f"on a quantized bulk — the zero-guard branch is gone"
+        )
+
+    def test_an_oversized_alarm_budget_keeps_the_guard_rank_in_the_tail(self) -> None:
+        """RANGE: ``guard_tail`` is clamped at the median for budgets > 0.1.
+
+        An uncapped ``5 * budget`` crosses 1.0 at budgets above 0.2, which
+        would send the guard rank to the window minimum and cap the
+        threshold at four times the smallest score ever observed.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(77)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for _ in range(600):
+            monitor.record_timing("op", rng.lognormvariate(-3.9, 0.22))
+        generous = monitor._calibrated_score_threshold("op", 0.30)
+        monitor._calibrated_threshold.pop("op")  # bypass the cache between budgets
+        strict = monitor._calibrated_score_threshold("op", 0.01)
+        assert generous is not None and strict is not None
+        assert 0.0 < generous <= strict, (
+            f"budget 0.30 produced threshold {generous} vs {strict} at 0.01 — "
+            f"the guard rank left the tail"
+        )
 
     def test_uncalibrated_severity_is_capped_at_warning(self) -> None:
         """Criticality claims a measured tail; before calibration a gross

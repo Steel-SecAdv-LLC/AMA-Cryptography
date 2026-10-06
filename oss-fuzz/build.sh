@@ -41,14 +41,18 @@ cmake -B "$BUILD_DIR" \
     -DCMAKE_CXX_FLAGS="$CXXFLAGS"
 
 # OSS-Fuzz's contract delivers CC/CXX, their FLAGS, and LIB_FUZZING_ENGINE as
-# space-separated strings that must word-split into argv.  The split is made
+# IFS-separated strings that must word-split into argv.  The split is made
 # explicit here once, into arrays, so every later use is fully quoted
-# (shellcheck SC2086 at source, not by directive).
-read -ra CC_ARGV <<< "$CC"
-read -ra CXX_ARGV <<< "$CXX"
-read -ra CFLAGS_ARGV <<< "${CFLAGS:-}"
-read -ra CXXFLAGS_ARGV <<< "${CXXFLAGS:-}"
-read -ra ENGINE_ARGV <<< "${LIB_FUZZING_ENGINE:-}"
+# (shellcheck SC2086 at source, not by directive).  `read -d ''` so the split
+# covers newlines too: a plain `read -ra` stops at the first newline, and a
+# FLAGS value assembled across lines would silently lose every flag after it
+# — the unquoted expansion this replaces split on all of IFS.  read returns
+# nonzero at EOF-without-NUL under a herestring, hence `|| true` under -eu.
+read -rd '' -a CC_ARGV <<< "$CC" || true
+read -rd '' -a CXX_ARGV <<< "$CXX" || true
+read -rd '' -a CFLAGS_ARGV <<< "${CFLAGS:-}" || true
+read -rd '' -a CXXFLAGS_ARGV <<< "${CXXFLAGS:-}" || true
+read -rd '' -a ENGINE_ARGV <<< "${LIB_FUZZING_ENGINE:-}" || true
 
 cmake --build "$BUILD_DIR" -j"$(nproc)"
 

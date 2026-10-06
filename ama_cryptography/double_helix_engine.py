@@ -816,12 +816,18 @@ class AvaDescent:
         """One multiplicative-equity descent step:
         ``state + alpha * equity_gain * gradient``."""
         s, g = self._coerce_pair(state, gradient, "step")
+        return self._step_core(s, g)
+
+    def _step_core(self, s: Vec, g: Vec) -> Vec:
         return s + self.alpha * self.equity_gain * g
 
     def variance_adapted_step(self, state: object, gradient: object) -> Vec:
         """Descent step damped by state variance:
         effective step size ``alpha * equity_gain / (1 + Var(state))``."""
         s, g = self._coerce_pair(state, gradient, "variance_adapted_step")
+        return self._variance_adapted_core(s, g)
+
+    def _variance_adapted_core(self, s: Vec, g: Vec) -> Vec:
         effective = self.alpha * self.equity_gain / (1.0 + self._variance(s))
         return s + effective * g
 
@@ -836,6 +842,9 @@ class AvaDescent:
         v = asvec(velocity)
         if len(v) != len(s):
             raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
+        return self._momentum_core(s, g, v, beta)
+
+    def _momentum_core(self, s: Vec, g: Vec, v: Vec, beta: float) -> Tuple[Vec, Vec]:
         velocity_next = beta * v + (1.0 - beta) * g
         return s + self.alpha * velocity_next, velocity_next
 
@@ -843,6 +852,9 @@ class AvaDescent:
         """The family's Catalan rescale, kept verbatim:
         ``state + alpha * (G*gradient + omni) * sqrt(2) * equity_gain * A20``."""
         s, g = self._coerce_pair(state, gradient, "catalan_step")
+        return self._catalan_core(s, g, omni_scalar)
+
+    def _catalan_core(self, s: Vec, g: Vec, omni_scalar: float) -> Vec:
         catalan_gradient = g * self.CATALAN_CONSTANT
         return s + self.alpha * (catalan_gradient + omni_scalar) * (
             math.sqrt(2.0) * self.equity_gain * self.A20_WEIGHT
@@ -890,16 +902,23 @@ class AvaDescent:
         state = state.copy()
         velocity = zeros(len(state))
         history: List[float] = []
+        # The loop calls the operators' raw cores: both vectors were
+        # validated by the entry coercion above, the gradient is a difference
+        # of finite vectors on a contracting trajectory, and re-running the
+        # O(n) copy-and-scan validation on every one of up to max_steps
+        # iterations re-proves what the first pass established (review
+        # finding, 2026-10-06).  The public operator methods keep their
+        # validating contracts for external callers.
         for _ in range(max_steps):
             gradient = tgt - state
             if mode == "equity":
-                nxt = self.step(state, gradient)
+                nxt = self._step_core(state, gradient)
             elif mode == "variance":
-                nxt = self.variance_adapted_step(state, gradient)
+                nxt = self._variance_adapted_core(state, gradient)
             elif mode == "momentum":
-                nxt, velocity = self.momentum_step(state, gradient, velocity)
+                nxt, velocity = self._momentum_core(state, gradient, velocity, 0.9)
             elif mode == "catalan":
-                nxt = self.catalan_step(state, gradient)
+                nxt = self._catalan_core(state, gradient, 0.0)
             else:
                 alpha = self.select_alpha(gradient, self._variance(state), ethical_score=1.0)
                 nxt = state + alpha * gradient
