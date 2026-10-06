@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 import random
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 
@@ -253,6 +253,107 @@ class TestCalibration:
         anomaly = monitor.record_timing("op", 50.0)
         assert anomaly is not None
         assert anomaly.severity == "critical"
+
+
+class TestSplitLineResonance:
+    """The split-line (Siegel top-ordinates) channel of detect_resonance.
+
+    PIN test_the_channel_sums_exactly_two_ordinates — fails when the
+    channel is reduced to the single largest ordinate (j = 1, Fisher's
+    statistic again); earned by mutation after the first candidate pin
+    (the two-tone detection comparison) was measured NOT to kill that
+    mutant — under j = 1 the measured null bar lands at 8.32, below
+    Fisher's conservative analytic 8.76, so the comparison's margin came
+    from bar softness, not from the second ordinate.  The two-tone test
+    below therefore claims the measured capability, not the mechanism.
+    The first (rejected) harmonic-comb form of this channel is recorded
+    in ``detect_resonance``'s comment block."""
+
+    @staticmethod
+    def _detect(series: list[float]) -> dict[str, object]:
+        monitor = ResonanceTimingMonitor()
+        for value in series:
+            monitor.record_timing("op", value)
+        return monitor.detect_resonance("op")
+
+    def test_the_channel_sums_exactly_two_ordinates(self) -> None:
+        """PIN: ``multiline_ratio`` is the top-2 sum over the mean, strictly
+        above the top-1 ratio on any spectrum whose second ordinate is
+        positive — reduced to j = 1 the field collapses onto
+        ``resonance_ratio`` and both assertions fail."""
+        rng = random.Random(42000)  # noqa: S311 -- test stream, not key material (TDC-001)
+        series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(100)]
+        out = self._detect(series)
+        assert out["multiline_ordinates"] == 2
+        multiline = cast(float, out["multiline_ratio"])
+        single = cast(float, out["resonance_ratio"])
+        assert multiline > single + 0.5, out
+
+    def test_two_tone_energy_is_caught_where_the_single_bin_test_misses(self) -> None:
+        """Measured capability on two equal tones (not the mechanism pin —
+        see the class docstring)."""
+        fisher_hits = multiline_hits = 0
+        for seed in range(40):
+            rng = random.Random(42000 + seed)  # noqa: S311 -- test stream, not keys (TDC-001)
+            series = [
+                0.1
+                + 0.0022 * math.sin(2.0 * math.pi * i / 7.111)
+                + 0.0022 * math.sin(2.0 * math.pi * i / 11.3)
+                + 0.004 * rng.gauss(0.0, 1.0)
+                for i in range(100)
+            ]
+            out = self._detect(series)
+            fisher_hits += bool(out["has_resonance"])
+            multiline_hits += bool(out["has_multiline_resonance"])
+        # Measured on these exact seeds: Fisher 14/40, split-line 22/40.
+        # Deterministic arithmetic, so the floors cannot flake.
+        assert multiline_hits >= fisher_hits + 5, (fisher_hits, multiline_hits)
+        assert multiline_hits >= 16
+
+    def test_clean_streams_stay_inside_the_budget_order(self) -> None:
+        rng = random.Random(31)  # noqa: S311 -- test stream, not key material (TDC-001)
+        flags = 0
+        n = 150
+        for _ in range(n):
+            series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(100)]
+            flags += bool(self._detect(series)["has_multiline_resonance"])
+        # Budget 1%; the padded real pipeline measures ~1.2%, so 4% here
+        # (6 of 150) is the generous deterministic ceiling.
+        assert flags <= 6, flags
+
+    def test_the_null_bar_is_deterministic_and_cached(self) -> None:
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(64, None)
+        first = ResonanceTimingMonitor._multiline_threshold(64)
+        again = ResonanceTimingMonitor._multiline_threshold(64)
+        assert first == again
+        assert 10.0 < first < 16.0, first  # measured 12.78 at m=64
+
+    def test_posture_scores_the_multiline_excess(self) -> None:
+        from ama_cryptography.adaptive_posture import PostureEvaluator
+
+        ev = PostureEvaluator()
+        quiet = ev._score_resonance(
+            {
+                "op": {
+                    "resonance_ratio": 1.0,
+                    "threshold_ratio": 8.76,
+                    "multiline_ratio": 2.0,
+                    "multiline_threshold": 12.78,
+                }
+            }
+        )
+        loud = ev._score_resonance(
+            {
+                "op": {
+                    "resonance_ratio": 1.0,
+                    "threshold_ratio": 8.76,
+                    "multiline_ratio": 26.0,
+                    "multiline_threshold": 12.78,
+                }
+            }
+        )
+        assert quiet == 0.0
+        assert loud > 0.4
 
 
 class TestSustainedShift:

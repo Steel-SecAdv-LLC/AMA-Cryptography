@@ -36,6 +36,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05/06
 
+- **3R resonance gains a split-line channel, adopted from Mercury Agent's
+  3R and re-derived to this repository's evidence standard (2026-10-06).**
+  `detect_resonance`'s Fisher g-test judges the single largest periodogram
+  ordinate, so periodic energy split across two comparable spectral lines
+  — two interleaved periodic processes, or a fundamental with a strong
+  harmonic — can sit below the bar at both lines. Mercury Agent's 3R
+  Resonance engine scores harmonic-comb energy; the first adoption kept
+  that shape (mean power over every candidate fundamental's comb, null bar
+  measured per spectrum size) and **measured worse than Fisher on every
+  family tried** — a symmetric square wave has no even harmonics, so the
+  comb mean averaged dead bins (36.7% vs 76.7% at the strongest amplitude)
+  — and was replaced rather than tuned, recorded here per §6.6. The
+  shipped statistic is Siegel's generalisation: the sum of the top two
+  ordinates over the spectrum mean, judged against a seeded,
+  byte-reproducible measured null cached per spectrum size. Measured at
+  m = 64 through the real pipeline: two-tone detection 22/40 where Fisher
+  reads 14/40, single-line square wave 80% vs 76% (the third harmonic is
+  the margin), clean rate 1.17% against the channel's own 1% budget.
+  `adaptive_posture._score_resonance` scores the new channel's excess
+  against its reported bar by the same construction-consistency rule as
+  the existing ratio. Four tests; the mechanism PIN
+  (`test_the_channel_sums_exactly_two_ordinates`) was earned by mutation
+  after the first candidate pin — the two-tone detection comparison — was
+  measured NOT to kill the j = 1 mutant (the measured null bar for a
+  single ordinate lands at 8.32, below Fisher's conservative analytic
+  8.76, so that comparison's margin was bar softness, not the second
+  ordinate; the test now claims capability and the contract test claims
+  the mechanism).
+
 - **Fine-tooth review round over the whole pull request (2026-10-06).** A
   maximum-depth review of every change on this head surfaced nine findings;
   all nine are closed at source. The one that mattered most, per §6.6: the
