@@ -880,6 +880,8 @@ class AvaDescent:
         caller supplies it to steer the trajectory, knowing the settle
         point moves.
         """
+        if not math.isfinite(omni_scalar):
+            raise ValueError(f"omni_scalar must be finite, got {omni_scalar}")
         s, g = self._coerce_pair(state, gradient, "catalan_step")
         return self._catalan_core(s, g, omni_scalar)
 
@@ -981,7 +983,21 @@ class AvaDescent:
                 nxt = state + alpha * gradient
             moved = norm(nxt - state)
             state = nxt
-            history.append(lyapunov_function(state, tgt))
+            value = lyapunov_function(state, tgt)
+            if not math.isfinite(value):
+                # Finite operands are not closed under floating-point
+                # arithmetic: descend([1e308], [-1e308]) passes entry
+                # validation and overflows on the first gradient (review
+                # finding, 2026-10-06).  The Lyapunov value is already
+                # computed every step and squares propagate any inf or nan
+                # component into it, so this single O(1) comparison refuses
+                # the overflow instead of publishing a non-finite state the
+                # class contract forbids.
+                raise ValueError(
+                    "descend overflowed: the state left the finite range "
+                    "(operands near the float maximum overflow on subtraction)"
+                )
+            history.append(value)
             if moved < tolerance:
                 break
         return state, history

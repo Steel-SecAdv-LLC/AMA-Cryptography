@@ -328,6 +328,43 @@ class TestSplitLineResonance:
         assert first == again
         assert 10.0 < first < 16.0, first  # measured 12.78 at m=64
 
+    def test_a_multiline_only_verdict_reaches_report_and_posture(self) -> None:
+        """PIN (review finding): get_security_report admitted an analysis
+        only on has_resonance, so the exact case the split-line channel
+        exists for — its flag true, Fisher's false — never reached the
+        report or the posture evaluation.  Driven end to end on a
+        deterministic multiline-only verdict."""
+        from ama_cryptography.adaptive_posture import PostureEvaluator
+        from ama_cryptography.monitoring import AmaCryptographyMonitor
+
+        monitor = AmaCryptographyMonitor()
+        rng = random.Random(42013)  # noqa: S311 -- test stream, not key material (TDC-001)
+        found = None
+        for seed in range(60):
+            rng = random.Random(42000 + seed)  # noqa: S311 -- test stream, not keys (TDC-001)
+            series = [
+                0.1
+                + 0.0022 * math.sin(2.0 * math.pi * i / 7.111)
+                + 0.0022 * math.sin(2.0 * math.pi * i / 11.3)
+                + 0.004 * rng.gauss(0.0, 1.0)
+                for i in range(100)
+            ]
+            probe = ResonanceTimingMonitor()
+            for v in series:
+                probe.record_timing("op", v)
+            out = probe.detect_resonance("op")
+            if out["has_multiline_resonance"] and not out["has_resonance"]:
+                found = series
+                break
+        assert found is not None, "no multiline-only seed in range — scenario invalid"
+        for v in found:
+            monitor.timing.record_timing("op", v)
+        report = monitor.get_security_report()
+        analysis = report.get("resonance_analysis", {})
+        assert "op" in analysis, "multiline-only verdict dropped at report admission"
+        score = PostureEvaluator()._score_resonance(analysis)
+        assert score > 0.0, "multiline-only verdict reached the report but scored 0"
+
     def test_posture_scores_the_multiline_excess(self) -> None:
         from ama_cryptography.adaptive_posture import PostureEvaluator
 

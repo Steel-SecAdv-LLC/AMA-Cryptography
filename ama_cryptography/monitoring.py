@@ -4421,7 +4421,14 @@ class AmaCryptographyMonitor:
             monitored_operations = list(self.timing.timing_history)
         for operation in monitored_operations:
             resonance = self.timing.detect_resonance(operation)
-            if resonance.get("has_resonance"):
+            if resonance.get("has_resonance") or resonance.get("has_multiline_resonance"):
+                # Either channel admits the analysis: the split-line verdict
+                # exists precisely for the case where its flag is true and
+                # Fisher's is not, and an admission filter on has_resonance
+                # alone dropped exactly that case from the report and from
+                # the posture evaluation downstream (review finding,
+                # 2026-10-06 — the end-to-end path is pinned by
+                # test_a_multiline_only_verdict_reaches_report_and_posture).
                 resonance_data[operation] = resonance
 
         if resonance_data:

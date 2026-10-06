@@ -224,6 +224,20 @@ class TestReviewHardening:
         }
         assert d.ALPHA_MODES["aggressive"] not in outcomes
 
+    def test_overflow_at_the_float_extremes_is_refused_not_published(self) -> None:
+        """PIN (review finding): finite operands are not closed under
+        floating-point subtraction — descend([1e308], [-1e308]) passed
+        entry validation and returned ([inf], [inf]).  The per-step
+        Lyapunov value now refuses the overflow."""
+        with pytest.raises(ValueError, match="overflow"):
+            AvaDescent().descend([1e308], [-1e308], max_steps=5)
+
+    def test_a_non_finite_forcing_scalar_is_refused(self) -> None:
+        d = AvaDescent()
+        for bad in (math.inf, math.nan):
+            with pytest.raises(ValueError, match="omni_scalar"):
+                d.catalan_step([0.0], [1.0], omni_scalar=bad)
+
     def test_momentum_outside_its_stability_bound_is_refused(self) -> None:
         """PIN (review finding): the constructor bounds alpha * equity_gain,
         but momentum applies alpha alone — alpha=100 with equity_gain=0.01
