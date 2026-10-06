@@ -137,6 +137,49 @@ class TestRefusals:
             d.select_alpha([0.1], -0.5, 0.99)
 
 
+class TestEngineWiring:
+    """``AmaEquationEngine.converge(method="descent")`` — the descent mode
+    wired into the engine's public convergence API.
+
+    PIN test_descent_method_reaches_the_engines_own_target — fails when the
+    delegation is removed (the helix walk reaches this target on 0 of 5
+    seeds, measured 2026-10-05). PIN test_the_default_method_is_untouched —
+    fails if the default path changes behaviour."""
+
+    def test_descent_method_reaches_the_engines_own_target(self) -> None:
+        from ama_cryptography.double_helix_engine import AmaEquationEngine
+
+        eng = AmaEquationEngine(state_dim=DIM, random_seed=42)
+        final, history = eng.converge(
+            zeros(DIM), max_steps=200, tolerance=1e-10, method="descent"
+        )
+        distance = math.sqrt(
+            sum((a - b) ** 2 for a, b in zip(final.tolist(), eng.target_state.tolist()))
+        )
+        assert distance < 1e-6
+        assert history[-1] == pytest.approx(distance**2, abs=1e-12)
+
+    def test_the_default_method_is_untouched(self) -> None:
+        """Two same-seed engines, one called with the explicit default:
+        byte-identical walks, so the new parameter changed nothing."""
+        from ama_cryptography.double_helix_engine import AmaEquationEngine
+
+        a = AmaEquationEngine(state_dim=DIM, random_seed=42)
+        fa, ha = a.converge(zeros(DIM), max_steps=20)
+        b = AmaEquationEngine(state_dim=DIM, random_seed=42)
+        fb, hb = b.converge(zeros(DIM), max_steps=20, method="helix")
+        assert fa.tolist() == fb.tolist()
+        assert ha == hb
+
+    def test_an_unknown_method_is_refused(self) -> None:
+        from ama_cryptography.double_helix_engine import AmaEquationEngine
+
+        with pytest.raises(ValueError, match="unknown method"):
+            AmaEquationEngine(state_dim=DIM, random_seed=42).converge(
+                zeros(DIM), method="exponential"
+            )
+
+
 class TestPackageSurface:
     def test_ava_descent_is_a_package_export(self) -> None:
         import ama_cryptography

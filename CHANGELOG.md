@@ -65,6 +65,23 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   mutation (the additive-equity form, the equity gain dropped, the
   contraction bound deleted — each mutant fails exactly its named tests),
   the refusal tests RANGE.
+- **The descent mode wired into the engine's public convergence API (same
+  date, same pull request).** `AmaEquationEngine.converge` gains
+  `method="descent"`: the same signature and return contract, delegating to
+  `AvaDescent` toward the engine's own `target_state` — the call measured
+  reaching it on every run where the default helix walk reaches it on 0 of
+  5 seeds. The default (`method="helix"`) is byte-identical to before,
+  pinned by a same-seed comparison test; the delegation is pinned by
+  mutation (removing it fails exactly the reaching test); an unknown method
+  is refused. Three more tests, 26 in the module. One wiring candidate was
+  measured and **rejected**, recorded per §6.6: replacing the fixed 0.9/0.1
+  EMA gain in `adaptive_posture._score_lyapunov_stability`'s baseline
+  tracker with the family's variance-adapted gain moved detection mass by
+  −1% and false-positive mass by −6% on deterministic
+  noisy-stable→attack scenarios (first alarm identical in all three) — the
+  50-sample window already smooths V past the point where the variance
+  correction matters, so the scorer keeps its fixed gain rather than
+  carrying a decorative dependency.
 
 - **Pre-emptive review round, before the bots (same date).** Three measured additions. First, the new gate's own adversarial review found it covered one of CodeQL's three shapes: two plain top-level imports (the rule's canonical example) and a same-scope duplicate both evaded it, and an ALIASED top-level import wrongly counted as the earlier binding — a latent false positive whose "fix" would delete a load-bearing local import (measured: NameError). `duplicate_plain_imports` now flags all three shapes and counts only unaliased imports on both sides, with guarded (`try`/`if`) module-level imports never counted as the earlier binding; six unit pins plus the tree assertion, and three mutants (a planted top-level pair, a planted same-scope pair, the aliased guard dropped) each fail exactly their tests — the third also fails the tree assertion, which is the measurement that the tree really contains the load-bearing aliased pattern the guard protects. Second, `oss-fuzz/build.sh` and `tools/run_dudect.sh` — the two tracked scripts no shellcheck lane reads — carried six findings; the four `$CC $CFLAGS` word-splits are OSS-Fuzz's own contract and are now explicit `read -ra` argv arrays (split-equivalence probed; the exact rewritten compile and link lines executed against a real fuzz target and the probe binary runs; the script's full run is validated by the ClusterFuzzLite lane, since this container lacks OSS-Fuzz's `/src` layout and `fuzzer-no-link` runtime), and the two command-substitution quotings are behavior-identical. Both scripts are shellcheck-clean at style level. Third, three example docstrings instructed `pip install cryptography` — the third-party PyCA package — though nothing in the examples imports it (measured: `basic_usage.py` runs to completion with that import blocked); a library whose first invariant is zero external crypto dependencies does not tell its consumers to install one. The hints now name only what each example uses. Also executed this round, all clean: bandit and semgrep with their severity gates, the secret scan (1,623 files), full-scope `mypy --strict` (416 modules) with the scope gate, ctest 155/155, and a five-class note-level detector sweep (unused/redefined, constant-condition, import-shadowing, bare-except, mutable defaults) over the package and tools: zero findings.
 

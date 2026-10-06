@@ -579,6 +579,7 @@ class AmaEquationEngine:
         initial_state: object = None,
         max_steps: int = 100,
         tolerance: float = 1e-4,
+        method: str = "helix",
     ) -> Tuple[Vec, List[float]]:
         """
         Iteratively converge to stable state with Lyapunov monitoring.
@@ -592,6 +593,18 @@ class AmaEquationEngine:
             max_steps: Maximum iteration steps.  Must be >= 0; 0 returns the
                 initial state with an empty history.
             tolerance: Convergence threshold for state change.  Must be >= 0.
+            method: ``"helix"`` (default) walks the Double-Helix exploration
+                step exactly as every release before 5.0.0 did, stopping
+                conditions below included.  ``"descent"`` instead runs
+                :class:`AvaDescent`'s multiplicative-equity descent toward
+                ``self.target_state`` — the mode whose convergence is
+                measured rather than hoped for (2026-10-05 sandbox: with the
+                default GA weights the helix walk reached its target on 0 of
+                5 seeds, while descent reaches it on every run, fitted
+                Lyapunov decay 2.43 at the default gains).  The return
+                contract is unchanged in both: ``history[t]`` is
+                ``V(state_t)`` of a retained step, ``history[-1]`` is
+                ``V(final_state)``.
 
         Returns:
             ``(final_state, convergence_history)``.
@@ -656,6 +669,8 @@ class AmaEquationEngine:
            saturated at ``±10·φ³`` reported as converged — should pass
            ``max_steps`` explicitly and read the history.
         """
+        if method not in ("helix", "descent"):
+            raise ValueError(f"unknown method: {method!r} (expected 'helix' or 'descent')")
         if max_steps < 0:
             raise ValueError(f"max_steps must be >= 0, got {max_steps}")
         if tolerance < 0:
@@ -665,6 +680,11 @@ class AmaEquationEngine:
             state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
         else:
             state = self._coerce_state(initial_state, "converge(initial_state=...)").copy()
+
+        if method == "descent":
+            return AvaDescent().descend(
+                self.target_state, state, max_steps=max_steps, tolerance=tolerance
+            )
 
         history: List[float] = []
         V_previous: Optional[float] = None
