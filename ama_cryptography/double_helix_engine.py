@@ -603,8 +603,9 @@ class AmaEquationEngine:
                 5 seeds, while descent reaches it on every run, fitted
                 Lyapunov decay 2.43 at the default gains).  The return
                 contract is unchanged in both: ``history[t]`` is
-                ``V(state_t)`` of a retained step, ``history[-1]`` is
-                ``V(final_state)``.
+                ``V(state_t)`` of a retained step, and ``history[-1]`` is
+                ``V(final_state)`` whenever any step ran (``max_steps=0``
+                returns an empty history in both methods).
 
         Returns:
             ``(final_state, convergence_history)``.
@@ -799,6 +800,8 @@ class AvaDescent:
     def _coerce_pair(state: object, gradient: object, where: str) -> Tuple[Vec, Vec]:
         s = asvec(state)
         g = asvec(gradient)
+        if len(s) == 0:
+            raise ValueError(f"{where}: state is empty — descent over zero components is undefined")
         if len(s) != len(g):
             raise ValueError(f"{where}: state has {len(s)} components, gradient {len(g)}")
         for label, vec in (("state", s), ("gradient", g)):
@@ -838,10 +841,27 @@ class AvaDescent:
         ``next_velocity = beta * velocity + (1 - beta) * gradient``."""
         if not 0.0 <= beta < 1.0:
             raise ValueError(f"beta must be in [0, 1), got {beta}")
+        if self.alpha * (1.0 - beta) >= 2.0 * (1.0 + beta):
+            # The constructor bounds alpha * equity_gain, but momentum
+            # applies alpha WITHOUT the equity gain, so a large alpha paired
+            # with a small gain passes construction and diverges here
+            # (review finding, 2026-10-06: alpha=100, equity_gain=0.01,
+            # beta=0.9 walks 0 -> 10 -> -71 on the unit quadratic).  The
+            # EMA-momentum system matrix [[1 - a(1-b), ab], [-(1-b), b]] has
+            # both eigenvalues inside the unit circle iff a(1-b) < 2(1+b)
+            # (Jury conditions; determinant b < 1 and p(1) = a(1-b) > 0 hold
+            # already), so that bound is enforced, not documented.
+            raise ValueError(
+                f"alpha * (1 - beta) must stay below 2 * (1 + beta) for "
+                f"momentum stability; got {self.alpha} * {1.0 - beta:g} = "
+                f"{self.alpha * (1.0 - beta):g} vs {2.0 * (1.0 + beta):g}"
+            )
         s, g = self._coerce_pair(state, gradient, "momentum_step")
         v = asvec(velocity)
         if len(v) != len(s):
             raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
+        if any(not math.isfinite(x) for x in v.tolist()):
+            raise ValueError("momentum_step: velocity holds a non-finite component")
         return self._momentum_core(s, g, v, beta)
 
     def _momentum_core(self, s: Vec, g: Vec, v: Vec, beta: float) -> Tuple[Vec, Vec]:
@@ -850,7 +870,16 @@ class AvaDescent:
 
     def catalan_step(self, state: object, gradient: object, omni_scalar: float = 0.0) -> Vec:
         """The family's Catalan rescale, kept verbatim:
-        ``state + alpha * (G*gradient + omni) * sqrt(2) * equity_gain * A20``."""
+        ``state + alpha * (G*gradient + omni) * sqrt(2) * equity_gain * A20``.
+
+        At the default ``omni_scalar=0.0`` — the only value ``descend``
+        uses — the step is unbiased.  A nonzero ``omni_scalar`` is the
+        family's explicit FORCING input, not a convergence aid: it offsets
+        the fixed point by exactly ``omni_scalar / CATALAN_CONSTANT`` in
+        every component (measured; pinned by the omni-offset test), so a
+        caller supplies it to steer the trajectory, knowing the settle
+        point moves.
+        """
         s, g = self._coerce_pair(state, gradient, "catalan_step")
         return self._catalan_core(s, g, omni_scalar)
 
@@ -861,12 +890,25 @@ class AvaDescent:
         )
 
     def select_alpha(self, gradient: object, variance: float, ethical_score: float) -> float:
-        """The family's adaptive step-size table (Phase-3 selection)."""
+        """The family's adaptive step-size table (Phase-3 selection).
+
+        Returns one of ``high_reliability``, ``balanced`` or
+        ``golden_ratio``.  ``ALPHA_MODES`` also names ``aggressive`` — a
+        constructor mode (``AvaDescent(alpha=AvaDescent.ALPHA_MODES
+        ["aggressive"])``), deliberately never a selector outcome: the
+        source family's table is the same, and an adaptive path that can
+        ESCALATE the step size under uncertain measurements would invert
+        the table's fail-toward-reliability direction.
+        """
         if not 0.0 <= ethical_score <= 1.0:
             raise ValueError(f"ethical_score must be in [0, 1], got {ethical_score}")
-        if variance < 0.0:
-            raise ValueError(f"variance must be >= 0, got {variance}")
+        if not math.isfinite(variance) or variance < 0.0:
+            # NaN fails every comparison, so without this check it would
+            # fall through to the most aggressive row of the table.
+            raise ValueError(f"variance must be finite and >= 0, got {variance}")
         g = asvec(gradient)
+        if any(not math.isfinite(x) for x in g.tolist()):
+            raise ValueError("select_alpha: gradient holds a non-finite component")
         if ethical_score < 0.93:
             return self.ALPHA_MODES["high_reliability"]
         if variance > 0.5:
@@ -886,7 +928,10 @@ class AvaDescent:
     ) -> Tuple[Vec, List[float]]:
         """Iterate toward ``target`` from ``initial_state`` and return
         ``(final_state, lyapunov_history)``, ``history[t]`` being
-        ``V(state_t) = ||state_t - target||^2`` after step ``t``.
+        ``V(state_t) = ||state_t - target||^2`` after step ``t`` —
+        so ``history[-1]`` is ``V(final_state)`` whenever at least one step
+        ran; ``max_steps=0`` returns the initial state with an empty
+        history.
 
         ``mode`` selects the operator: ``"equity"`` (default),
         ``"variance"``, ``"momentum"``, ``"catalan"`` or ``"adaptive"``
@@ -894,10 +939,22 @@ class AvaDescent:
         """
         if mode not in ("equity", "variance", "momentum", "catalan", "adaptive"):
             raise ValueError(f"unknown mode: {mode!r}")
+        if mode == "momentum" and self.alpha * 0.1 >= 3.8:
+            # The loop iterates on the raw momentum core with beta = 0.9, so
+            # the stability bound alpha * (1 - beta) < 2 * (1 + beta) —
+            # enforced per-call in momentum_step — is enforced here once at
+            # entry with the loop's fixed beta (0.1 and 3.8 are that bound
+            # evaluated at 0.9).
+            raise ValueError(
+                f"alpha {self.alpha} exceeds the momentum stability bound "
+                f"alpha * (1 - beta) < 2 * (1 + beta) at the loop's beta of 0.9"
+            )
         if max_steps < 0:
             raise ValueError(f"max_steps must be >= 0, got {max_steps}")
-        if tolerance < 0:
-            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+        if not math.isfinite(tolerance) or tolerance < 0:
+            # tolerance=inf stops after the first move whatever the error;
+            # tolerance=nan never stops: both are refused, not interpreted.
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance}")
         state, tgt = self._coerce_pair(initial_state, target, "descend")
         state = state.copy()
         velocity = zeros(len(state))

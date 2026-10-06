@@ -178,6 +178,82 @@ class TestEngineWiring:
             )
 
 
+class TestReviewHardening:
+    """Validation holes closed in the 2026-10-06 review round, each pinned."""
+
+    def test_empty_vectors_are_refused(self) -> None:
+        d = AvaDescent()
+        with pytest.raises(ValueError, match="empty"):
+            d.step([], [])
+        with pytest.raises(ValueError, match="empty"):
+            d.descend([], [], mode="variance")
+
+    def test_non_finite_velocity_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="velocity"):
+            AvaDescent().momentum_step([0.0], [1.0], [math.nan])
+
+    def test_select_alpha_refuses_nan_measurements(self) -> None:
+        """NaN fails every comparison, so unvalidated it would fall through
+        to the most aggressive row of the table."""
+        d = AvaDescent()
+        with pytest.raises(ValueError, match="variance"):
+            d.select_alpha([0.1], math.nan, 0.99)
+        with pytest.raises(ValueError, match="non-finite"):
+            d.select_alpha([math.nan], 0.0, 0.99)
+
+    def test_non_finite_tolerance_is_refused(self) -> None:
+        d = AvaDescent()
+        for bad in (math.inf, math.nan):
+            with pytest.raises(ValueError, match="tolerance"):
+                d.descend(TARGET, zeros(DIM), tolerance=bad)
+
+    def test_select_alpha_reaches_exactly_three_modes(self) -> None:
+        """'aggressive' is a constructor mode, never a selector outcome —
+        the documented contract, asserted over the full branch structure."""
+        d = AvaDescent()
+        outcomes = {
+            d.select_alpha([0.1], 0.0, 0.92),
+            d.select_alpha([0.1], 0.9, 0.99),
+            d.select_alpha([5.0], 0.0, 0.99),
+            d.select_alpha([0.1], 0.0, 0.99),
+        }
+        assert outcomes == {
+            d.ALPHA_MODES["high_reliability"],
+            d.ALPHA_MODES["balanced"],
+            d.ALPHA_MODES["golden_ratio"],
+        }
+        assert d.ALPHA_MODES["aggressive"] not in outcomes
+
+    def test_momentum_outside_its_stability_bound_is_refused(self) -> None:
+        """PIN (review finding): the constructor bounds alpha * equity_gain,
+        but momentum applies alpha alone — alpha=100 with equity_gain=0.01
+        passes construction and diverges (0 -> 10 -> -71 on the unit
+        quadratic).  The EMA-momentum bound alpha*(1-beta) < 2*(1+beta) is
+        enforced at the call."""
+        d = AvaDescent(alpha=100.0, equity_gain=0.01)
+        with pytest.raises(ValueError, match="momentum stability"):
+            d.momentum_step([1.0], [0.0], [0.0])
+        with pytest.raises(ValueError, match="stability bound"):
+            d.descend([0.0], [1.0], mode="momentum")
+        # Just inside the bound for beta=0.9 (alpha < 38): accepted and
+        # convergent on the benchmark.
+        close = AvaDescent(alpha=37.0, equity_gain=0.01)
+        _, history = close.descend(TARGET, zeros(DIM), max_steps=2000, mode="momentum")
+        assert math.sqrt(history[-1]) < 1e-6
+
+    def test_catalan_omni_scalar_is_a_forcing_term_with_the_documented_offset(self) -> None:
+        """A nonzero omni offsets the settle point by omni / CATALAN_CONSTANT
+        per component — measured here, documented in the method."""
+        d = AvaDescent()
+        omni = 0.25
+        state = zeros(DIM)
+        for _ in range(500):
+            state = d.catalan_step(state, TARGET - state, omni_scalar=omni)
+        expected = omni / AvaDescent.CATALAN_CONSTANT
+        offsets = [s - t for s, t in zip(state.tolist(), TARGET.tolist())]
+        assert offsets == pytest.approx([expected] * DIM, abs=1e-9)
+
+
 class TestPackageSurface:
     def test_ava_descent_is_a_package_export(self) -> None:
         import ama_cryptography
