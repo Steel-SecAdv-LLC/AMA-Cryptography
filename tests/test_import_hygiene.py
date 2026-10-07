@@ -217,7 +217,18 @@ def _scan_direct_imports(
             rebound = {alias.asname or alias.name for alias in stmt.names}
         else:
             rebound = _statement_bound_names(stmt)
-        if rebound:
+        if "*" in rebound:
+            # A wildcard import can rebind ANY exported name, so every
+            # tracked binding stops counting as continuously the module
+            # and a later plain import is the restore, not a repeat
+            # (review finding, 2026-10-07; measured pre-fix: the restore
+            # after ``from plugin import *`` was flagged).  Total and
+            # value-blind on purpose — the direction that never demands
+            # a deletion.  ``*`` reaches here from a direct wildcard and,
+            # through _statement_bound_names, from one inside a
+            # module-scope compound statement.
+            seen = {}
+        elif rebound:
             seen = {key: since for key, since in seen.items() if bound_name(key) not in rebound}
     return seen
 
@@ -788,6 +799,26 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_wildcard_import_invalidates_every_tracked_binding() -> None:
+    """PIN (review finding, 2026-10-07): ``from plugin import *`` can
+    rebind ANY exported name, so every tracked module-scope binding stops
+    counting as continuously the module and the later plain import is the
+    restore — pre-fix the reset tracked only the literal ``"*"`` and the
+    gate demanded deleting a possibly load-bearing restore.  Covered for
+    a direct wildcard and one inside a module-scope compound statement;
+    the wildcard-free contrast holds the flag.  Mutation: with the
+    ``\"*\"`` branch removed from the reset, exactly this test fails."""
+    star = "import os\n\nfrom plugin import *\n\nimport os\n"
+    assert duplicate_plain_imports(star) == []
+    star_compound = (
+        "import os\n\nif flag:\n    from plugin import *\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(star_compound) == []
+    no_star = "import os\n\nfrom plugin import helper\n\nimport os\n"
+    assert duplicate_plain_imports(no_star) == [(5, "os")]
 
 
 def test_a_maybe_rebinding_at_module_scope_forces_the_exemption() -> None:

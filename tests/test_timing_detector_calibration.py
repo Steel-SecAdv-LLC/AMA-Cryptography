@@ -543,6 +543,16 @@ class TestSplitLineResonance:
         with pytest.raises(ValueError, match="max_history"):
             ResonanceTimingMonitor(max_history=cast(int, 1.5))
 
+    def test_the_ratio_helper_scores_empty_and_zero_mean_spectra_zero(self) -> None:
+        """RANGE (review finding, 2026-10-07, measured false): the review
+        read ``_mean(scanned)`` ahead of the guard as a division on empty
+        input, but ``_mean`` returns 0.0 for an empty sequence, so the
+        guard runs and the helper's stated degenerate path works —
+        measured here for the empty and the all-zero spectrum.  Exercises
+        the predicate's domain; not mutation-tested beyond that."""
+        assert ResonanceTimingMonitor._top_ordinates_ratio([], 2) == 0.0
+        assert ResonanceTimingMonitor._top_ordinates_ratio([0.0, 0.0], 2) == 0.0
+
     def test_the_table_answers_only_its_measured_configuration(self) -> None:
         """PIN (review finding, 2026-10-07): the pinned bars were measured at
         the 1% rate with 4,000 trials; a subclass configured for another

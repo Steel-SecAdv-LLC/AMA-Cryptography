@@ -34,6 +34,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `d49410a`: a wildcard import invalidates every tracked binding; the ratio helper's empty path measured working — 2026-10-07
+
+- **`from plugin import *` resets the whole module-scope baseline.**
+  Medium: the reset tracked only the literal `"*"`, so
+  `import os; from plugin import *; import os` flagged the restore
+  import although the wildcard may have rebound `os` — a demanded
+  deletion that can break (measured pre-fix on the direct and the
+  compound-statement shapes).  A `"*"` among a statement's rebound names
+  now clears every tracked binding, total and value-blind — the
+  direction that never demands a deletion.  PIN
+  `test_a_wildcard_import_invalidates_every_tracked_binding`
+  (mutation-earned; the wildcard-free contrast holds the flag).
+
+- **The empty-input claim on `_top_ordinates_ratio` is true — measured,
+  not argued.** Medium finding, measured false: `_mean` returns 0.0 on
+  an empty sequence, so the guard runs before any division and the
+  helper scores empty and all-zero spectra 0.0.  RANGE
+  `test_the_ratio_helper_scores_empty_and_zero_mean_spectra_zero`
+  exercises the domain so the measurement stays on record.
+
 ### Copilot round on `456d87f`: the maybe-rebinding exemption is the gate's stated coverage boundary — 2026-10-07
 
 - **A module-scope rebinding inside a compound statement forces the
