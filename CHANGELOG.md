@@ -34,6 +34,40 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `26639a2`: efficacy provenance made fail-closed by digest match, the contamination guarantee qualified at its degenerate branch — 2026-10-07
+
+- **The efficacy trailer's build line is attributed only after matching
+  the measured artifact to the tree that built it.** Medium: the first
+  provenance mechanism read `build/CMakeCache.txt` unconditionally and
+  allowlisted three keys, so a stale or unrelated local build tree would
+  have been published as the measured library's flags.
+  `r3_efficacy_eval.py` now reuses
+  `benchmark_runner._native_build_configuration` — the artifact is the
+  loaded backend from the module attestation, pinned by its mapped
+  SHA3-256 preload digest, and a `CMakeCache.txt` is attributed only when
+  a tree's copy of the library digest-matches the measured object,
+  yielding the complete configure line (compiler, `CMAKE_C_FLAGS`, every
+  `AMA_*` option) or an explicit "not recorded: why".  The committed
+  06:06Z measurement's trailer was completed, not re-invented: the
+  measuring artifact is byte-identical to the current library (SHA-256
+  re-verified against the recorded digest), so its SHA3-256 and
+  digest-matched configuration are the same run's facts; its rows,
+  run id, commit and host stand unchanged.  A regeneration executed while
+  validating the mechanism landed on a degraded trace (median 0.52 ms —
+  5x the committed run — with a clean false-alarm rate of 1.8-2.4%
+  against the 1% budget, i.e. the "benign" trace itself carried load
+  shifts) and is recorded here, not committed: it measured the shared
+  container's load, and the README's variance caveat, rather than the
+  detector.
+- **The contamination guarantee is qualified at its own degenerate
+  branch.** Low: `_calibrated_score_threshold`'s docstring stated the
+  contamination cap unconditionally while the `guard_base == 0` branch
+  (a quantized or strongly bimodal bulk putting >= guard_tail of the
+  window at exactly 0) deliberately returns the raw quantile uncapped —
+  on such a window the raw quantile can still be captured by anomalies at
+  the budget rate.  The docstring and MONITORING.md now state the cap as
+  a property of the positive-guard path.
+
 ### Copilot round on `07ea1d5`: ints outside float range refused everywhere, `converge`'s tolerance contract method-independent, efficacy provenance recorded and re-measured, example install instructions corrected — 2026-10-07
 
 - **An int too large to convert to float escaped every documented

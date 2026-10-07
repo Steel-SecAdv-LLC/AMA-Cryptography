@@ -66,7 +66,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import platform
 import random
@@ -180,13 +179,23 @@ def _provenance_lines(seed: int) -> str:
     figure to carry its host, build flags, and run identifier; the first
     committed revision of the table carried only n/median/MAD/seed and the
     README's generic host sentence (review finding, 2026-10-07).  Each
-    value below is read from the measuring process itself, never typed in:
-    the artifact line names the exact native library the timings ran on by
-    content digest, which identifies the build more precisely than the
-    flag set that produced it, and the flags are read from the build
-    tree's CMakeCache.txt when this checkout built one ("unrecorded
-    (prebuilt artifact; identified by its sha256)" otherwise).
+    value below is read from the measuring process itself, never typed in.
+
+    The artifact line names the exact native library these timings ran on:
+    the loaded backend from the module attestation, pinned by its mapped
+    SHA3-256 preload digest.  The build line reuses
+    ``benchmark_runner._native_build_configuration``, which attributes a
+    ``CMakeCache.txt`` only after digest-matching a build tree's copy of
+    the library to the measured object — a stale or unrelated local build
+    tree is passed over and the line says the configuration is not
+    recorded, never a guess from a tree that happens to exist (review
+    finding, 2026-10-07; the first form of this function read
+    ``build/CMakeCache.txt`` unconditionally and allowlisted three keys).
     """
+    from ama_cryptography._self_test import module_attestation
+
+    from benchmarks import benchmark_runner
+
     run_id = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + f"+seed{seed}"
     try:
         commit = subprocess.run(
@@ -205,24 +214,14 @@ def _provenance_lines(seed: int) -> str:
                 model = line.split(":", 1)[1].strip()
                 break
     host = f"{model} x{os.cpu_count()} (shared cloud container, not pinned)"
-    lib_path = getattr(pqc_backends, "_NATIVE_LIB_PATH", None)
-    if lib_path:
-        lib = Path(lib_path)
-        digest = hashlib.sha256(lib.read_bytes()).hexdigest()
-        artifact = f"{lib.name} sha256={digest}"
+    native = module_attestation().get("native_backend") or {}
+    lib_name = Path(str(native.get("path") or "")).name
+    digest = str(native.get("preload_digest_hex") or "")
+    if lib_name and digest:
+        artifact = f"{lib_name} sha3_256={digest}"
     else:
-        artifact = "unrecorded (native library path not exposed by this build)"
-    build = "unrecorded (prebuilt artifact; identified by its sha256)"
-    cache = REPO / "build" / "CMakeCache.txt"
-    if cache.exists():
-        wanted = {"CMAKE_BUILD_TYPE", "CMAKE_C_COMPILER", "CMAKE_C_FLAGS_RELEASE"}
-        found: dict[str, str] = {}
-        for line in cache.read_text(encoding="utf-8").splitlines():
-            key = line.split(":", 1)[0]
-            if key in wanted and "=" in line:
-                found[key] = line.split("=", 1)[1].strip()
-        if found:
-            build = " ".join(f"{k}={found[k]}" for k in sorted(found))
+        artifact = "unrecorded (no native-backend attestation in the measuring process)"
+    build = benchmark_runner._native_build_configuration()
     return (
         f"# provenance: run_id={run_id} commit={commit} python={platform.python_version()}\n"
         f"# host: {host}\n"

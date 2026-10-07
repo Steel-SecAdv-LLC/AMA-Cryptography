@@ -81,7 +81,10 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
    quantile on the heavy-tailed distributions real timings exhibit, and the
    cap (measured 2026-10-06) keeps anomalies arriving at the budget rate
    from dragging the quantile onto their own score level and halving
-   asymptotic recall
+   asymptotic recall; the cap applies while that lower order statistic is
+   positive — on a degenerate scale where it is exactly 0 (a quantized or
+   strongly bimodal bulk) it carries no tail information and the raw
+   quantile governs uncapped
 4. Detect sustained regime changes with a two-sided sign CUSUM against a
    reference median locked after 200 observations — raised as edge-triggered
    *events* (alert once, escalate once, re-baseline after persistence), not

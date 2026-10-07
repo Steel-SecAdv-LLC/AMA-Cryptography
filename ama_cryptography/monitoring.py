@@ -1995,6 +1995,16 @@ class ResonanceTimingMonitor:
         order statistics of the same ingest-everything window, so the
         tightening ratchet that excluding flagged scores would create cannot
         arise here.
+
+        The cap holds only while the guard statistic is positive.  On a
+        degenerate scale — at least ``guard_tail`` of the window scoring
+        exactly 0, a quantized or strongly bimodal bulk — the guard carries
+        no tail information, the cap is inapplicable, and the raw quantile
+        governs (the pre-guard behaviour; the branch below records why).  On
+        such a window the raw quantile can still be captured by anomalies
+        arriving at the budget rate: the contamination immunity stated above
+        is a property of the capped path, not of the degenerate one (review
+        finding, 2026-10-07).
         """
         history = self._score_history.get(operation)
         if history is None:
