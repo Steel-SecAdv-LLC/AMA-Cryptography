@@ -1,32 +1,32 @@
 family	parameter	detector	tpr_or_detected	fpr	step_delay_samples	repeats	step_excess_alarm_rate
-clean	-	3R	-	0.0095	-	1	-
-clean	-	baseline	-	0.0190	-	1	-
-point	x1.5	3R	0.195	0.0081	-	5	-
-point	x1.5	baseline	0.860	0.0121	-	5	-
-point	x2.0	3R	0.280	0.0076	-	5	-
-point	x2.0	baseline	0.955	0.0094	-	5	-
-point	x3.0	3R	0.475	0.0077	-	5	-
-point	x3.0	baseline	0.960	0.0077	-	5	-
-point	x5.0	3R	0.835	0.0077	-	5	-
-point	x5.0	baseline	0.960	0.0092	-	5	-
-point	x10.0	3R	0.975	0.0079	-	5	-
-point	x10.0	baseline	1.000	0.0062	-	5	-
-burst	x1.5	3R	0.160	0.0093	-	5	-
-burst	x1.5	baseline	0.340	0.0186	-	5	-
-burst	x2.0	3R	0.240	0.0093	-	5	-
-burst	x2.0	baseline	0.500	0.0188	-	5	-
-burst	x3.0	3R	0.840	0.0093	-	5	-
-burst	x3.0	baseline	0.590	0.0183	-	5	-
-step	+5%	3R	1	0.0137	91	1	+0.0010
-step	+5%	baseline	0	0.0242	-1	1	+0.0000
-step	+10%	3R	1	0.0137	20	1	+0.0000
-step	+10%	baseline	1	0.0242	1	1	+0.0010
-step	+30%	3R	1	0.0137	20	1	+0.0000
-step	+30%	baseline	1	0.0242	0	1	+0.0015
-step	+100%	3R	1	0.0137	20	1	+0.0000
-step	+100%	baseline	1	0.0242	0	1	+0.0035
-# benign_n=4000 median_ms=0.1054 mad_ms=0.0033 seed=394
-# provenance: run_id=2026-10-07T08:30:29Z+seed394 commit=be6cbd987723 python=3.13.16
-# host: Intel(R) Xeon(R) Processor @ 2.30GHz x4 (affinity 4/4 cores, virtualized; tenancy unrecorded)
+clean	-	3R	-	0.0182	-	1	-
+clean	-	baseline	-	0.0297	-	1	-
+point	x1.5	3R	0.105	0.0171	-	5	-
+point	x1.5	baseline	0.455	0.0249	-	5	-
+point	x2.0	3R	0.450	0.0123	-	5	-
+point	x2.0	baseline	0.815	0.0194	-	5	-
+point	x3.0	3R	0.700	0.0114	-	5	-
+point	x3.0	baseline	0.905	0.0131	-	5	-
+point	x5.0	3R	0.875	0.0101	-	5	-
+point	x5.0	baseline	0.980	0.0130	-	5	-
+point	x10.0	3R	0.985	0.0104	-	5	-
+point	x10.0	baseline	1.000	0.0104	-	5	-
+burst	x1.5	3R	0.050	0.0184	-	5	-
+burst	x1.5	baseline	0.190	0.0287	-	5	-
+burst	x2.0	3R	0.520	0.0171	-	5	-
+burst	x2.0	baseline	0.520	0.0290	-	5	-
+burst	x3.0	3R	0.650	0.0170	-	5	-
+burst	x3.0	baseline	0.460	0.0287	-	5	-
+step	+5%	3R	1	0.0205	118	1	+0.0020
+step	+5%	baseline	1	0.0216	28	1	+0.0005
+step	+10%	3R	1	0.0205	20	1	+0.0010
+step	+10%	baseline	1	0.0216	28	1	+0.0005
+step	+30%	3R	1	0.0205	20	1	+0.0010
+step	+30%	baseline	1	0.0216	0	1	+0.0015
+step	+100%	3R	1	0.0205	0	1	+0.0060
+step	+100%	baseline	1	0.0216	0	1	+0.0040
+# benign_n=4000 median_ms=0.5013 mad_ms=0.0263 seed=394
+# provenance: run_id=2026-10-07T19:50:50Z+seed394 commit=34b2004c4ee7 python=3.13.16
+# host: Intel(R) Xeon(R) Processor @ 2.10GHz x4 (affinity 4/4 cores, virtualized; tenancy unrecorded)
 # artifact: libama_cryptography.so sha3_256=76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a
 # build: GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)

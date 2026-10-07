@@ -34,6 +34,40 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `34b2004`: globally-mutated names are volatile to the import gate — 2026-10-07
+
+- **A name some function declares `global` and binds or deletes is never
+  flagged and never trusted as continuously the module.** Medium:
+  `global os; del os` in a called helper invalidates the top-level
+  import with no module-scope statement to reset on, and the gate
+  demanded deleting the restore import — measured as NameError.
+  `_globally_mutated_names` collects the declared-and-bound set, and
+  both the same-list scan and the cross-scope comparison skip it (any
+  call between two imports can mutate such a name, so even a verbatim
+  repeat may be the restore).  A read-only `global` mutates nothing and
+  stays flagged.  PIN `test_a_global_deletion_makes_the_name_volatile`
+  (mutation-earned; read-only contrast holds the flag).  The same
+  review's three release-history findings (v5.0.0 dated before its tag)
+  are the release PR's documented convention — the maintainer tags
+  immediately after merging this PR, and the date-roll procedure covers
+  slip — answered on the threads without a tree change.
+
+### Efficacy table re-measured from the clean head under the recalibrated bars — 2026-10-07
+
+- **`benchmarks/r3_efficacy.tsv` and the README's efficacy prose are the
+  clean-head measurement at `34b2004`** — the first run of the detector
+  under the Nyquist-correct split-line bars, per the table↔prose
+  coupling rule.  The trace itself moved with the host between same-day
+  runs (median 0.105 ms → 0.501 ms, the cpuinfo model 2.30 → 2.10 GHz,
+  MAD at 5.2% of the median — the noisy end of the measured range), so
+  rates shifted throughout: point-10x 98% vs baseline 100% at 1.0%/1.0%
+  FPR, point-1.5x 10% vs 46%, bursts 52%/52% at 2x and 65%/46% at 3x,
+  +10% step after 20 vs 28 samples, +5% after 118 vs 28 (the baseline's
+  "not at all" at +5% belonged to the quieter morning trace).  The
+  committed row stays the clean-head run, not the best one, and the
+  prose now states the measured same-day span (point-1.5x 10%–63%)
+  rather than one trace's figures as stable facts.
+
 ### Copilot round on `37dfda4`: the split-line null calibrated to the real spectrum, sys.modules mutations reset the import baseline, Docker apt retries — 2026-10-07
 
 - **The split-line bars are calibrated to the spectrum detect_resonance

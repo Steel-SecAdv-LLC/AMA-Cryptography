@@ -99,7 +99,13 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     tree = ast.parse(source)
     top_ids = set(map(id, tree.body))
     found: set[tuple[int, str]] = set()
-    top_seen = _scan_direct_imports(tree.body, found)
+    # A name some function declares ``global`` and binds or deletes is
+    # volatile: any call can mutate it, so it is never flagged anywhere
+    # and never trusted as continuously the module (review finding,
+    # 2026-10-07; measured as NameError on ``global os; del os`` in a
+    # called helper under a top-level import).
+    volatile = _globally_mutated_names(tree)
+    top_seen = _scan_direct_imports(tree.body, found, volatile)
     class_scoped = _class_suite_import_ids(tree)
     shadowed = _shadowed_nested_import_bindings(tree)
     # Module scope executes in statement order, so the baseline must carry
@@ -136,7 +142,7 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
         for field in ("body", "orelse", "finalbody"):
             block = getattr(walked, field, None)
             if isinstance(block, list) and block is not tree.body:
-                _scan_direct_imports(block, found)
+                _scan_direct_imports(block, found, volatile)
         if id(walked) in top_ids or not isinstance(walked, ast.Import):
             continue
         if id(walked) in class_scoped:
@@ -156,6 +162,8 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
                 # skips class scope from nested functions, so the module
                 # binding is what deletion exposes there.
                 continue
+            if bound in volatile:
+                continue
             bound_since = top_seen.get((alias.name, alias.asname))
             if bound_since is not None and bound_since < container_lineno[id(walked)]:
                 found.add((walked.lineno, alias.name))
@@ -163,7 +171,9 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
 
 
 def _scan_direct_imports(
-    body: list[ast.stmt], found: set[tuple[int, str]]
+    body: list[ast.stmt],
+    found: set[tuple[int, str]],
+    volatile: frozenset[str] | set[str] = frozenset(),
 ) -> dict[tuple[str, str | None], int]:
     """Flag repeats among one statement list's import bindings; return the
     ``(module, asname)`` pairs the list binds, each mapped to the line
@@ -203,6 +213,12 @@ def _scan_direct_imports(
         if isinstance(stmt, ast.Import):
             for alias in stmt.names:
                 key = (alias.name, alias.asname)
+                if bound_name(key) in volatile:
+                    # A globally-mutated name is never flagged and never
+                    # trusted: any call between two imports of it can
+                    # delete or rebind it, so the repeat may be the
+                    # restore (review finding, 2026-10-07).
+                    continue
                 if key in seen:
                     found.add((stmt.lineno, alias.name))
                 seen = {
@@ -263,6 +279,30 @@ def _definition_enclosing_children(node: ast.AST) -> list[ast.AST]:
         out.extend(node.decorator_list)
         out.extend(node.bases)
         out.extend(keyword.value for keyword in node.keywords)
+    return out
+
+
+def _globally_mutated_names(tree: ast.Module) -> set[str]:
+    """Names some function declares ``global`` AND binds or deletes.
+
+    Such a name can stop being the module at ANY call site — ``global os;
+    del os`` in a helper invalidates the top-level import with no
+    module-scope statement to reset on (review finding, 2026-10-07;
+    measured as NameError on the restore import's deletion).  The gate
+    therefore treats these names as volatile: never continuously the
+    module, never flagged — conservative in the direction that never
+    demands a deletion.  A ``global`` that only reads mutates nothing and
+    is not collected.
+    """
+    out: set[str] = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            declared: set[str] = set()
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Global):
+                    declared.update(node.names)
+            if declared:
+                out |= declared & _function_bound_names(fn)
     return out
 
 
@@ -829,6 +869,42 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_global_deletion_makes_the_name_volatile() -> None:
+    """PIN (review finding, 2026-10-07): ``global os; del os`` in a called
+    helper invalidates the top-level import with no module-scope statement
+    to reset on, so a name some function declares ``global`` AND binds or
+    deletes is volatile — never flagged, anywhere, and never trusted as
+    continuously the module.  Runtime premise measured: deleting the
+    function-local restore import raises NameError once the helper has
+    run.  A ``global`` that only reads mutates nothing, and the read-only
+    contrast holds the flag.  Mutation: with the volatile set emptied,
+    exactly this test fails."""
+    deleting = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(deleting) == []
+    same_list = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\nimport os\n"
+    )
+    assert duplicate_plain_imports(same_list) == []
+    read_only = (
+        "import os\n\n\ndef helper():\n    global os\n    return os.sep\n\n\nhelper()\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(read_only) == [(13, "os")]
+    broken = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\n\n"
+        "def f():\n    return os.sep\n"
+    )
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<global-del>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    broken_f = cast(Callable[[], str], namespace["f"])
+    with pytest.raises(NameError):
+        broken_f()
 
 
 def test_a_sys_modules_mutation_makes_the_restore_import_load_bearing() -> None:
