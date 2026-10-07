@@ -16,13 +16,13 @@ Features:
 - OpenAPI documentation integration
 - Key rotation support
 
-Usage:
+Usage (from the repository root, one working directory for both steps):
     pip install -e . fastapi uvicorn
     # Installing this project builds its native C library, and the build is
     # required, not optional: the cryptography this example serves runs on
     # it with no fallback path (INVARIANT-7) — FastAPI and uvicorn alone
     # leave the import below failing on a fresh checkout.
-    python fastapi_integration.py
+    python examples/python/fastapi_integration.py
 
 Then visit:
     http://localhost:8000/docs - Interactive API documentation

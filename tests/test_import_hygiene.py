@@ -173,6 +173,10 @@ def _statement_bound_names(stmt: ast.stmt) -> set[str]:
             out.add(node.name)
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
             out.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            # ``rest`` is a plain string attribute, not a Name node
+            # (review finding, 2026-10-07).
+            out.add(node.rest)
         stack.extend(ast.iter_child_nodes(node))
     return out
 
@@ -215,6 +219,10 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
             out.add(node.name)
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
             out.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            # The mapping-rest capture binds too, and ``rest`` is a plain
+            # string attribute, not a Name node (review finding, 2026-10-07).
+            out.add(node.rest)
         elif isinstance(node, ast.Import) and include_imports:
             for alias in node.names:
                 out.add(alias.asname or alias.name.split(".")[0])
@@ -401,6 +409,14 @@ def test_a_shadowed_nested_import_is_load_bearing() -> None:
         "    os = 1\n    return x, os\n"
     )
     assert duplicate_plain_imports(own) == []
+    # A mapping-rest capture in an enclosing function shadows the same way
+    # (``MatchMapping.rest`` is a string attribute, not a Name node).
+    match_shadow = (
+        "import os\n\n\ndef outer(value):\n    match value:\n"
+        "        case {**os}:\n            pass\n\n    def inner():\n"
+        "        import os\n\n        return os.sep\n\n    return inner\n"
+    )
+    assert duplicate_plain_imports(match_shadow) == []
 
 
 def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:
@@ -420,6 +436,14 @@ def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:
     assert duplicate_plain_imports(control_nested) == [(5, "os")]
     control_top = "import os\nimport os\n\nprint(os.sep)\n"
     assert duplicate_plain_imports(control_top) == [(2, "os")]
+    # A match mapping-rest capture is a rebinding too — ``rest`` is a plain
+    # string attribute, not a Name node, and the first collector form
+    # missed it (review finding, 2026-10-07).  Same restore semantics.
+    mapping_rest = (
+        "import os\n\nmatch {1: 2}:\n    case {**os}:\n        pass\n\n"
+        "import os\n\nprint(os.sep)\n"
+    )
+    assert duplicate_plain_imports(mapping_rest) == []
 
 
 def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:

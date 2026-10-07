@@ -12,11 +12,11 @@ Quick start guide demonstrating core cryptographic operations:
 
 This example requires minimal setup and shows the most common use cases.
 
-Usage:
-    python basic_usage.py
+Usage (from the repository root, one working directory for both steps):
+    pip install -e .
+    python examples/python/basic_usage.py
 
 Requirements:
-    pip install -e .
     # Installing this project builds its native C library, and the build is
     # required, not optional: every primitive this example calls runs on it,
     # and the library has no fallback path (INVARIANT-7) — on a fresh

@@ -34,6 +34,24 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `08617a4`: mapping-rest captures are bindings, one working directory in the example sequences — 2026-10-07
+
+- **Both binding collectors in the import gate missed
+  `MatchMapping.rest`.** Medium: a `case {**os}:` capture rebinds `os`,
+  but `rest` is a plain string attribute rather than a `Name`/`MatchAs`
+  node, so neither the same-list reset nor the function-scope shadowing
+  set saw it — a restore import after the capture, or a nested import
+  under an enclosing capture, would have been flagged though deleting
+  either changes behavior.  Both collectors now read it; the two pinned
+  tests each gained the mapping-rest form, and removing either branch
+  fails exactly its claiming test (mutation-verified both ways).
+- **The example usage sequences run from one working directory.** Low ×3:
+  `pip install -e .` needs the repository root while
+  `python <script>.py` resolved only from `examples/python/`.  Each
+  usage block now states the root as the working directory and invokes
+  the script by its repository-relative path, so the documented sequence
+  executes as written on a fresh checkout.
+
 ### Copilot round on `caef81c`: one Jury expression on both momentum paths, the pinned table gated on its full measured configuration — 2026-10-07
 
 - **`momentum_step` and `descend(mode="momentum")` evaluate the one
