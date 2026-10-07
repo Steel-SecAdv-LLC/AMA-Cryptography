@@ -326,11 +326,38 @@ class TestSplitLineResonance:
         assert flags <= 6, flags
 
     def test_the_null_bar_is_deterministic_and_cached(self) -> None:
-        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(64, None)
-        first = ResonanceTimingMonitor._multiline_threshold(64)
-        again = ResonanceTimingMonitor._multiline_threshold(64)
+        """An OFF-TABLE size, so the derivation and its cache actually run:
+        m = 64 is pinned and returned before the cache is ever read, so the
+        earlier form of this test passed with the cache broken (review
+        finding, 2026-10-07)."""
+        key = (24, 2)
+        assert 24 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        first = ResonanceTimingMonitor._multiline_threshold(24)
+        assert key in ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE
+        again = ResonanceTimingMonitor._multiline_threshold(24)
         assert first == again
-        assert 10.0 < first < 16.0, first  # pinned 13.136 at m=64
+        # Between the pinned neighbours (16: 8.80, 32: 11.14).
+        assert 8.8 < first < 11.2, first
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+
+    def test_the_threshold_follows_the_configured_ordinates(self) -> None:
+        """PIN (review finding, 2026-10-07): the null simulation derives the
+        retained top values from ``MULTILINE_ORDINATES`` — a subclass that
+        configures j = 3 gets a bar measured for the top-3 sum, strictly
+        above the j = 2 bar, instead of the shipped table's.  Mutation:
+        hard-coding the top two back (or returning the pinned table
+        regardless of j) fails exactly this test."""
+
+        class ThreeLine(ResonanceTimingMonitor):
+            MULTILINE_ORDINATES: ClassVar[int] = 3
+
+        try:
+            three = ThreeLine._multiline_threshold(32)
+            two = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[32]
+            assert three > two, (three, two)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((32, 3), None)
 
     def test_the_pinned_table_matches_a_fresh_derivation(self) -> None:
         """PIN: the pinned thresholds and the derivation procedure cannot
@@ -342,11 +369,11 @@ class TestSplitLineResonance:
         pinned = dict(ResonanceTimingMonitor._MULTILINE_THRESHOLDS)
         try:
             ResonanceTimingMonitor._MULTILINE_THRESHOLDS.clear()
-            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(m, None)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((m, 2), None)
             fresh = ResonanceTimingMonitor._multiline_threshold(m)
         finally:
             ResonanceTimingMonitor._MULTILINE_THRESHOLDS.update(pinned)
-            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(m, None)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((m, 2), None)
         assert fresh == table_value, (fresh, table_value)
 
     def test_an_oversized_window_stays_on_the_pinned_table(self) -> None:

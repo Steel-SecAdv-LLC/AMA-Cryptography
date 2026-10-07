@@ -2510,7 +2510,11 @@ class ResonanceTimingMonitor:
     #: the detection pipeline produces (the analysed window zero-pads to a
     #: power of two and detect_resonance caps it at
     #: :attr:`_MAX_RESONANCE_SAMPLES`, so the scanned half-spectrum is one
-    #: of these twelve for ANY constructor ``window_size``).
+    #: of these twelve for ANY constructor ``window_size``).  The bars were
+    #: measured for the shipped statistic, ``MULTILINE_ORDINATES = 2``;
+    #: _multiline_threshold bypasses this table and derives the bar when a
+    #: subclass configures any other j, so the statistic and its threshold
+    #: cannot drift apart (review finding, 2026-10-07).
     #: Each value is the measured (1 - RESONANCE_FALSE_ALARM_RATE) order
     #: statistic over _MULTILINE_NULL_TRIALS seeded draws — byte-identical
     #: to what _multiline_threshold derives, pinned because the derivation
@@ -2554,7 +2558,7 @@ class ResonanceTimingMonitor:
     #: above); it serves direct _multiline_threshold callers — the
     #: calibration suite's table↔procedure coupling test re-derives a
     #: pinned size through this path — and is filled on first use.
-    _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[int, float]] = {}
+    _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[Tuple[int, int], float]] = {}
     #: Null-measurement trials behind each cached threshold.  4,000 resolves
     #: the 1% tail (40 exceedances expected) and keeps the one-time per-size
     #: cost well under a second of pure Python.
@@ -2587,10 +2591,20 @@ class ResonanceTimingMonitor:
         buy back the remaining 0.17 points at twelve times the table.
         """
         m = max(1, int(scanned_bins))
-        pinned = cls._MULTILINE_THRESHOLDS.get(m)
-        if pinned is not None:
-            return pinned
-        cached = cls._MULTILINE_THRESHOLD_CACHE.get(m)
+        j = max(1, int(cls.MULTILINE_ORDINATES))
+        # The pinned table was measured for the shipped statistic, the
+        # top-2 sum; a subclass or override that changes MULTILINE_ORDINATES
+        # changes the statistic, so the table no longer answers for it and
+        # the bar is derived for the configured j instead (review finding,
+        # 2026-10-07: the simulation hard-coded the top two while the
+        # statistic read the class variable, so an override would have moved
+        # the statistic without moving its threshold).  The cache is keyed
+        # by (m, j) for the same reason.
+        if j == 2:
+            pinned = cls._MULTILINE_THRESHOLDS.get(m)
+            if pinned is not None:
+                return pinned
+        cached = cls._MULTILINE_THRESHOLD_CACHE.get((m, j))
         if cached is not None:
             return cached
         alpha = cls.RESONANCE_FALSE_ALARM_RATE
@@ -2599,28 +2613,34 @@ class ResonanceTimingMonitor:
         trials = cls._MULTILINE_NULL_TRIALS
         stats = []
         for _ in range(trials):
-            # One pass per trial: total plus the two largest, no materialised
+            # One pass per trial: total plus the j largest, no materialised
             # draw list and no per-trial sort.  At the largest advertised
             # window (10,000 samples -> 8,192 scanned bins) the sorted form
             # performed 4,000 full 8,192-element sorts before first return
             # (review finding, 2026-10-06); the draws themselves are the
-            # irreducible cost and run once per spectrum size per process.
+            # irreducible cost and run once per (size, j) per process.  For
+            # j = 2 the arithmetic is byte-identical to the top1/top2 form
+            # this replaces (same draws, same descending-order sum), which
+            # the table<->procedure coupling test proves byte-exactly.
             total = 0.0
-            top1 = 0.0
-            top2 = 0.0
+            tops = [0.0] * j
             for _i in range(m):
                 x = rng.expovariate(1.0)
                 total += x
-                if x > top1:
-                    top2 = top1
-                    top1 = x
-                elif x > top2:
-                    top2 = x
-            stats.append((top1 + top2) / (total / m) if total > 0.0 else 0.0)
+                if x > tops[-1]:
+                    for idx in range(j):
+                        if x > tops[idx]:
+                            tops.insert(idx, x)
+                            tops.pop()
+                            break
+            top_sum = 0.0
+            for value in tops:
+                top_sum += value
+            stats.append(top_sum / (total / m) if total > 0.0 else 0.0)
         stats.sort()
         rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
         threshold = stats[rank]
-        cls._MULTILINE_THRESHOLD_CACHE[m] = threshold
+        cls._MULTILINE_THRESHOLD_CACHE[(m, j)] = threshold
         return threshold
 
 

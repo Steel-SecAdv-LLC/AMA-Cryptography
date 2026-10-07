@@ -74,6 +74,14 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     top_seen = _scan_direct_imports(tree.body, found)
     class_scoped = _class_suite_import_ids(tree)
     shadowed = _shadowed_nested_import_bindings(tree)
+    # No separate module-rebinding filter is needed here: a module-scope
+    # non-import rebinding (``import os`` then ``os = 1`` at top level)
+    # makes the nested re-import load-bearing (review finding, 2026-10-07;
+    # measured as AttributeError on the review's shape), and the same-list
+    # reset inside _scan_direct_imports already drops the binding from the
+    # returned ``top_seen`` — measured per section 6.3: an additional filter
+    # over top_seen survived its own mutation test because this reset is the
+    # load-bearing guard, so the property is pinned on the reset instead.
     for walked in ast.walk(tree):
         # Same-list repeats are flagged in EVERY statement list the module
         # holds — function, class, try, if, loop and with bodies alike: a
@@ -115,7 +123,17 @@ def _scan_direct_imports(
     body: list[ast.stmt], found: set[tuple[int, str]]
 ) -> set[tuple[str, str | None]]:
     """Flag repeats among one statement list's import bindings; return the
-    ``(module, asname)`` pairs the list binds."""
+    ``(module, asname)`` pairs the list binds.
+
+    An intervening non-import statement that rebinds a name resets it:
+    after ``import os; os = 1`` a second ``import os`` in the same list
+    restores the module binding, so deleting it would leave the rebound
+    value — load-bearing, not dead (the same rule the cross-scope shape
+    applies at module scope; review finding, 2026-10-07).  The rebinding
+    walk over a compound statement over-collects from its nested suites,
+    which are scanned separately — over-collection only widens the reset,
+    the safe direction.
+    """
     seen: set[tuple[str, str | None]] = set()
     for stmt in body:
         if isinstance(stmt, ast.Import):
@@ -124,7 +142,39 @@ def _scan_direct_imports(
                 if key in seen:
                     found.add((stmt.lineno, alias.name))
                 seen.add(key)
+            continue
+        rebound = _statement_bound_names(stmt)
+        if rebound:
+            seen = {key for key in seen if (key[1] or key[0].split(".")[0]) not in rebound}
     return seen
+
+
+def _statement_bound_names(stmt: ast.stmt) -> set[str]:
+    """Names a non-import statement can rebind, for the reset above.
+
+    ``Name`` stores and deletes, exception-handler and match captures, and
+    nested def/class statement names; the walk stops at nested function and
+    class bodies for the statement's own suites the caller scans separately,
+    but a compound statement's directly nested suites are still walked —
+    deliberate over-collection, documented at the call site.
+    """
+    out: set[str] = set()
+    stack: list[ast.AST] = [stmt]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(node.name)
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            out.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            out.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            out.add(node.name)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
 
 
 def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]:
@@ -335,7 +385,7 @@ def test_a_shadowed_nested_import_is_load_bearing() -> None:
     deleted = shadowed.replace("        import os\n\n", "")
     code = compile(deleted, "<shadowed>", "exec")
     exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
-    outer = cast("Callable[[], Callable[[], str]]", namespace["outer"])
+    outer = cast(Callable[[], Callable[[], str]], namespace["outer"])
     with pytest.raises(AttributeError):
         outer()()
     # A parameter shadows the same way.
@@ -351,6 +401,25 @@ def test_a_shadowed_nested_import_is_load_bearing() -> None:
         "    os = 1\n    return x, os\n"
     )
     assert duplicate_plain_imports(own) == []
+
+
+def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): after ``import os`` a module-scope
+    ``os = 1`` leaves the global holding the int, so a nested re-import is
+    what gives the function the module back (measured: deleting it raises
+    AttributeError on ``os.sep``), and a later top-level re-import RESTORES
+    the module binding rather than repeating it.  Both forms are exempt;
+    without the rebinding both stay flagged (controls below).  Mutation:
+    dropping the module-rebound filter fails the cross-scope case, dropping
+    the same-list reset fails the top-level case — each exactly here."""
+    rebound = "import os\n\nos = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(rebound) == []
+    restored = "import os\n\nos = 1\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(restored) == []
+    control_nested = "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(control_nested) == [(5, "os")]
+    control_top = "import os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(control_top) == [(2, "os")]
 
 
 def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:

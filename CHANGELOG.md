@@ -34,6 +34,45 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `42cc5f0`: module-scope rebinding exempts, the null simulation follows its configured statistic, the efficacy table re-measured on a clean head — 2026-10-07
+
+- **The import gate exempts a nested re-import whose module-scope binding
+  was rebound.** High, the module-scope twin of the enclosing-shadowing
+  case: after `import os` a top-level `os = 1` leaves the global holding
+  the int, so the nested re-import is what hands the function the module
+  back (measured: deleting it raises AttributeError), and a later
+  top-level re-import restores the binding rather than repeating it.
+  `_scan_direct_imports` now resets a binding when an intervening
+  non-import statement rebinds the name — which covers both the same-list
+  and the cross-scope shape, since `top_seen` is that scan's result.  A
+  separate filter over `top_seen` was built first and REMOVED per §6.3:
+  its mutation test survived because the reset is the load-bearing guard.
+  PIN `test_a_module_scope_rebinding_makes_the_import_load_bearing`
+  (mutation-earned on the reset; both flagged controls included).  The
+  prior round's CodeQL alert #754 (an import used only inside a string
+  annotation) is closed by using the runtime-subscripted form.
+- **The split-line null simulation derives its statistic from
+  `MULTILINE_ORDINATES`.** Medium: the simulation hard-coded the top two
+  while `_top_ordinates_ratio` read the class variable, so a subclass
+  configuring j != 2 would have moved the statistic without moving its
+  threshold.  The simulation now retains the top j, the cache is keyed
+  `(m, j)`, and the pinned table — measured for the shipped j = 2 — is
+  bypassed for any other configuration.  For j = 2 the arithmetic is
+  byte-identical to the form it replaces, which the table↔procedure
+  coupling test proves byte-exactly.  PIN
+  `test_the_threshold_follows_the_configured_ordinates` (mutation-earned:
+  the pinned-regardless-of-j form fails exactly it).  The
+  deterministic-and-cached test now uses an off-table size — its earlier
+  form used pinned m = 64 and passed with the cache broken (review
+  finding), the cache-exercise corrected per §6.6.
+- **The efficacy table re-measured from a clean head under the final
+  generator.** Medium: the committed trailer was a hybrid — completed
+  fields over the superseded generator's host line, with
+  `commit=...+dirty-worktree` naming no reproducible source.  With this
+  round's code committed first, the regeneration runs on a clean head:
+  `commit=` is exact, the host line is the measured-facts form, and the
+  README rolls with the table under the coupling pins.
+
 ### Copilot round on `c4c872d`: the import gate learns lexical shadowing, the provenance generator records only what it can establish — 2026-10-07
 
 - **The import-hygiene gate flagged a load-bearing nested import when an
