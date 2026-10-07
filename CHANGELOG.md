@@ -34,6 +34,29 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `1a19307`: integral window bounds, and nested imports rebind too — 2026-10-07
+
+- **`ResonanceTimingMonitor` requires integral `window_size` and
+  `max_history`.** Medium: a positive non-integer passed the magnitude
+  check and failed later and darker — `window_size=1.5` constructed and
+  the FIRST record raised TypeError inside `EWMAStats`' `deque(maxlen=...)`,
+  and NaN defeats every comparison and reached the resonance slice (both
+  measured).  The boundary now rejects non-`int` values; `bool` passes as
+  the degenerate but well-defined window it is.  PIN: the degenerate-window
+  test's new 1.5/NaN cases fail with the `isinstance` check reverted
+  (mutation-earned).
+
+- **The reset walker records imports nested in compound statements.**
+  Medium: `if flag: import pathlib as os` rebinds `os` without a Name
+  node, so `_statement_bound_names` missed it, the baseline kept `os`
+  continuously-module, and the gate demanded deleting a function's
+  restore import — measured as AttributeError on the review's shape.
+  Nested Import/ImportFrom bindings now reset, value-blind on purpose
+  (a same-value guarded re-import widens the reset, the direction that
+  never demands a deletion).  PIN
+  `test_a_guarded_rebinding_import_makes_the_restore_import_load_bearing`
+  (mutation-earned; the guard-free contrast holds the flag).
+
 ### Copilot round on `18fb593`: the module-scope baseline carries execution order — 2026-10-07
 
 - **A nested import is a repeat only of a top-level binding stable since

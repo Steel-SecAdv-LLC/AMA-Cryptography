@@ -1523,10 +1523,17 @@ class ResonanceTimingMonitor:
         # 2026-10-07).  max_history < 1 is the same class of degenerate: 0
         # is a monitor that silently retains nothing (INVARIANT-3), -1 a
         # deque() ValueError deferred to the first record.
-        if window_size < 1:
-            raise ValueError("window_size must be at least 1")
-        if max_history < 1:
-            raise ValueError("max_history must be at least 1")
+        # Integral, not merely >= 1: a positive non-integer passes the
+        # magnitude check but fails later and darker — window_size=1.5
+        # constructs, then the first record raises TypeError inside
+        # EWMAStats' deque(maxlen=...), and NaN defeats every comparison
+        # and reaches the slice (review finding, 2026-10-07).  bool is an
+        # int subclass and True == 1, so it passes as the degenerate but
+        # well-defined window it is.
+        if not isinstance(window_size, int) or window_size < 1:
+            raise ValueError("window_size must be an integer >= 1")
+        if not isinstance(max_history, int) or max_history < 1:
+            raise ValueError("max_history must be an integer >= 1")
         if max_operations < 1:
             raise ValueError("max_operations must be at least 1")
         if max_ratio_operations < 1:

@@ -532,6 +532,16 @@ class TestSplitLineResonance:
             ResonanceTimingMonitor(max_history=0)
         with pytest.raises(ValueError, match="max_history"):
             ResonanceTimingMonitor(max_history=-1)
+        # Integral, not merely >= 1 (review finding, 2026-10-07): 1.5
+        # constructed and then the FIRST record raised TypeError inside
+        # EWMAStats' deque(maxlen=...), and NaN defeats every comparison
+        # and reached the resonance slice — both measured pre-fix.  cast
+        # feeds the mistyped runtime value the boundary check exists for.
+        for bad_window in (1.5, float("nan")):
+            with pytest.raises(ValueError, match="window_size"):
+                ResonanceTimingMonitor(window_size=cast(int, bad_window))
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=cast(int, 1.5))
 
     def test_the_table_answers_only_its_measured_configuration(self) -> None:
         """PIN (review finding, 2026-10-07): the pinned bars were measured at

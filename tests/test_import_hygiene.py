@@ -268,6 +268,18 @@ def _statement_bound_names(stmt: ast.stmt) -> set[str]:
             # ``rest`` is a plain string attribute, not a Name node
             # (review finding, 2026-10-07).
             out.add(node.rest)
+        elif isinstance(node, ast.Import):
+            # An import nested in a compound statement rebinds its names
+            # too: ``if flag: import pathlib as os`` leaves ``os`` possibly
+            # not the module, so a later restore import is load-bearing
+            # (review finding, 2026-10-07; measured as AttributeError).
+            # Value-blind on purpose: resetting even a same-value guarded
+            # re-import only widens the reset, the safe direction.
+            for alias in node.names:
+                out.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                out.add(alias.asname or alias.name)
         stack.extend(ast.iter_child_nodes(node))
     return out
 
@@ -758,6 +770,32 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_guarded_rebinding_import_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): an import nested in a compound
+    statement rebinds its names too — ``if flag: import pathlib as os``
+    leaves ``os`` possibly not the module, so a function's later
+    ``import os`` is the restore, not a repeat (measured pre-fix as a
+    demanded deletion that leaves ``os`` bound to pathlib: AttributeError
+    on ``os.sep``).  ``_statement_bound_names`` now records nested
+    Import/ImportFrom bindings, value-blind on purpose — the reset only
+    widens, the direction that never demands a deletion.  The guard-free
+    contrast holds the flag."""
+    guarded = (
+        "import os\n\nif flag:\n    import pathlib as os\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(guarded) == []
+    from_guarded = (
+        "import os\n\nif flag:\n    from pathlib import Path as os\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(from_guarded) == []
+    unguarded = (
+        "import os\n\nif flag:\n    value = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(unguarded) == [(8, "os")]
 
 
 def test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing() -> None:
