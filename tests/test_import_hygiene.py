@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Callable, cast
+
+import pytest
 
 from tools._repo import tracked_names
 
@@ -70,6 +73,7 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     found: set[tuple[int, str]] = set()
     top_seen = _scan_direct_imports(tree.body, found)
     class_scoped = _class_suite_import_ids(tree)
+    shadowed = _shadowed_nested_import_bindings(tree)
     for walked in ast.walk(tree):
         # Same-list repeats are flagged in EVERY statement list the module
         # holds — function, class, try, if, loop and with bodies alike: a
@@ -88,6 +92,20 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
         if id(walked) in class_scoped:
             continue
         for alias in walked.names:
+            bound = alias.asname or alias.name.split(".")[0]
+            if (id(walked), bound) in shadowed:
+                # Third measured exemption (review finding, 2026-10-07):
+                # binding equality against the top level does not prove a
+                # nested import redundant when a STRICTLY ENCLOSING function
+                # scope binds the same name — deleting the import would make
+                # the name resolve to that enclosing binding, not the module
+                # (measured: with a module-level ``import os``, an outer
+                # ``os = 1`` and an inner ``import os``, deleting the inner
+                # import raises AttributeError on ``os.sep``).  Class bodies
+                # between the scopes do not exempt: Python's name resolution
+                # skips class scope from nested functions, so the module
+                # binding is what deletion exposes there.
+                continue
             if (alias.name, alias.asname) in top_seen:
                 found.add((walked.lineno, alias.name))
     return sorted(found)
@@ -107,6 +125,104 @@ def _scan_direct_imports(
                     found.add((stmt.lineno, alias.name))
                 seen.add(key)
     return seen
+
+
+def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]:
+    """Names a function's OWN scope binds: parameters plus body bindings.
+
+    The walk stops at nested function and class bodies — their internal
+    bindings live in their own scopes — while the nested statement's NAME
+    itself binds here.  Comprehension targets are over-collected (they have
+    their own scope since Python 3), which can only widen the shadowing
+    exemption below; the exemption is the safe direction, since the
+    alternative forces a behavior-changing deletion.  A walrus inside a
+    nested function's decorator or default (which evaluates in this scope)
+    is the one binding the stop skips — vanishingly rare, and missing it
+    only leaves a flag standing for a human to judge.
+    ``include_imports=False`` drops the bindings import statements create,
+    for the own-scope question below (where the import under test must not
+    exempt itself).
+    """
+    out: set[str] = set()
+    args = getattr(fn, "args", None)
+    if args is not None:
+        params = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+        params += [a for a in (args.vararg, args.kwarg) if a is not None]
+        out.update(a.arg for a in params)
+    body = getattr(fn, "body", [])
+    # A Lambda's body is a single expression, not a statement list.
+    stack: list[ast.AST] = list(body) if isinstance(body, list) else [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(node.name)
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            out.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            out.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            out.add(node.name)
+        elif isinstance(node, ast.Import) and include_imports:
+            for alias in node.names:
+                out.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and include_imports:
+            for alias in node.names:
+                out.add(alias.asname or alias.name)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
+    """``(id(Import node), bound name)`` pairs another binding shadows.
+
+    Two shadowing shapes make a binding-keyed nested import load-bearing
+    despite matching a top-level binding, because deleting it would resolve
+    the name somewhere other than the module import the key matched:
+
+    * a STRICTLY ENCLOSING function scope binds the name (parameter,
+      assignment, any binding construct — an enclosing ``import`` counts
+      too, since ``import foo as os`` binds a different module under the
+      same name);
+    * the import's OWN scope binds the name by a non-import construct
+      (``os = 1`` anywhere in the function makes ``os`` function-local
+      throughout, so without the import the use site hits that assignment
+      or UnboundLocalError, never the module import).  Import-created
+      bindings are excluded from the own-scope set so the import under
+      test cannot exempt itself and a genuine same-scope re-import stays
+      flagged.
+
+    Class bodies pass the enclosing set through unchanged — nested
+    functions skip class scope in name resolution, so a class-body binding
+    exposes nothing on deletion.  Module scope contributes nothing: its
+    bindings are the ``top_seen`` baseline the comparison is against.
+    """
+    out: set[tuple[int, str]] = set()
+
+    def collect(scope_node: ast.AST, enclosing: frozenset[str]) -> None:
+        if isinstance(scope_node, ast.Module):
+            own_all: frozenset[str] = frozenset()
+            exempt: frozenset[str] = frozenset()
+        else:
+            own_all = frozenset(_function_bound_names(scope_node))
+            exempt = enclosing | frozenset(_function_bound_names(scope_node, include_imports=False))
+        stack: list[ast.AST] = list(ast.iter_child_nodes(scope_node))
+        while stack:
+            child = stack.pop()
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound in exempt:
+                        out.add((id(child), bound))
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                collect(child, enclosing | own_all)
+            else:
+                stack.extend(ast.iter_child_nodes(child))
+
+    collect(tree, frozenset())
+    return out
 
 
 def _class_suite_import_ids(tree: ast.Module) -> set[int]:
@@ -199,6 +315,53 @@ def test_a_same_block_duplicate_inside_try_or_if_is_found() -> None:
         "if True:\n    import sys\n    import sys\n"
     )
     assert duplicate_plain_imports(source) == [(3, "os"), (9, "sys")]
+
+
+def test_a_shadowed_nested_import_is_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): binding equality against the top
+    level does not prove a nested import redundant when an enclosing
+    function binds the same name — deleting it makes the name resolve to
+    the enclosing binding, measured below as the AttributeError the review
+    traced.  Mutation: dropping the shadowing exemption from
+    ``duplicate_plain_imports`` fails exactly this test."""
+    shadowed = (
+        "import os\n\n\ndef outer():\n    os = 1\n\n    def inner():\n"
+        "        import os\n\n        return os.sep\n\n    return inner\n"
+    )
+    assert duplicate_plain_imports(shadowed) == []
+    # The premise, measured in place: WITHOUT the inner import, the call
+    # resolves ``os`` to the enclosing int and breaks.
+    namespace: dict[str, object] = {}
+    deleted = shadowed.replace("        import os\n\n", "")
+    code = compile(deleted, "<shadowed>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    outer = cast("Callable[[], Callable[[], str]]", namespace["outer"])
+    with pytest.raises(AttributeError):
+        outer()()
+    # A parameter shadows the same way.
+    param = (
+        "import os\n\n\ndef f(os):\n    def g():\n        import os\n\n"
+        "        return os.sep\n\n    return g\n"
+    )
+    assert duplicate_plain_imports(param) == []
+    # Own-scope assignment: ``os`` is function-local THROUGHOUT the
+    # function, so the import never duplicates the module-level binding.
+    own = (
+        "import os\n\n\ndef f():\n    import os\n\n    x = os.sep\n"
+        "    os = 1\n    return x, os\n"
+    )
+    assert duplicate_plain_imports(own) == []
+
+
+def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:
+    """Nested functions skip class scope in name resolution, so a class
+    attribute of the same name exposes nothing on deletion — the method's
+    re-import stays flagged, and the exemption cannot widen into classes."""
+    source = (
+        "import os\n\n\nclass C:\n    os = 1\n\n    def m(self):\n"
+        "        import os\n\n        return os.sep\n"
+    )
+    assert duplicate_plain_imports(source) == [(8, "os")]
 
 
 def test_the_tree_carries_no_duplicate_plain_import() -> None:

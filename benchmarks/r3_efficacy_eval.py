@@ -204,24 +204,61 @@ def _provenance_lines(seed: int) -> str:
             text=True,
             check=True,
         ).stdout.strip()
+        # A commit only names the measuring code while the worktree matches
+        # it: the native digest below covers neither this script nor the
+        # detector's Python, so a dirty tree could publish different rows
+        # under the same commit= value (review finding, 2026-10-07).
+        status = subprocess.run(
+            ["git", "-C", str(REPO), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if status:
+            commit += "+dirty-worktree"
     except (OSError, subprocess.CalledProcessError):
         commit = "unrecorded (no git in the measuring environment)"
     model = platform.processor() or platform.machine()
+    hypervised = ""
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
         for line in cpuinfo.read_text(encoding="utf-8").splitlines():
             if line.lower().startswith("model name"):
                 model = line.split(":", 1)[1].strip()
-                break
-    host = f"{model} x{os.cpu_count()} (shared cloud container, not pinned)"
+            elif line.lower().startswith("flags") and " hypervisor" in f" {line}":
+                hypervised = ", virtualized"
+    # Only facts the process can establish (review finding, 2026-10-07: the
+    # first form hard-coded "shared cloud container, not pinned", which a
+    # regeneration on a dedicated or pinned host would publish unexamined):
+    # the CPU model, the visible core count, this process's actual affinity
+    # mask, and the hypervisor CPUID bit.  Tenancy is not observable from
+    # inside and is said so.
+    affinity = (
+        f"affinity {len(os.sched_getaffinity(0))}/{os.cpu_count()} cores"
+        if hasattr(os, "sched_getaffinity")
+        else "affinity unrecorded on this platform"
+    )
+    host = f"{model} x{os.cpu_count()} ({affinity}{hypervised}; tenancy unrecorded)"
     native = module_attestation().get("native_backend") or {}
     lib_name = Path(str(native.get("path") or "")).name
     digest = str(native.get("preload_digest_hex") or "")
-    if lib_name and digest:
+    if lib_name and digest and native.get("preload_digest_is_of_mapped_bytes"):
+        # The flag is the evidence that these bytes are the ones that
+        # executed; on loaders where the preload digest is not of the
+        # mapped object (no procfs re-read), claiming the artifact — and
+        # deriving build flags from it — would outrun the evidence
+        # (review finding, 2026-10-07; _self_test applies the same rule).
         artifact = f"{lib_name} sha3_256={digest}"
+        build = benchmark_runner._native_build_configuration()
+    elif lib_name and digest:
+        artifact = (
+            "unrecorded (preload digest is not of the mapped bytes on this "
+            "loader; the measured object cannot be pinned)"
+        )
+        build = "unrecorded (no pinned artifact to attribute a build tree to)"
     else:
         artifact = "unrecorded (no native-backend attestation in the measuring process)"
-    build = benchmark_runner._native_build_configuration()
+        build = "unrecorded (no pinned artifact to attribute a build tree to)"
     return (
         f"# provenance: run_id={run_id} commit={commit} python={platform.python_version()}\n"
         f"# host: {host}\n"

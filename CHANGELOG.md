@@ -34,6 +34,45 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `c4c872d`: the import gate learns lexical shadowing, the provenance generator records only what it can establish — 2026-10-07
+
+- **The import-hygiene gate flagged a load-bearing nested import when an
+  enclosing function shadows the name.** High, a CI-blocking gate that
+  would force a behavior-changing deletion (measured on the review's
+  shape: module-level `import os`, an enclosing `os = 1`, an inner
+  `import os` — the gate flagged the inner import while deleting it makes
+  `os.sep` hit the enclosing int, AttributeError).  Binding equality
+  against the top level is now joined by a lexical-scope check: a nested
+  import is exempt when a strictly-enclosing function scope binds its
+  name (parameter, assignment, any binding construct), or its own scope
+  binds it by a non-import construct (which makes the name function-local
+  throughout, so the module import was never what the use sites saw).
+  Import-created bindings do not exempt their own scope — a genuine
+  same-scope re-import stays flagged — and class bodies exempt nothing,
+  because nested functions skip class scope in name resolution (both
+  pinned).  PIN `test_a_shadowed_nested_import_is_load_bearing`
+  (mutation-earned: the exemption dropped fails exactly it), with the
+  measured premise executed in the test; the tree sweep's verdict is
+  unchanged (no tracked file carries the shape).
+- **The efficacy provenance generator records only facts it can
+  establish.** Three gaps, found in review, each fixed at the mechanism:
+  the run identifier now carries `+dirty-worktree` when the tree differs
+  from `HEAD` (the native digest covers neither the detector's Python nor
+  the evaluation script, so a dirty run could publish different rows
+  under the same `commit=`); the host line states the measured facts —
+  CPU model, visible cores, this process's actual affinity mask, the
+  hypervisor CPUID bit — and says tenancy is unrecorded, instead of
+  hard-coding "shared cloud container, not pinned"; and the artifact and
+  build lines are gated on `preload_digest_is_of_mapped_bytes`, the same
+  rule `_self_test` applies, so on loaders where the preload digest is
+  not of the mapped object nothing is claimed about the executed bytes.
+  The committed trailer's `commit=` is completed to
+  `07ea1d56f3d9+dirty-worktree` per the new convention: the 06:06Z run's
+  worktree held the (later-committed) trailer function itself and the
+  engine/example edits of that round, none of which the rows read — the
+  detector (`monitoring.py`) and the backends matched `HEAD` exactly,
+  and the evaluation helpers were unchanged.
+
 ### Copilot round on `26639a2`: efficacy provenance made fail-closed by digest match, the contamination guarantee qualified at its degenerate branch — 2026-10-07
 
 - **The efficacy trailer's build line is attributed only after matching
