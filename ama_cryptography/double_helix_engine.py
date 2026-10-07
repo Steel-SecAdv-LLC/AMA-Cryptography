@@ -1072,6 +1072,22 @@ class AvaDescent:
                     "descend overflowed: the state left the finite range "
                     "(operands near the float maximum overflow on subtraction)"
                 )
+            if moved == 0.0 and value > 0.0:
+                # An exactly zero move with target error remaining is
+                # STAGNATION, not convergence: the update rounded away below
+                # the state's resolution (variance mode from [1e150, -1e150]
+                # computes a variance near 1e300, an effective step below
+                # the state's ulp, and nxt == state — review finding,
+                # 2026-10-06), and a deterministic map that moved nothing
+                # this step moves nothing ever after.  True convergence
+                # under any positive tolerance stops on a small-but-nonzero
+                # move; an exact zero move with V == 0 is an exact hit and
+                # breaks below.
+                raise ValueError(
+                    "descend stagnated: the update rounds away below the "
+                    "state's floating-point resolution while the target "
+                    "error remains"
+                )
             history.append(value)
             if moved < tolerance:
                 break

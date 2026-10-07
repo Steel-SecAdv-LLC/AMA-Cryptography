@@ -85,7 +85,8 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   requirement; `wiki/Security-Model.md`'s support matrix rolls with the
   authoritative `SECURITY.md`; `detect_resonance`'s Returns documentation
   carries the four split-line fields; and the two remaining "always"
-  claims for `history[-1]` are qualified for `max_steps=0`. adopted from Mercury Agent's
+  claims for `history[-1]` are qualified for `max_steps=0`.
+- **3R resonance gains a split-line channel, adopted from Mercury Agent's
   3R and re-derived to this repository's evidence standard (2026-10-06).**
   `detect_resonance`'s Fisher g-test judges the single largest periodogram
   ordinate, so periodic energy split across two comparable spectral lines

@@ -295,6 +295,15 @@ class TestReviewHardening:
         with pytest.raises(ValueError, match="descend overflowed"):
             AvaDescent().descend([0.0], [1e200], max_steps=3, mode="equity")
 
+    def test_exact_stagnation_is_refused_not_reported_as_convergence(self) -> None:
+        """PIN (review finding): variance mode from [1e150, -1e150] toward
+        the origin computes a variance near 1e300, the effective update
+        rounds away below the state's ulp, and the loop returned
+        "converged" after one no-op iteration at V ~ 2e300.  A zero move
+        with target error remaining is now a named refusal."""
+        with pytest.raises(ValueError, match="stagnated"):
+            AvaDescent().descend([0.0, 0.0], [1e150, -1e150], mode="variance")
+
     def test_momentum_outside_its_stability_bound_is_refused(self) -> None:
         """PIN (review finding): the constructor bounds alpha * equity_gain,
         but momentum applies alpha alone — alpha=100 with equity_gain=0.01
