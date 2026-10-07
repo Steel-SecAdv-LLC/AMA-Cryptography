@@ -2372,7 +2372,11 @@ class ResonanceTimingMonitor:
             ``window_size=20000`` monitor produced m = 16,384, off the
             pinned table, and the first report ran a 65.5-million-draw
             synchronous null simulation — measured 15.1 s — plus a
-            32,768-point FFT).
+            32,768-point FFT).  The pinned bars answer for the default
+            configuration; a subclass overriding the resonance
+            configuration derives its own bars, a bounded one-time cost
+            per spectrum size stated at :meth:`_multiline_threshold`'s
+            cost contract (measured 5.2 s at the capped worst size).
         """
         # Snapshot under the monitor lock: record_timing() appends to this
         # same deque under self._lock on every instrumented operation, and
@@ -2587,8 +2591,24 @@ class ResonanceTimingMonitor:
         of ``m`` iid unit-exponential ordinates (the periodogram null).
         The seed is fixed per size, so the bar is byte-reproducible across
         processes, and the result is cached: the draw runs once per
-        distinct spectrum size per process, off the hot path
+        distinct cache identity per process, off the hot path
         (detect_resonance is on-demand, not per-record).
+
+        Cost contract (measured, 2026-10-07): the DEFAULT configuration
+        never pays the draw from the public pipeline — detect_resonance's
+        window cap keeps every spectrum size it can produce on the pinned
+        table.  A subclass that overrides ``RESONANCE_FALSE_ALARM_RATE``,
+        ``MULTILINE_ORDINATES`` or ``_MULTILINE_NULL_TRIALS`` has changed
+        what the bar must be, so its first report at each spectrum size
+        derives the bar here — 5.2 s at the capped worst size (m = 8,192,
+        4,000 trials, shared 4-vCPU container), microseconds from the
+        cache thereafter.  That one-time cost is what a correct empirical
+        bar for a non-default configuration costs: the table cannot be
+        precomputed over a continuous override space, and serving the
+        default table to an overridden configuration was the defect the
+        configuration gate closed.  An overriding operator who cannot
+        afford first-report latency can warm the cache at startup by
+        calling this method directly for the sizes the window produces.
 
         The iid-exponential null is an IDEALISATION shared with Fisher's
         analytic bar above it: the pipeline zero-pads n samples to the next

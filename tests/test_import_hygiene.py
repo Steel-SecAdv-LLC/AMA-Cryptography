@@ -125,15 +125,31 @@ def _scan_direct_imports(
     """Flag repeats among one statement list's import bindings; return the
     ``(module, asname)`` pairs the list binds.
 
-    An intervening non-import statement that rebinds a name resets it:
-    after ``import os; os = 1`` a second ``import os`` in the same list
-    restores the module binding, so deleting it would leave the rebound
-    value — load-bearing, not dead (the same rule the cross-scope shape
-    applies at module scope; review finding, 2026-10-07).  The rebinding
-    walk over a compound statement over-collects from its nested suites,
-    which are scanned separately — over-collection only widens the reset,
-    the safe direction.
+    An intervening statement that rebinds a name resets it: after
+    ``import os; os = 1`` a second ``import os`` in the same list restores
+    the module binding, so deleting it would leave the rebound value —
+    load-bearing, not dead (the same rule the cross-scope shape applies at
+    module scope; review finding, 2026-10-07).  Imports rebind too (review
+    finding, 2026-10-07, second round): ``import pathlib as os`` and
+    ``from pathlib import Path as os`` each rebind ``os``, so a later
+    ``import os`` restores the module and is exempt.  An import resets a
+    key only when it binds the same name to a DIFFERENT value —
+    ``import os.path`` between two ``import os`` rebinds ``os`` to the
+    same module object, so the repeat stays flagged (measured: deleting it
+    changes nothing).  A plain alias binds its root module, an ``as``
+    alias binds the full dotted module, and a from-import never binds a
+    module this gate tracks, so it always resets.  The rebinding walk over
+    a compound statement over-collects from its nested suites, which are
+    scanned separately — over-collection only widens the reset, the safe
+    direction.
     """
+
+    def bound_name(key: tuple[str, str | None]) -> str:
+        return key[1] or key[0].split(".")[0]
+
+    def bound_value(key: tuple[str, str | None]) -> str:
+        return key[0] if key[1] else key[0].split(".")[0]
+
     seen: set[tuple[str, str | None]] = set()
     for stmt in body:
         if isinstance(stmt, ast.Import):
@@ -141,11 +157,19 @@ def _scan_direct_imports(
                 key = (alias.name, alias.asname)
                 if key in seen:
                     found.add((stmt.lineno, alias.name))
+                seen = {
+                    k
+                    for k in seen
+                    if bound_name(k) != bound_name(key) or bound_value(k) == bound_value(key)
+                }
                 seen.add(key)
             continue
-        rebound = _statement_bound_names(stmt)
+        if isinstance(stmt, ast.ImportFrom):
+            rebound = {alias.asname or alias.name for alias in stmt.names}
+        else:
+            rebound = _statement_bound_names(stmt)
         if rebound:
-            seen = {key for key in seen if (key[1] or key[0].split(".")[0]) not in rebound}
+            seen = {key for key in seen if bound_name(key) not in rebound}
     return seen
 
 
@@ -194,8 +218,9 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
     is the one binding the stop skips — vanishingly rare, and missing it
     only leaves a flag standing for a human to judge.
     ``include_imports=False`` drops the bindings import statements create,
-    for the own-scope question below (where the import under test must not
-    exempt itself).
+    for the own-scope question below: whether an import exempts its own
+    scope is value-dependent, so it is answered pairwise by
+    :func:`_import_bound_pairs`, not by this name set.
     """
     out: set[str] = set()
     args = getattr(fn, "args", None)
@@ -247,10 +272,14 @@ def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
     * the import's OWN scope binds the name by a non-import construct
       (``os = 1`` anywhere in the function makes ``os`` function-local
       throughout, so without the import the use site hits that assignment
-      or UnboundLocalError, never the module import).  Import-created
-      bindings are excluded from the own-scope set so the import under
-      test cannot exempt itself and a genuine same-scope re-import stays
-      flagged.
+      or UnboundLocalError, never the module import), or by an import that
+      binds the same name to a DIFFERENT value — ``import pathlib as os``
+      and ``from pathlib import Path as os`` leave the plain ``import os``
+      beside them as what restores the module, never a repeat (review
+      finding, 2026-10-07, final Copilot round).  The own-scope import
+      question is answered pairwise over ``(bound name, bound value)``, so
+      an import cannot exempt itself and a same-value repeat —
+      ``import os as _os`` twice — stays flagged.
 
     Class bodies pass the enclosing set through unchanged — nested
     functions skip class scope in name resolution, so a class-body binding
@@ -263,16 +292,20 @@ def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
         if isinstance(scope_node, ast.Module):
             own_all: frozenset[str] = frozenset()
             exempt: frozenset[str] = frozenset()
+            own_pairs: frozenset[tuple[str, str]] = frozenset()
         else:
             own_all = frozenset(_function_bound_names(scope_node))
             exempt = enclosing | frozenset(_function_bound_names(scope_node, include_imports=False))
+            own_pairs = frozenset(_import_bound_pairs(scope_node))
         stack: list[ast.AST] = list(ast.iter_child_nodes(scope_node))
         while stack:
             child = stack.pop()
             if isinstance(child, ast.Import):
                 for alias in child.names:
                     bound = alias.asname or alias.name.split(".")[0]
-                    if bound in exempt:
+                    value = alias.name if alias.asname else alias.name.split(".")[0]
+                    divergent = any(b == bound and v != value for b, v in own_pairs)
+                    if bound in exempt or divergent:
                         out.add((id(child), bound))
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 collect(child, enclosing | own_all)
@@ -280,6 +313,41 @@ def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
                 stack.extend(ast.iter_child_nodes(child))
 
     collect(tree, frozenset())
+    return out
+
+
+def _import_bound_pairs(fn: ast.AST) -> set[tuple[str, str]]:
+    """``(bound name, bound value)`` pairs the function's own imports bind.
+
+    A plain ``import A.B`` binds ``A`` to module ``A``; ``import A.B as C``
+    binds ``C`` to module ``A.B``; ``from M import N as C`` binds ``C`` to
+    the attribute ``M.N``, encoded ``"from:M:N"`` so it can never equal a
+    module path.  The pairs let the own-scope exemption above compare
+    values, not just names: an import whose scope holds another import of
+    the SAME name but a DIFFERENT value is load-bearing (it restores the
+    module that other import displaced), while a same-value repeat is the
+    duplicate the gate exists to flag.  The walk stops where
+    :func:`_function_bound_names` stops (nested function and class bodies
+    bind their own scopes).
+    """
+    out: set[tuple[str, str]] = set()
+    body = getattr(fn, "body", [])
+    stack: list[ast.AST] = list(body) if isinstance(body, list) else [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    out.add((alias.asname, alias.name))
+                else:
+                    root = alias.name.split(".")[0]
+                    out.add((root, root))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                out.add((alias.asname or alias.name, f"from:{node.module}:{alias.name}"))
+        stack.extend(ast.iter_child_nodes(node))
     return out
 
 
@@ -444,6 +512,55 @@ def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:
         "import os\n\nprint(os.sep)\n"
     )
     assert duplicate_plain_imports(mapping_rest) == []
+
+
+def test_an_import_rebinding_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07, final Copilot round): imports rebind
+    too.  ``import pathlib as os`` and ``from pathlib import Path as os``
+    each leave ``os`` bound to something other than the ``os`` module, so a
+    later plain ``import os`` RESTORES the module — deleting it breaks the
+    use sites (measured below: AttributeError on ``os.sep``) — while
+    ``import os.path`` rebinds ``os`` to the SAME module object, so a
+    repeat across it stays a flagged redundancy (measured: deletion changes
+    nothing).  Mutation: dropping the value-aware reset from
+    ``_scan_direct_imports`` fails the two top-level exemptions; dropping
+    the divergent-import own-scope bindings from ``_function_bound_names``
+    fails the two function-scope exemptions — each exactly here."""
+    aliased = "import os\nimport pathlib as os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(aliased) == []
+    from_form = "import os\nfrom pathlib import Path as os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(from_form) == []
+    # The premise, measured in place: WITHOUT the restore import, the use
+    # site resolves ``os`` to the rebound value and breaks.
+    for deleted in (
+        "import os\nimport pathlib as os\nos.sep\n",
+        "import os\nfrom pathlib import Path as os\nos.sep\n",
+    ):
+        with pytest.raises(AttributeError):
+            exec(  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+                compile(deleted, "<rebound>", "exec"), {}
+            )
+    # Same-value rebinding is no exemption: ``import os.path`` binds ``os``
+    # to the os module itself, so the repeat across it stays flagged, and a
+    # genuine duplicate aliased pair stays flagged (value-equality guard).
+    same_value = "import os\nimport os.path\nimport os\n"
+    assert duplicate_plain_imports(same_value) == [(3, "os")]
+    aliased_pair = "import pathlib as p\nimport pathlib as p\n"
+    assert duplicate_plain_imports(aliased_pair) == [(2, "pathlib")]
+    # The same two shapes exempt at function scope (the own-scope set
+    # counts divergent import bindings; a plain re-import still cannot
+    # self-exempt — control below).
+    fn_aliased = (
+        "import os\n\n\ndef f():\n    import pathlib as os\n    import os\n\n" "    return os.sep\n"
+    )
+    assert duplicate_plain_imports(fn_aliased) == []
+    fn_from = (
+        "import os\n\n\ndef f():\n    from pathlib import Path as os\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(fn_from) == []
+    fn_control = "import os\n\n\ndef f():\n    import os\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(fn_control) == [(5, "os"), (6, "os")]
 
 
 def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:

@@ -34,6 +34,49 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `4cb3c59`: imports rebind too, and the derivation cost for an overridden configuration is a stated contract — 2026-10-07
+
+- **The import gate missed that imports themselves rebind.** High, the
+  final Copilot review's banner finding (posted after `4cb3c59` was
+  pushed, so no session had seen it): `import os; import pathlib as os;
+  import os` flagged the third line, while deleting it leaves `os` bound
+  to `pathlib` and breaks `os.sep` (measured: AttributeError), and an
+  intervening `from pathlib import Path as os` had the same problem —
+  the rebinding reset covered every binding construct EXCEPT the gate's
+  own subject.  `_scan_direct_imports` now resets a tracked key when a
+  later import binds the same name to a DIFFERENT value, and treats
+  from-import aliases as rebindings; value equality keeps the true
+  redundancies flagged (`import os.path` between two `import os` rebinds
+  `os` to the same module, so the repeat stays a duplicate — measured:
+  deletion changes nothing).  The own-scope exemption is now answered
+  pairwise over `(bound name, bound value)` via `_import_bound_pairs`,
+  so `import pathlib as os` beside a nested plain `import os` exempts it
+  while `import os as _os` twice stays flagged — a first name-level form
+  of this fix broke exactly that repeated-identical-alias pin and was
+  replaced.  PIN
+  `test_an_import_rebinding_makes_the_restore_import_load_bearing`
+  (mutation-earned both ways: the reset dropped fails its top-level
+  cases, the pairwise exemption disabled fails its function-scope cases,
+  each exactly there; both premises executed in the test).  The tree
+  sweep's verdict is unchanged.
+- **The one-time null-bar derivation for an overridden resonance
+  configuration is a stated cost contract, not a removed path.** The
+  same review observed that a subclass overriding
+  `RESONANCE_FALSE_ALARM_RATE`, `MULTILINE_ORDINATES` or
+  `_MULTILINE_NULL_TRIALS` still reaches the synchronous measured-null
+  derivation from `get_security_report` (at the capped worst size,
+  m = 8,192: measured 5.2 s once, microseconds from the cache after).
+  Measured and kept, with the contract documented at
+  `_multiline_threshold` and `detect_resonance`: the default
+  configuration never pays it (the window cap keeps every public
+  spectrum size on the pinned table), the override space is continuous
+  so no table can precompute it, and serving the default table to an
+  overridden configuration was precisely the defect the configuration
+  gate closed — the review's suggested remedies would reintroduce it or
+  refuse a supported override.  An operator who cannot afford
+  first-report latency warms the cache at startup; the path is the
+  correct bar's irreducible cost, not an oversight.
+
 ### Copilot round on `08617a4`: mapping-rest captures are bindings, one working directory in the example sequences — 2026-10-07
 
 - **Both binding collectors in the import gate missed
