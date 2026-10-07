@@ -34,6 +34,27 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `18fb593`: the module-scope baseline carries execution order — 2026-10-07
+
+- **A nested import is a repeat only of a top-level binding stable since
+  before its container.** Medium: the cross-scope comparison used the
+  module's final binding set, order-blind, so a local import whose
+  top-level twin executes only after the function is called was flagged
+  — measured as NameError on
+  `def f(): import os ...; value = f(); import os`.
+  `_scan_direct_imports` now returns each binding with the line since
+  which it is continuously the module (a reset drops it, a restore
+  re-enters at the restore's line, a same-value repeat keeps the
+  original line), and the gate flags a nested import only when that
+  point precedes the import's top-level container statement — sound for
+  every call site, since a function body runs only during a top-level
+  statement after its container.  Function scopes need no ordering: a
+  binding anywhere in one makes the name local throughout.  PIN
+  `test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead`
+  (mutation-earned twice: the order-blind comparison and the
+  clock-restarting same-value repeat each fail exactly this test; early
+  and rebound contrasts hold the flag and the continuity rule).
+
 ### Copilot round on `ec58d6c`: definition children that execute in the enclosing scope are walked — 2026-10-07
 
 - **The import gate's scope walks traverse decorators, defaults and

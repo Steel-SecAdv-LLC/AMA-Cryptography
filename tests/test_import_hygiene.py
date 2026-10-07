@@ -83,6 +83,20 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     top_seen = _scan_direct_imports(tree.body, found)
     class_scoped = _class_suite_import_ids(tree)
     shadowed = _shadowed_nested_import_bindings(tree)
+    # Module scope executes in statement order, so the baseline must carry
+    # WHEN each binding became continuously the module: a nested import
+    # compared against a top-level import that executes only after the
+    # function is already called is load-bearing, not a repeat (review
+    # finding, 2026-10-07; measured as NameError on
+    # ``def f(): import os ...; value = f(); import os``).  A function
+    # body runs only during a top-level statement AFTER its container, so
+    # requiring the binding stable since BEFORE the container statement is
+    # sound for every call site.  Function scopes need no such ordering:
+    # a binding anywhere in one makes the name local throughout.
+    container_lineno: dict[int, int] = {}
+    for top_stmt in tree.body:
+        for sub in ast.walk(top_stmt):
+            container_lineno[id(sub)] = top_stmt.lineno
     # No separate module-rebinding filter is needed here: a module-scope
     # non-import rebinding (``import os`` then ``os = 1`` at top level)
     # makes the nested re-import load-bearing (review finding, 2026-10-07;
@@ -123,16 +137,22 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
                 # skips class scope from nested functions, so the module
                 # binding is what deletion exposes there.
                 continue
-            if (alias.name, alias.asname) in top_seen:
+            bound_since = top_seen.get((alias.name, alias.asname))
+            if bound_since is not None and bound_since < container_lineno[id(walked)]:
                 found.add((walked.lineno, alias.name))
     return sorted(found)
 
 
 def _scan_direct_imports(
     body: list[ast.stmt], found: set[tuple[int, str]]
-) -> set[tuple[str, str | None]]:
+) -> dict[tuple[str, str | None], int]:
     """Flag repeats among one statement list's import bindings; return the
-    ``(module, asname)`` pairs the list binds.
+    ``(module, asname)`` pairs the list binds, each mapped to the line
+    since which that binding is CONTINUOUSLY the module — a reset drops
+    the pair, a restore re-enters it at the restore's line, and a
+    same-value repeat keeps the original line, so the caller's ordering
+    comparison (review finding, 2026-10-07) sees when the module binding
+    last became reliable, not merely that it exists at the end.
 
     An intervening statement that rebinds a name resets it: after
     ``import os; os = 1`` a second ``import os`` in the same list restores
@@ -159,7 +179,7 @@ def _scan_direct_imports(
     def bound_value(key: tuple[str, str | None]) -> str:
         return key[0] if key[1] else key[0].split(".")[0]
 
-    seen: set[tuple[str, str | None]] = set()
+    seen: dict[tuple[str, str | None], int] = {}
     for stmt in body:
         if isinstance(stmt, ast.Import):
             for alias in stmt.names:
@@ -167,18 +187,20 @@ def _scan_direct_imports(
                 if key in seen:
                     found.add((stmt.lineno, alias.name))
                 seen = {
-                    k
-                    for k in seen
+                    k: since
+                    for k, since in seen.items()
                     if bound_name(k) != bound_name(key) or bound_value(k) == bound_value(key)
                 }
-                seen.add(key)
+                # A surviving same-value repeat keeps its original line:
+                # the binding never stopped being the module.
+                seen.setdefault(key, stmt.lineno)
             continue
         if isinstance(stmt, ast.ImportFrom):
             rebound = {alias.asname or alias.name for alias in stmt.names}
         else:
             rebound = _statement_bound_names(stmt)
         if rebound:
-            seen = {key for key in seen if bound_name(key) not in rebound}
+            seen = {key: since for key, since in seen.items() if bound_name(key) not in rebound}
     return seen
 
 
@@ -700,6 +722,42 @@ def test_sibling_same_value_imports_are_never_green_half_deleted() -> None:
     exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
     green_f = cast(Callable[[int], str], namespace["f"])
     assert green_f(1) == os.sep and green_f(2) == os.pathsep
+
+
+def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead() -> None:
+    """PIN (review finding, 2026-10-07): module scope executes in statement
+    order, so a nested import is a repeat only of a top-level binding that
+    is continuously the module since BEFORE the nested import's top-level
+    container — a function body runs only during some top-level statement
+    after its container, never earlier.  Pre-fix the baseline was the
+    module's final binding set, order-blind, and the gate demanded deleting
+    a local import whose top-level twin had not yet executed when the
+    function ran (measured: NameError).  The early contrast holds the flag;
+    the rebound contrast pins the continuity rule: a top-level restore
+    AFTER the def leaves no binding stable since before it, and a call
+    between the rebinding and the restore would see the rebound value."""
+    late = "def f():\n    import os\n\n    return os.sep\n\n\nvalue = f()\nimport os\n"
+    assert duplicate_plain_imports(late) == []
+    broken = "def f():\n    return os.sep\n\n\nvalue = f()\nimport os\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<late>", "exec")
+    with pytest.raises(NameError):
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    early = "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\nvalue = f()\n"
+    assert duplicate_plain_imports(early) == [(5, "os")]
+    rebound = (
+        "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\n"
+        "os = 1\nimport os\nvalue = f()\n"
+    )
+    assert duplicate_plain_imports(rebound) == []
+    # A same-value top-level repeat does not restart the clock: the binding
+    # has been the module since line 1, so the nested import is still the
+    # repeat (and the top-level twin is the same-list duplicate).
+    repeat = (
+        "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\n"
+        "import os\nvalue = f()\n"
+    )
+    assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
 
 
 def test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing() -> None:
