@@ -34,6 +34,52 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Review round on `752247b`: degenerate windows refused at construction, the provenance generator pinned, the import gate's fixpoint proven safe — 2026-10-07
+
+- **`ResonanceTimingMonitor` refuses `window_size < 1` and
+  `max_history < 1`.** Medium: Python slices treat `[-0:]` as the whole
+  sequence, so a `window_size=0` monitor bypassed the
+  `_MAX_RESONANCE_SAMPLES` cap — measured at 18,000 scanned samples
+  against the 16,384 bar (negative sizes slice from a positive offset,
+  the same bypass).  Both now raise `ValueError` at construction, the
+  way the constructor already refuses degenerate `max_operations`.  PIN
+  `test_a_degenerate_window_size_is_refused_at_construction`
+  (mutation-earned: with the validation removed, exactly this test
+  fails).
+
+- **The efficacy provenance generator has direct tests.** Medium: the
+  prose↔table coupling tests never exercised `_provenance_lines`, so a
+  regression could publish a misleading commit/artifact/build record
+  while they stayed green.  Two PINs, each mutation-earned: the commit
+  field's clean / dirty-worktree / gitless states (removing the dirty
+  marker fails exactly
+  `test_provenance_records_clean_dirty_and_gitless_states`), and the
+  mapped-digest gate on the artifact and build lines, including that an
+  unpinned artifact never reaches build-tree attribution (removing the
+  `preload_digest_is_of_mapped_bytes` condition fails exactly
+  `test_provenance_pins_the_artifact_only_for_mapped_digests`).
+
+- **The import gate needs no dominance analysis; the property is now
+  pinned.** Measured against the review's exclusive-branch example: the
+  gate flags both same-value sibling imports, still flags the
+  half-deleted intermediate (the state that raises `UnboundLocalError`
+  on the emptied branch), and only certifies the full deletion, which
+  resolves every use to the module binding — behavior-preserving.  The
+  one single-deletion shape that would go green while breaking a branch
+  (a same-name, different-value sibling) is exactly what the pairwise
+  own-scope exemption already removes from the report.  PIN
+  `test_sibling_same_value_imports_are_never_green_half_deleted`:
+  the proposed value-blind exemption, applied as a mutant, fails this
+  test and six existing pins.
+
+- **The lock test reaches its module through the class it imports.** Low
+  (CodeQL #755, `py/import-and-import-from`): the concurrency test added a
+  function-level `import ama_cryptography.monitoring as ...` beside the
+  file's top-level `from ama_cryptography.monitoring import ...`.  The
+  module object to patch is now `sys.modules[ResonanceTimingMonitor.__module__]`
+  — the module the class actually lives in — and the second import style is
+  gone.  Behavioral: the test's assertions are unchanged and still pass.
+
 ### Copilot round on `2b3546a`: one j-normalization across the split-line surface, the derivation serialized, the binding walk comprehension-scope-aware — 2026-10-07
 
 - **`detect_resonance` normalizes `MULTILINE_ORDINATES` the way its

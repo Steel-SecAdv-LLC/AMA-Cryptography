@@ -1515,6 +1515,18 @@ class ResonanceTimingMonitor:
             Uses collections.deque with maxlen for O(1) append and automatic
             pruning, and EWMA/Welford's algorithm for O(1) incremental statistics.
         """
+        # window_size feeds detect_resonance's slice bound: Python slices
+        # treat [-0:] as the whole sequence, so an unvalidated 0 (and any
+        # negative, via its positive-offset slice) walked the entire
+        # max_history deque past the _MAX_RESONANCE_SAMPLES cap — measured
+        # at 18,000 scanned samples against the 16,384 cap (review finding,
+        # 2026-10-07).  max_history < 1 is the same class of degenerate: 0
+        # is a monitor that silently retains nothing (INVARIANT-3), -1 a
+        # deque() ValueError deferred to the first record.
+        if window_size < 1:
+            raise ValueError("window_size must be at least 1")
+        if max_history < 1:
+            raise ValueError("max_history must be at least 1")
         if max_operations < 1:
             raise ValueError("max_operations must be at least 1")
         if max_ratio_operations < 1:

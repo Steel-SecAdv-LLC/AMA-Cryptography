@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 from collections import deque
 from pathlib import Path
 from typing import ClassVar, cast
@@ -400,7 +401,9 @@ class TestSplitLineResonance:
         )
         assert 19 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
         ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
-        import ama_cryptography.monitoring as monitoring_module
+        # The module the class lives in, without a second import style for a
+        # module this file already imports from (CodeQL #755).
+        monitoring_module = sys.modules[ResonanceTimingMonitor.__module__]
 
         # monitoring's module-level ``import random`` binds the same module object,
         # so the stdlib import above is the original to delegate to and restore.
@@ -507,6 +510,28 @@ class TestSplitLineResonance:
         assert out["multiline_threshold"] == table[cap // 2]
         # The pinned bar answered; no size was simulated for this report.
         assert set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE) == cache_before
+
+    def test_a_degenerate_window_size_is_refused_at_construction(self) -> None:
+        """PIN (review finding, 2026-10-07): ``window_size`` feeds
+        ``detect_resonance``'s slice bound, and Python slices treat
+        ``[-0:]`` as the whole sequence — measured pre-fix, a
+        ``window_size=0`` monitor with ``max_history=20000`` scanned all
+        18,000 recorded samples, past the 16,384 cap the oversized-window
+        pin above establishes (a negative size slices from a positive
+        offset, the same bypass).  The constructor now refuses both, the
+        way it already refuses degenerate ``max_operations``; ``max_history``
+        below 1 is the same class (0 is a monitor that silently retains
+        nothing, -1 a deferred deque ValueError at first record).
+        Mutation: with the ``window_size`` validation removed, the first
+        two assertions fail."""
+        with pytest.raises(ValueError, match="window_size"):
+            ResonanceTimingMonitor(window_size=0)
+        with pytest.raises(ValueError, match="window_size"):
+            ResonanceTimingMonitor(window_size=-5)
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=0)
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=-1)
 
     def test_the_table_answers_only_its_measured_configuration(self) -> None:
         """PIN (review finding, 2026-10-07): the pinned bars were measured at

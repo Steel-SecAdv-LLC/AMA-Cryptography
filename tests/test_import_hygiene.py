@@ -29,6 +29,7 @@ the statement would remove.
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 from typing import Callable, cast
 
@@ -67,6 +68,14 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     CodeQL's ``is_simple_import`` scope, safe because only the identical
     ``(module, asname)`` pair matches (``import a.b`` beside ``import a.c``
     binds ``a`` twice but imports different submodules, and never matches).
+    Same-value siblings in exclusive branches need no dominance analysis:
+    both are flagged, the half-deleted intermediate (which would raise
+    UnboundLocalError on the emptied branch) is still flagged, so the only
+    state this gate certifies is the behavior-preserving full deletion —
+    measured, and pinned by the never-green-half-deleted test (review
+    finding, 2026-10-07).  The single-deletion shape that WOULD break a
+    branch while going green — a same-name, different-value sibling — is
+    exactly what the pairwise own-scope exemption removes from the report.
     """
     tree = ast.parse(source)
     top_ids = set(map(id, tree.body))
@@ -605,6 +614,50 @@ def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:
         "        import os\n\n        return os.sep\n"
     )
     assert duplicate_plain_imports(source) == [(8, "os")]
+
+
+def test_sibling_same_value_imports_are_never_green_half_deleted() -> None:
+    """The gate's fixpoint is safe without dominance analysis (review
+    finding, 2026-10-07): two exclusive-branch ``import os`` siblings under
+    a top-level ``import os`` are both flagged; deleting only one leaves
+    ``os`` function-local through the surviving import (the emptied branch
+    raises UnboundLocalError, measured) and the gate STILL flags that
+    intermediate, so it can never certify it; the state it does certify —
+    both deleted — resolves every use to the module binding the pair was
+    redundant against.  The different-value sibling, where a single
+    deletion WOULD be certified while breaking a branch, is the case the
+    pairwise own-scope exemption already removes from the report."""
+    both = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        import os\n\n        return os.sep\n"
+        "    if mode == 2:\n        import os\n\n        return os.pathsep\n"
+    )
+    assert duplicate_plain_imports(both) == [(6, "os"), (10, "os")]
+    half = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        return os.sep\n"
+        "    if mode == 2:\n        import os\n\n        return os.pathsep\n"
+    )
+    # The unsafe intermediate stays red: the gate never demands it as an
+    # end state, it refuses it.
+    assert duplicate_plain_imports(half) == [(8, "os")]
+    namespace: dict[str, object] = {}
+    code = compile(half, "<half>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    half_f = cast(Callable[[int], str], namespace["f"])
+    with pytest.raises(UnboundLocalError):
+        half_f(1)
+    green = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        return os.sep\n"
+        "    if mode == 2:\n        return os.pathsep\n"
+    )
+    assert duplicate_plain_imports(green) == []
+    namespace = {}
+    code = compile(green, "<green>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    green_f = cast(Callable[[int], str], namespace["f"])
+    assert green_f(1) == os.sep and green_f(2) == os.pathsep
 
 
 def test_the_tree_carries_no_duplicate_plain_import() -> None:

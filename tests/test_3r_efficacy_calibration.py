@@ -15,6 +15,7 @@ edited without a measurement fails here.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -130,3 +131,88 @@ def test_the_delay_is_to_the_first_alarm_the_shift_caused() -> None:
 def test_mismatched_runs_are_refused() -> None:
     with pytest.raises(ValueError):
         ev.step_metrics(_alarms(set()), [False] * (_N - 1), _MID)
+
+
+class _GitShim:
+    """A ``subprocess`` stand-in for ``_provenance_lines``'s two git calls."""
+
+    # The function's except clause resolves this through the patched name.
+    CalledProcessError = subprocess.CalledProcessError
+
+    def __init__(self, status: str, fail: bool = False) -> None:
+        self._status = status
+        self._fail = fail
+
+    def run(self, cmd: list[str], **kwargs: object) -> object:
+        if self._fail:
+            raise OSError("no git in the measuring environment")
+        out = "abc123def456" if "rev-parse" in cmd else self._status
+
+        class _Done:
+            stdout = out + "\n"
+
+        return _Done()
+
+
+def _attested(mapped: bool) -> dict[str, object]:
+    return {
+        "native_backend": {
+            "path": "/opt/lib/libama_core.so",
+            "preload_digest_hex": "ab" * 32,
+            "preload_digest_is_of_mapped_bytes": mapped,
+        }
+    }
+
+
+def test_provenance_records_clean_dirty_and_gitless_states(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN (review finding, 2026-10-07): the commit field distinguishes the
+    three worktree states a regeneration can run from.  Without the dirty
+    marker, rows measured from edited code publish under the clean commit's
+    name; without the except arm, a gitless environment crashes the
+    measurement instead of recording that the commit is unestablishable."""
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(True))
+    monkeypatch.setattr(
+        "benchmarks.benchmark_runner._native_build_configuration", lambda: "cmake -DX=1"
+    )
+    monkeypatch.setattr(ev, "subprocess", _GitShim(status=""))
+    assert "commit=abc123def456 " in ev._provenance_lines(7)
+    monkeypatch.setattr(ev, "subprocess", _GitShim(status=" M monitoring.py"))
+    assert "commit=abc123def456+dirty-worktree " in ev._provenance_lines(7)
+    monkeypatch.setattr(ev, "subprocess", _GitShim(status="", fail=True))
+    assert "commit=unrecorded (no git in the measuring environment)" in ev._provenance_lines(7)
+
+
+def test_provenance_pins_the_artifact_only_for_mapped_digests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN (review finding, 2026-10-07): the artifact and build lines claim
+    the measured object only when the attestation's digest is of the mapped
+    bytes.  An unmapped digest, or a missing attestation, must say
+    'unrecorded' AND must not reach the build-tree attribution at all — a
+    claim derived from an unpinned artifact would outrun the evidence."""
+    monkeypatch.setattr(ev, "subprocess", _GitShim(status=""))
+    calls: list[str] = []
+
+    def build_configuration() -> str:
+        calls.append("called")
+        return "cmake -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)"
+
+    monkeypatch.setattr(
+        "benchmarks.benchmark_runner._native_build_configuration", build_configuration
+    )
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(True))
+    mapped = ev._provenance_lines(7)
+    assert f"# artifact: libama_core.so sha3_256={'ab' * 32}" in mapped
+    assert "# build: cmake -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)" in mapped
+    assert calls == ["called"]
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(False))
+    unmapped = ev._provenance_lines(7)
+    assert "# artifact: unrecorded (preload digest is not of the mapped bytes" in unmapped
+    assert "# build: unrecorded (no pinned artifact to attribute a build tree to)" in unmapped
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: {})
+    missing = ev._provenance_lines(7)
+    assert "# artifact: unrecorded (no native-backend attestation" in missing
+    assert "# build: unrecorded (no pinned artifact to attribute a build tree to)" in missing
+    assert calls == ["called"], "an unpinned artifact must never reach build attribution"
