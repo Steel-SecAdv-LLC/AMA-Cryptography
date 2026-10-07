@@ -182,14 +182,48 @@ def _scan_direct_imports(
     return seen
 
 
+def _definition_enclosing_children(node: ast.AST) -> list[ast.AST]:
+    """The children of a def, class or lambda that EXECUTE in the ENCLOSING
+    scope at definition time: decorators, parameter defaults, annotations,
+    and class bases and keywords.  A walrus inside one binds where the
+    statement stands, so the scope walks that stop at the definition's body
+    must still traverse these — skipping them with the body let
+    ``def f(x=(os := 1))`` rebind ``os`` invisibly and the gate then
+    demanded deletion of the load-bearing restore import, measured as
+    ``AttributeError`` on ``os.sep`` (review finding, 2026-10-07).  Under
+    ``from __future__ import annotations`` an annotation is never evaluated;
+    walking it anyway over-collects only toward wider resets and
+    exemptions — the direction that never demands a deletion.
+    """
+    out: list[ast.AST] = []
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        args = node.args
+        out.extend(args.defaults)
+        out.extend(d for d in args.kw_defaults if d is not None)
+        params = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+        params += [a for a in (args.vararg, args.kwarg) if a is not None]
+        out.extend(a.annotation for a in params if a.annotation is not None)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        out.extend(node.decorator_list)
+        if node.returns is not None:
+            out.append(node.returns)
+    elif isinstance(node, ast.ClassDef):
+        out.extend(node.decorator_list)
+        out.extend(node.bases)
+        out.extend(keyword.value for keyword in node.keywords)
+    return out
+
+
 def _statement_bound_names(stmt: ast.stmt) -> set[str]:
     """Names a non-import statement can rebind, for the reset above.
 
     ``Name`` stores and deletes, exception-handler and match captures, and
     nested def/class statement names; the walk stops at nested function and
-    class bodies for the statement's own suites the caller scans separately,
-    but a compound statement's directly nested suites are still walked —
-    deliberate over-collection, documented at the call site.
+    class BODIES for the statement's own suites the caller scans separately
+    — but still traverses the definition children that execute here
+    (:func:`_definition_enclosing_children`) — while a compound statement's
+    directly nested suites are still walked: deliberate over-collection,
+    documented at the call site.
     """
     out: set[str] = set()
     stack: list[ast.AST] = [stmt]
@@ -197,8 +231,10 @@ def _statement_bound_names(stmt: ast.stmt) -> set[str]:
         node = stack.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             out.add(node.name)
+            stack.extend(_definition_enclosing_children(node))
             continue
         if isinstance(node, ast.Lambda):
+            stack.extend(_definition_enclosing_children(node))
             continue
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             out.add(node.id)
@@ -227,9 +263,13 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
     walk over-collected them as "the safe direction").  A walrus inside a
     comprehension binds in the CONTAINING scope (PEP 572) and is still
     collected, because only the generator targets are skipped.  A walrus
-    inside a nested function's decorator or default (which evaluates in
-    this scope) is the one binding the stop skips — vanishingly rare, and
-    missing it only leaves a flag standing for a human to judge.
+    inside a nested definition's decorators, defaults or annotations
+    evaluates in THIS scope and is collected through
+    :func:`_definition_enclosing_children` — the first form of this walk
+    skipped them with the body, calling the miss "a flag standing for a
+    human to judge", but the gate is CI-blocking, so the standing flag
+    demanded a behavior-changing deletion (review finding, 2026-10-07,
+    measured as AttributeError on the restore import's deletion).
     ``include_imports=False`` drops the bindings import statements create,
     for the own-scope question below: whether an import exempts its own
     scope is value-dependent, so it is answered pairwise by
@@ -248,8 +288,10 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
         node = stack.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             out.add(node.name)
+            stack.extend(_definition_enclosing_children(node))
             continue
         if isinstance(node, ast.Lambda):
+            stack.extend(_definition_enclosing_children(node))
             continue
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             out.add(node.id)
@@ -658,6 +700,39 @@ def test_sibling_same_value_imports_are_never_green_half_deleted() -> None:
     exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
     green_f = cast(Callable[[int], str], namespace["f"])
     assert green_f(1) == os.sep and green_f(2) == os.pathsep
+
+
+def test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): a definition's decorators,
+    parameter defaults and annotations execute in the ENCLOSING scope, so
+    a walrus there rebinds the module name and the next import of it is
+    the restore, not a repeat — pre-fix, both scope walks skipped these
+    children with the definition's body, and the gate demanded deletions
+    measured to leave ``os == 1`` and raise AttributeError on ``os.sep``.
+    The module-scope cases pin ``_statement_bound_names``'s reset (def and
+    lambda defaults); the nested case pins ``_function_bound_names``'s
+    own-scope exemption.  Mutation: with either walk's traversal of
+    ``_definition_enclosing_children`` removed, its cases here fail.  The
+    walrus-free contrasts prove the exemption is the rebinding, not the
+    definition."""
+    module_default = "import os\n\n\ndef f(x=(os := 1)):\n    return x\n\n\nimport os\n"
+    assert duplicate_plain_imports(module_default) == []
+    module_lambda = "import os\n\ng = lambda x=(os := 2): x\n\nimport os\n"
+    assert duplicate_plain_imports(module_lambda) == []
+    nested_default = (
+        "import os\n\n\ndef outer():\n"
+        "    def inner(x=(os := 1)):\n        return x\n\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(nested_default) == []
+    plain = "import os\n\n\ndef f(x=1):\n    return x\n\n\nimport os\n"
+    assert duplicate_plain_imports(plain) == [(8, "os")]
+    plain_nested = (
+        "import os\n\n\ndef outer():\n"
+        "    def inner(x=1):\n        return x\n\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(plain_nested) == [(8, "os")]
 
 
 def test_the_tree_carries_no_duplicate_plain_import() -> None:

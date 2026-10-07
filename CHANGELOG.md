@@ -34,6 +34,25 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `ec58d6c`: definition children that execute in the enclosing scope are walked — 2026-10-07
+
+- **The import gate's scope walks traverse decorators, defaults and
+  annotations.** Medium: those children of a def, class or lambda execute
+  in the ENCLOSING scope at definition time, and both walks skipped them
+  with the definition's body — so `def f(x=(os := 1))` rebound `os`
+  invisibly, and the gate flagged the load-bearing restore import at
+  module scope (missed reset in `_statement_bound_names`) and inside a
+  function (missed own-scope exemption in `_function_bound_names`),
+  measured pre-fix as a demanded deletion that leaves `os == 1` and
+  raises AttributeError.  Both walkers now traverse
+  `_definition_enclosing_children` before stopping at the body; under
+  `from __future__ import annotations` a stringized annotation's walrus
+  over-collects only toward wider resets and exemptions, the direction
+  that never demands a deletion.  PIN
+  `test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing`
+  (mutation-earned per walker: reverting either traversal independently
+  fails exactly this test; walrus-free contrasts hold the flags).
+
 ### Review round on `752247b`: degenerate windows refused at construction, the provenance generator pinned, the import gate's fixpoint proven safe — 2026-10-07
 
 - **`ResonanceTimingMonitor` refuses `window_size < 1` and
