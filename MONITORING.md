@@ -98,7 +98,8 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
    split across two comparable lines (two interleaved periodic processes,
    or a fundamental with a strong harmonic) can sit below the single-bin
    bar at both lines while the pair clears this one (measured: two-tone
-   detection 22/40 against Fisher's 14/40 at the same false-alarm budget;
+   detection 23/40 against Fisher's 14/40 at the same false-alarm budget,
+   re-measured 2026-10-07 under the Nyquist-correct bars;
    the direction was adopted from Mercury Agent's 3R Resonance engine, the
    statistic re-derived — a harmonic-comb mean filter measured worse than
    Fisher on every family and was replaced, not tuned)

@@ -311,7 +311,9 @@ class TestSplitLineResonance:
             out = self._detect(series)
             fisher_hits += bool(out["has_resonance"])
             multiline_hits += bool(out["has_multiline_resonance"])
-        # Measured on these exact seeds: Fisher 14/40, split-line 22/40.
+        # Measured on these exact seeds: Fisher 14/40, split-line 23/40
+        # (re-measured 2026-10-07 under the Nyquist-correct bars; 22/40
+        # under the all-exponential bars they superseded, per §6.6).
         # Deterministic arithmetic, so the floors cannot flake.
         assert multiline_hits >= fisher_hits + 5, (fisher_hits, multiline_hits)
         assert multiline_hits >= 16
@@ -323,8 +325,9 @@ class TestSplitLineResonance:
         for _ in range(n):
             series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(100)]
             flags += bool(self._detect(series)["has_multiline_resonance"])
-        # Budget 1%; the padded real pipeline measures ~1.2%, so 4% here
-        # (6 of 150) is the generous deterministic ceiling.
+        # Budget 1%; under the Nyquist-correct bars these exact seeds
+        # measure 1/150 (re-measured 2026-10-07), and 4% (6 of 150) stays
+        # the generous deterministic ceiling.
         assert flags <= 6, flags
 
     def test_the_null_bar_is_deterministic_and_cached(self) -> None:
@@ -542,6 +545,27 @@ class TestSplitLineResonance:
                 ResonanceTimingMonitor(window_size=cast(int, bad_window))
         with pytest.raises(ValueError, match="max_history"):
             ResonanceTimingMonitor(max_history=cast(int, 1.5))
+
+    def test_the_smallest_window_clean_rate_stays_on_budget(self) -> None:
+        """PIN (review finding, 2026-10-07): the pinned bars are calibrated
+        to the spectrum detect_resonance actually produces — the KEPT
+        Nyquist ordinate of a real FFT is chi-square(1), not exponential,
+        and the all-exponential bars this table replaced measured 2.29%
+        clean flags against the 1% budget at the smallest window (8
+        samples, m = 4; 100,000 Gaussian streams through the production
+        pipeline), 1.03% under these 40,000-trial Nyquist-correct bars.
+        Deterministic seeds: exactly 96/10,000 here, and 218/10,000 with
+        the superseded m = 4 bar restored — the mutation this ceiling
+        kills."""
+        monitor = ResonanceTimingMonitor(window_size=8)
+        rng = random.Random(20261007)  # noqa: S311 -- test stream, not key material (TDC-001)
+        flags = 0
+        for _ in range(10000):
+            series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(8)]
+            with monitor._lock:
+                monitor.timing_history["op"] = deque(series, maxlen=monitor.max_history)
+            flags += bool(monitor.detect_resonance("op")["has_multiline_resonance"])
+        assert 40 <= flags <= 160, flags
 
     def test_the_ratio_helper_scores_empty_and_zero_mean_spectra_zero(self) -> None:
         """RANGE (review finding, 2026-10-07, measured false): the review

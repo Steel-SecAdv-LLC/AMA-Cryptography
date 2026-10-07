@@ -2395,7 +2395,8 @@ class ResonanceTimingMonitor:
             configuration; a subclass overriding the resonance
             configuration derives its own bars, a bounded one-time cost
             per spectrum size stated at :meth:`_multiline_threshold`'s
-            cost contract (measured 5.2 s at the capped worst size).
+            cost contract (measured 56.3 s at the capped worst size
+            under the 40,000-trial Nyquist-correct null, 2026-10-07).
         """
         # Snapshot under the monitor lock: record_timing() appends to this
         # same deque under self._lock on every instrumented operation, and
@@ -2467,12 +2468,14 @@ class ResonanceTimingMonitor:
         # threshold-excess test addresses, but an empirically calibrated
         # statistic of its own, not Siegel's, which sums every positive
         # excess above a cutoff (corrected per §6.6, 2026-10-07: this
-        # comment called it "Siegel's generalisation").  Measured
-        # before shipping (two equal tones at m = 64, 80 seeds per
-        # amplitude): detection 56% where Fisher reads 34%, and on a
-        # single-line square wave it still edges Fisher (80% vs 76%) via
-        # the third harmonic, at a clean rate of 1.17% against its own 1%
-        # budget.  A harmonic-comb mean filter — the first form this
+        # comment called it "Siegel's generalisation").  Capability on the
+        # in-tree deterministic two-tone seeds, re-measured 2026-10-07
+        # under the Nyquist-correct bars: split-line 23/40 where Fisher
+        # reads 14/40, and 1/150 flags on the clean-stream seeds (the
+        # pre-ship figures this comment carried — 56% vs 34%, square wave
+        # 80% vs 76%, clean 1.17% — were measured under the
+        # all-exponential bars and are superseded per §6.6).
+        # A harmonic-comb mean filter — the first form this
         # channel took — measured WORSE than Fisher on every family (a
         # symmetric square wave has no even harmonics, so the comb mean
         # averaged dead bins) and was replaced by this statistic rather
@@ -2525,10 +2528,11 @@ class ResonanceTimingMonitor:
         return math.log(m / alpha)
 
     #: Ordinates the split-line statistic sums.  Two is the measured
-    #: operating point: it lifts two-tone detection from 34% to 56% over
-    #: Fisher (14/40 to 22/40 on the deterministic test seeds) while still
-    #: edging the single-line case; three measured no better on either
-    #: family and pays a higher bar.
+    #: operating point: it lifts two-tone detection from 14/40 to 23/40
+    #: over Fisher on the deterministic test seeds (re-measured 2026-10-07
+    #: under the Nyquist-correct bars) while still edging the single-line
+    #: case; three measured no better on either family and pays a higher
+    #: bar.
     MULTILINE_ORDINATES: ClassVar[int] = 2
 
     @staticmethod
@@ -2554,8 +2558,16 @@ class ResonanceTimingMonitor:
     #: statistic over _MULTILINE_NULL_TRIALS seeded draws — byte-identical
     #: to what _multiline_threshold derives, pinned because the derivation
     #: is pure Python and the largest size measured 8.65 s of synchronous
-    #: first-use latency inside get_security_report (review finding,
-    #: 2026-10-07).  Regenerate after changing the statistic, the trial
+    #: first-use latency inside get_security_report at the earlier 4,000
+    #: trials (review finding, 2026-10-07; 56.3 s at today's 40,000).
+    #: The null is the no-padding spectrum law — m - 1
+    #: interior Exp(1) ordinates plus the kept Nyquist bin's chi-square(1)
+    #: — re-measured 2026-10-07 after the all-exponential null's bars let
+    #: 2.29% of clean streams flag against the 1% budget at m = 4; under
+    #: these bars the end-to-end rate measured 1.03% there, 0.76-1.09% in
+    #: the m = 8 class and 0.89% at m = 64 (100,000 and 50,000/20,000
+    #: seeded Gaussian streams through the production pipeline).
+    #: Regenerate after changing the statistic, the trial
     #: count or the seed:
     #:     python -c "from ama_cryptography.monitoring import \
     #:         ResonanceTimingMonitor as R; R._MULTILINE_THRESHOLDS.clear(); \
@@ -2564,18 +2576,18 @@ class ResonanceTimingMonitor:
     #: tests/test_timing_detector_calibration.py re-derives one size from
     #: scratch and fails if the table and the procedure drift apart.
     _MULTILINE_THRESHOLDS: ClassVar[Dict[int, float]] = {
-        4: 3.9085868452824046,
-        8: 6.334665931862912,
-        16: 8.798758633121482,
-        32: 11.140622898267086,
-        64: 13.13619164949844,
-        128: 14.449134490438645,
-        256: 15.97584012589801,
-        512: 18.075354985495213,
-        1024: 19.36283077664833,
-        2048: 20.83478835631275,
-        4096: 22.312320102580543,
-        8192: 23.897051177165363,
+        4: 3.9469485278721614,
+        8: 6.482228180197571,
+        16: 8.98674347681762,
+        32: 11.218252461874897,
+        64: 13.246674969301802,
+        128: 14.91706042606178,
+        256: 16.389151357259998,
+        512: 17.931876331438872,
+        1024: 19.405989189789423,
+        2048: 20.866007761676723,
+        4096: 22.22414806143564,
+        8192: 23.71409553781085,
     }
     #: Cap on the samples detect_resonance analyses, derived from the pinned
     #: table so the two cannot drift: n samples zero-pad to the next power
@@ -2604,19 +2616,19 @@ class ResonanceTimingMonitor:
     #: (review finding, 2026-10-07: the j-only gate still served the 1%
     #: table to a subclass configured for a different alarm rate, and the
     #: cache identity omitted the rate and the trial count).
-    _MULTILINE_TABLE_CONFIG: ClassVar[Tuple[int, float, int]] = (2, 0.01, 4000)
-    #: Null-measurement trials behind each cached threshold.  4,000 resolves
-    #: the 1% tail (40 exceedances expected).  The one-time derivation cost
-    #: grows with the spectrum size: measured on this project's shared
-    #: 4-vCPU container, well under a second at the small sizes, 5.2 s at
-    #: the capped worst size m = 8,192 (the 8.65 s the pinned-table comment
-    #: records was the same worst size on an earlier host, before the table
-    #: made the default configuration never pay it), and ~11 us from the
-    #: cache afterwards.  Only a non-default configuration reaches the
-    #: derivation at all — the window cap keeps every default-pipeline size
-    #: on the pinned table (corrected per §6.6, 2026-10-07: this comment
-    #: claimed "well under a second" unconditionally).
-    _MULTILINE_NULL_TRIALS: ClassVar[int] = 4000
+    _MULTILINE_TABLE_CONFIG: ClassVar[Tuple[int, float, int]] = (2, 0.01, 40000)
+    #: Null-measurement trials behind each cached threshold.  40,000
+    #: resolves the 1% tail to ~±0.05% (400 expected exceedances): at the
+    #: earlier 4,000 trials the quantile's sampling noise alone left the
+    #: m = 4 bar measuring 1.42% end-to-end against the 1% budget even
+    #: under the corrected null (measured 2026-10-07).  The one-time
+    #: derivation cost grows with the spectrum size: measured on this
+    #: project's 4-vCPU container, seconds at the small sizes and 56.3 s
+    #: at the capped worst size m = 8,192, then ~11 us from the cache.
+    #: Only a non-default configuration reaches the derivation at all —
+    #: the window cap keeps every default-pipeline size on the pinned
+    #: table.
+    _MULTILINE_NULL_TRIALS: ClassVar[int] = 40000
     #: Serializes the measured-null derivation: concurrent first reports
     #: for an overridden configuration would otherwise all miss the cache
     #: and each pay the full simulation (review finding, 2026-10-07).  One
@@ -2646,8 +2658,8 @@ class ResonanceTimingMonitor:
         table.  A subclass that overrides ``RESONANCE_FALSE_ALARM_RATE``,
         ``MULTILINE_ORDINATES`` or ``_MULTILINE_NULL_TRIALS`` has changed
         what the bar must be, so its first report at each spectrum size
-        derives the bar here — 5.2 s at the capped worst size (m = 8,192,
-        4,000 trials, shared 4-vCPU container), microseconds from the
+        derives the bar here — 56.3 s at the capped worst size (m = 8,192,
+        40,000 trials, 4-vCPU container, 2026-10-07), microseconds from the
         cache thereafter.  That one-time cost is what a correct empirical
         bar for a non-default configuration costs: the table cannot be
         precomputed over a continuous override space, and serving the
@@ -2656,17 +2668,18 @@ class ResonanceTimingMonitor:
         afford first-report latency can warm the cache at startup by
         calling this method directly for the sizes the window produces.
 
-        The iid-exponential null is an IDEALISATION shared with Fisher's
-        analytic bar above it: the pipeline zero-pads n samples to the next
-        power of two, and for n below that power the padded ordinates are
-        correlated, so one m-keyed bar serves every n that pads to it.
-        The deviation is measured, not assumed: through the real
-        centred-and-padded pipeline at the production size (n = 100,
-        m = 64), the split-line channel's clean rate is 1.17% against the
-        1% target and the Fisher bar's is 0.50-1.0% under the identical
-        idealisation — both documented, neither exceeding twice the
-        budget on any measured stream.  A per-(n, m) simulated null would
-        buy back the remaining 0.17 points at twelve times the table.
+        The null is the exact no-padding spectrum law — m - 1 interior
+        Exp(1) ordinates plus the kept Nyquist bin's chi-square(1)
+        (corrected per §6.6, 2026-10-07: the previous all-exponential
+        null ignored the Nyquist bin's shape and measured 2.29% clean
+        flags against the 1% budget at m = 4).  One m-keyed bar still
+        serves every n that pads to it — the pipeline zero-pads n samples
+        to the next power of two, padded ordinates are correlated, and
+        the no-padding member is each class's measured worst case
+        (end-to-end under these bars: 1.03% at m = 4, 0.76-1.09% in the
+        m = 8 class, 0.89% at the n = 100 production size).  A per-(n, m)
+        simulated null was measured and rejected earlier as buying back
+        fractions of a point at twelve times the table.
         """
         m = max(1, int(scanned_bins))
         j = max(1, int(cls.MULTILINE_ORDINATES))
@@ -2706,16 +2719,29 @@ class ResonanceTimingMonitor:
                 # One pass per trial: total plus the j largest, no materialised
                 # draw list and no per-trial sort.  At the largest advertised
                 # window (10,000 samples -> 8,192 scanned bins) the sorted form
-                # performed 4,000 full 8,192-element sorts before first return
+                # performed one full 8,192-element sort per trial before first return
                 # (review finding, 2026-10-06); the draws themselves are the
                 # irreducible cost and run once per cache identity per process.
-                # For j = 2 the arithmetic is byte-identical to the top1/top2 form
-                # this replaces (same draws, same descending-order sum), which
-                # the table<->procedure coupling test proves byte-exactly.
+                # The null is the exact no-padding spectrum law of a centred
+                # real Gaussian series: m - 1 interior ordinates iid Exp(1)
+                # and the KEPT Nyquist ordinate chi-square(1) at the same
+                # unit mean — the all-exponential null this replaces ignored
+                # the Nyquist bin's shape and measured 2.29% flags against
+                # the 1% budget at m = 4 over 100,000 clean Gaussian streams
+                # through the production pipeline (review finding,
+                # 2026-10-07).  Each size's no-padding member (n = 2m) is
+                # its class's measured worst case; padded members measured
+                # below it (m = 8 against the old bar: 1.18-1.58% padded,
+                # 1.85% unpadded), so one bar per size stays conservative
+                # for every window length that maps to it.
                 total = 0.0
                 tops = [0.0] * j
                 for _i in range(m):
-                    x = rng.expovariate(1.0)
+                    if _i:
+                        x = rng.expovariate(1.0)
+                    else:
+                        gaussian = rng.gauss(0.0, 1.0)
+                        x = gaussian * gaussian
                     total += x
                     if x > tops[-1]:
                         for idx in range(j):

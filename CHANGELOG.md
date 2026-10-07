@@ -34,6 +34,70 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `37dfda4`: the split-line null calibrated to the real spectrum, sys.modules mutations reset the import baseline, Docker apt retries — 2026-10-07
+
+- **The split-line bars are calibrated to the spectrum detect_resonance
+  actually produces.** High (a declared rate the component missed): the
+  real FFT scan KEEPS the Nyquist ordinate, whose null is chi-square(1),
+  while the bars were derived from all-exponential draws — measured
+  2.288% clean flags against the 1% budget at the smallest window
+  (8 samples, m = 4; 100,000 Gaussian streams through the production
+  pipeline), decaying to ~1.0% by m = 64, with each size class's
+  no-padding member the worst case (m = 8: 1.18–1.85%).  The derivation
+  now draws the exact no-padding law (m − 1 Exp(1) + one chi-square(1)
+  at unit mean) and the quantile runs on 40,000 trials — at 4,000 the
+  estimator's own noise still measured 1.42% at m = 4 under the
+  corrected law.  Table regenerated through the coupled procedure
+  (113 s, all twelve sizes); end-to-end re-measured: 1.03% at m = 4,
+  0.76–1.09% in the m = 8 class, 0.89% at the n = 100 production size.
+  Capability re-measured on the deterministic seeds: two-tone 23/40 vs
+  Fisher's 14/40, clean streams 1/150 (supersedes the pre-ship 56%/34%,
+  square-wave 80%/76% and clean 1.17% figures, per §6.6).  Worst-size
+  runtime derivation for non-default configurations now measures 56.3 s
+  (was 5.2 s at 4,000 trials); only such configurations ever pay it.
+  PIN `test_the_smallest_window_clean_rate_stays_on_budget`
+  (mutation-earned: the superseded m = 4 bar fails its ceiling at
+  218/10,000 vs 96) with the table↔procedure coupling test killing the
+  all-exponential derivation mutant.  The efficacy table is re-measured
+  from the clean head of this commit in the follow-up push, per the
+  table↔prose coupling rule.
+
+- **`sys.modules` mutations reset the import-gate baseline.** Medium: a
+  direct subscript store or delete, or a mutating method call, re-routes
+  what a later import binds without rebinding any name — runtime-proved:
+  the re-import after `sys.modules[k] = replacement` binds the
+  replacement, and deleting it leaves the original.  Recognized
+  mutations reset the whole module-scope baseline and exempt the
+  mutating function's own imports ("*", like the wildcard reset — total
+  and value-blind, the direction that never demands a deletion); an
+  ALIAS of sys.modules stays outside the gate's lexical boundary.  The
+  shared binding ladder moved to `_capture_bound_names` for both scope
+  walks.  PIN
+  `test_a_sys_modules_mutation_makes_the_restore_import_load_bearing`
+  (mutation-earned; mutation-free contrast holds the flag).
+
+- **The munlock-failure test is deterministic, and the shared-page
+  refcount is pinned.** One macOS lane failed
+  `test_munlock_native_failure` DID NOT RAISE while three sibling lanes
+  passed the same commit (run 37672010249): `secure_munlock` reaches the
+  backend only for pages no other registered lock still covers, and with
+  live locks left by earlier tests the 32-byte buffer can land on a
+  refcount-2 page — both outcomes reproduced deterministically by
+  seeding the registry.  The product behavior is by design (releasing a
+  shared page would drop the kernel lock for every buffer on it); the
+  test now runs against a hermetic empty registry, and the semantics the
+  flake exposed are pinned in
+  `test_a_shared_page_is_decremented_not_munlocked` (mutation-earned:
+  removing the refcount gate fails exactly it).
+
+- **Docker apt installs retry like the workflows'.** The OSS-Fuzz lane
+  died twice on 2026-10-07 (runs 37665893658 and 37672010498) fetching
+  archive.ubuntu.com inside the image build — identical on the §8
+  re-run, the stalled-mirror class the workflows' `apt-install.sh`
+  already retries.  All four apt blocks (oss-fuzz, clusterfuzzlite, both
+  docker/Dockerfile stages) now retry three times with a pause and fail
+  closed on exhaustion.
+
 ### Copilot round on `d49410a`: a wildcard import invalidates every tracked binding; the ratio helper's empty path measured working — 2026-10-07
 
 - **`from plugin import *` resets the whole module-scope baseline.**

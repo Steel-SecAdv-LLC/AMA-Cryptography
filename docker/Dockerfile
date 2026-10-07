@@ -29,17 +29,16 @@ FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522
 # CMakeLists.txt enforces INVARIANT-8 (GCC >= 12 required for reliable
 # constant-time codegen + full SIMD intrinsic support) and ubuntu:22.04
 # defaults to gcc-11.
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    gcc-12 \
-    g++-12 \
-    git \
-    python3-dev \
-    python3-pip \
-    python3-venv \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+# apt retries three times with a pause because stalled Ubuntu mirrors are a
+# measured failure mode, not a hypothesis: the OSS-Fuzz lane died twice on
+# 2026-10-07 (runs 37665893658 and 37672010498) fetching archive.ubuntu.com
+# inside this build, identically on the re-run — the same class the
+# workflows' apt-install.sh already retries (INVARIANT: apt-retry gate).
+RUN for attempt in 1 2 3; do \
+        apt-get update && apt-get install -y build-essential cmake gcc-12 g++-12 git python3-dev python3-pip python3-venv wget && break; \
+        if [ "$attempt" = 3 ]; then exit 100; fi; \
+        sleep 20; \
+        done && rm -rf /var/lib/apt/lists/*
 
 # Make gcc-12 the system default `gcc` / `g++` via update-alternatives.
 # We can't just set CC/CXX env vars here: `python3 -m build --wheel`
@@ -99,10 +98,16 @@ LABEL version="5.0.0"
 # INVARIANT-1: libssl3 is NOT installed — AMA's native C primitives do not
 # dynamically load libcrypto/libssl. Keeping it out shrinks the container
 # attack surface (one fewer CVE-prone library on disk).
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+# apt retries three times with a pause because stalled Ubuntu mirrors are a
+# measured failure mode, not a hypothesis: the OSS-Fuzz lane died twice on
+# 2026-10-07 (runs 37665893658 and 37672010498) fetching archive.ubuntu.com
+# inside this build, identically on the re-run — the same class the
+# workflows' apt-install.sh already retries (INVARIANT: apt-retry gate).
+RUN for attempt in 1 2 3; do \
+        apt-get update && apt-get install -y python3 python3-pip && break; \
+        if [ "$attempt" = 3 ]; then exit 100; fi; \
+        sleep 20; \
+        done && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN useradd -m -u 1000 ama && \

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import os
+import types
 from pathlib import Path
 from typing import Callable, cast
 
@@ -265,6 +266,71 @@ def _definition_enclosing_children(node: ast.AST) -> list[ast.AST]:
     return out
 
 
+def _is_sys_modules(expr: ast.AST) -> bool:
+    """True for a literal ``sys.modules`` expression.
+
+    An alias of it (``m = sys.modules; m[k] = v``) is not statically
+    attributable — the boundary every lexical rule in this gate draws.
+    """
+    return (
+        isinstance(expr, ast.Attribute)
+        and expr.attr == "modules"
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id == "sys"
+    )
+
+
+def _mutates_sys_modules(node: ast.AST) -> bool:
+    """True where ``node`` is a direct ``sys.modules`` mutation: a
+    subscript store or delete, or a mutating method call.  Such a
+    mutation re-routes what a LATER import binds without rebinding any
+    name now, so every tracked binding stops counting as continuously
+    the module and a later re-import is the restore, not a repeat
+    (review finding, 2026-10-07; measured — the re-import binds the
+    replacement).  Total on purpose, like the wildcard reset: the safe
+    direction.
+    """
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        return _is_sys_modules(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        mutators = {"pop", "update", "clear", "setdefault", "popitem"}
+        return node.func.attr in mutators and _is_sys_modules(node.func.value)
+    return False
+
+
+def _capture_bound_names(node: ast.AST, out: set[str], include_imports: bool) -> None:
+    """One node's bindings, shared by both scope walks: name stores and
+    deletes, exception-handler and match captures (``MatchMapping.rest``
+    is a plain string attribute, not a Name node — review finding,
+    2026-10-07), import bindings when asked, and the ``"*"`` total-reset
+    marker for a direct ``sys.modules`` mutation, which re-routes what a
+    later import binds without rebinding any name now (review finding,
+    2026-10-07; ``"*"`` is honored by the reset and the exempt check,
+    never collected as a real name).  Nested imports count here because
+    an import inside a compound statement rebinds too — ``if flag:
+    import pathlib as os`` leaves ``os`` possibly not the module, so the
+    later restore import is load-bearing (review finding, 2026-10-07;
+    measured as AttributeError); value-blind on purpose, the safe
+    direction.
+    """
+    if _mutates_sys_modules(node):
+        out.add("*")
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        out.add(node.id)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        out.add(node.name)
+    elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+        out.add(node.name)
+    elif isinstance(node, ast.MatchMapping) and node.rest:
+        out.add(node.rest)
+    elif isinstance(node, ast.Import) and include_imports:
+        for alias in node.names:
+            out.add(alias.asname or alias.name.split(".")[0])
+    elif isinstance(node, ast.ImportFrom) and include_imports:
+        for alias in node.names:
+            out.add(alias.asname or alias.name)
+
+
 def _statement_bound_names(stmt: ast.stmt) -> set[str]:
     """Names a non-import statement can rebind, for the reset above.
 
@@ -287,28 +353,7 @@ def _statement_bound_names(stmt: ast.stmt) -> set[str]:
         if isinstance(node, ast.Lambda):
             stack.extend(_definition_enclosing_children(node))
             continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            out.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            out.add(node.name)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            out.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            # ``rest`` is a plain string attribute, not a Name node
-            # (review finding, 2026-10-07).
-            out.add(node.rest)
-        elif isinstance(node, ast.Import):
-            # An import nested in a compound statement rebinds its names
-            # too: ``if flag: import pathlib as os`` leaves ``os`` possibly
-            # not the module, so a later restore import is load-bearing
-            # (review finding, 2026-10-07; measured as AttributeError).
-            # Value-blind on purpose: resetting even a same-value guarded
-            # re-import only widens the reset, the safe direction.
-            for alias in node.names:
-                out.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                out.add(alias.asname or alias.name)
+        _capture_bound_names(node, out, include_imports=True)
         stack.extend(ast.iter_child_nodes(node))
     return out
 
@@ -356,22 +401,7 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
         if isinstance(node, ast.Lambda):
             stack.extend(_definition_enclosing_children(node))
             continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            out.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            out.add(node.name)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            out.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            # The mapping-rest capture binds too, and ``rest`` is a plain
-            # string attribute, not a Name node (review finding, 2026-10-07).
-            out.add(node.rest)
-        elif isinstance(node, ast.Import) and include_imports:
-            for alias in node.names:
-                out.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and include_imports:
-            for alias in node.names:
-                out.add(alias.asname or alias.name)
+        _capture_bound_names(node, out, include_imports=include_imports)
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             # Walk the comprehension's expressions (a walrus there binds in
             # THIS scope) but never its generator targets, which bind only
@@ -436,7 +466,7 @@ def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
                     bound = alias.asname or alias.name.split(".")[0]
                     value = alias.name if alias.asname else alias.name.split(".")[0]
                     divergent = any(b == bound and v != value for b, v in own_pairs)
-                    if bound in exempt or divergent:
+                    if bound in exempt or "*" in exempt or divergent:
                         out.add((id(child), bound))
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 collect(child, enclosing | own_all)
@@ -799,6 +829,60 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_sys_modules_mutation_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): ``sys.modules[k] = replacement``
+    re-routes what a later import binds without rebinding any name, so the
+    re-import after it is the restore — runtime-proved below: with the
+    mutation live, the second ``import`` binds the replacement, and
+    deleting it leaves the original bound.  A direct mutation (subscript
+    store or delete, or a mutating method call) resets the whole
+    module-scope baseline and exempts the mutating function's own
+    imports; the mutation-free contrast holds the flag.  An ALIAS of
+    ``sys.modules`` is outside this gate's lexical boundary, like every
+    dynamic shape it draws the line at."""
+    mutated = (
+        "import sys\n\nimport target\n\n" "sys.modules['target'] = replacement\n\nimport target\n"
+    )
+    assert duplicate_plain_imports(mutated) == []
+    popped = "import sys\n\nimport target\n\nsys.modules.pop('target')\n\nimport target\n"
+    assert duplicate_plain_imports(popped) == []
+    in_function = (
+        "import sys\n\nimport target\n\n\ndef f(replacement):\n"
+        "    sys.modules['target'] = replacement\n    import target\n\n    return target\n"
+    )
+    assert duplicate_plain_imports(in_function) == []
+    plain = "import sys\n\nimport target\n\nvalue = 1\n\nimport target\n"
+    assert duplicate_plain_imports(plain) == [(7, "target")]
+    original = types.ModuleType("tih_swap_target")
+    replacement = types.ModuleType("tih_swap_target")
+    import sys as real_sys
+
+    swap = (
+        "import tih_swap_target\n"
+        "sys.modules['tih_swap_target'] = replacement\n"
+        "import tih_swap_target\n"
+        "final = tih_swap_target\n"
+    )
+    swap_deleted = (
+        "import tih_swap_target\n"
+        "sys.modules['tih_swap_target'] = replacement\n"
+        "final = tih_swap_target\n"
+    )
+    try:
+        real_sys.modules["tih_swap_target"] = original
+        namespace: dict[str, object] = {"sys": real_sys, "replacement": replacement}
+        code = compile(swap, "<swap>", "exec")
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+        assert namespace["final"] is replacement
+        real_sys.modules["tih_swap_target"] = original
+        namespace = {"sys": real_sys, "replacement": replacement}
+        code = compile(swap_deleted, "<swap-deleted>", "exec")
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+        assert namespace["final"] is original
+    finally:
+        real_sys.modules.pop("tih_swap_target", None)
 
 
 def test_a_wildcard_import_invalidates_every_tracked_binding() -> None:
