@@ -49,10 +49,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   yielding the complete configure line (compiler, `CMAKE_C_FLAGS`, every
   `AMA_*` option) or an explicit "not recorded: why".  The committed
   06:06Z measurement's trailer was completed, not re-invented: the
-  measuring artifact is byte-identical to the current library (SHA-256
-  re-verified against the recorded digest), so its SHA3-256 and
-  digest-matched configuration are the same run's facts; its rows,
-  run id, commit and host stand unchanged.  A regeneration executed while
+  measuring artifact is byte-identical to the current library — its
+  SHA-256 was recomputed and matches the `sha256=` value the superseded
+  trailer (commit `26639a2`) recorded for that run; the SHA-256 names the
+  bytes, the trailer now pins them by the attestation's SHA3-256 preload
+  digest — so the SHA3-256 and the digest-matched configuration are the
+  same run's facts; its rows, run id, commit and host stand unchanged.  A regeneration executed while
   validating the mechanism landed on a degraded trace (median 0.52 ms —
   5x the committed run — with a clean false-alarm rate of 1.8-2.4%
   against the 1% budget, i.e. the "benign" trace itself carried load
@@ -94,8 +96,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - **The efficacy table's provenance now satisfies §8 item 7, by
   mechanism.** `r3_efficacy_eval.py` records the run identifier, commit,
   Python version, host CPU model and count, the exact native artifact by
-  SHA-256, and the build flags from `CMakeCache.txt` in the table's
-  trailer on every regeneration. The committed 2026-10-06 figures carried
+  content digest (this round's form hashed the file with SHA-256; the
+  shipped form, superseded the same day — see the `26639a2` round above —
+  pins it by the module attestation's SHA3-256 preload digest), and the
+  build flags from `CMakeCache.txt` in the table's trailer on every
+  regeneration. The committed 2026-10-06 figures carried
   host, date, seed, n, median and MAD but no build flags, artifact or run
   id, and those cannot be reconstructed for an artifact that no longer
   exists — so the table was re-measured 2026-10-07 under the new trailer
