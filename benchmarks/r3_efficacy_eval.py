@@ -66,8 +66,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
+import platform
 import random
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -169,6 +173,64 @@ def step_metrics(alarms: list[bool], clean: list[bool], mid: int) -> tuple[bool,
     return bool(attributable), delay, len(before) / (mid - WINDOW), excess
 
 
+def _provenance_lines(seed: int) -> str:
+    """The measurement's provenance, recorded with the figures it covers.
+
+    AGENTS.md section 8 (item 7) requires every published performance
+    figure to carry its host, build flags, and run identifier; the first
+    committed revision of the table carried only n/median/MAD/seed and the
+    README's generic host sentence (review finding, 2026-10-07).  Each
+    value below is read from the measuring process itself, never typed in:
+    the artifact line names the exact native library the timings ran on by
+    content digest, which identifies the build more precisely than the
+    flag set that produced it, and the flags are read from the build
+    tree's CMakeCache.txt when this checkout built one ("unrecorded
+    (prebuilt artifact; identified by its sha256)" otherwise).
+    """
+    run_id = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + f"+seed{seed}"
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unrecorded (no git in the measuring environment)"
+    model = platform.processor() or platform.machine()
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
+            if line.lower().startswith("model name"):
+                model = line.split(":", 1)[1].strip()
+                break
+    host = f"{model} x{os.cpu_count()} (shared cloud container, not pinned)"
+    lib_path = getattr(pqc_backends, "_NATIVE_LIB_PATH", None)
+    if lib_path:
+        lib = Path(lib_path)
+        digest = hashlib.sha256(lib.read_bytes()).hexdigest()
+        artifact = f"{lib.name} sha256={digest}"
+    else:
+        artifact = "unrecorded (native library path not exposed by this build)"
+    build = "unrecorded (prebuilt artifact; identified by its sha256)"
+    cache = REPO / "build" / "CMakeCache.txt"
+    if cache.exists():
+        wanted = {"CMAKE_BUILD_TYPE", "CMAKE_C_COMPILER", "CMAKE_C_FLAGS_RELEASE"}
+        found: dict[str, str] = {}
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            key = line.split(":", 1)[0]
+            if key in wanted and "=" in line:
+                found[key] = line.split("=", 1)[1].strip()
+        if found:
+            build = " ".join(f"{k}={found[k]}" for k in sorted(found))
+    return (
+        f"# provenance: run_id={run_id} commit={commit} python={platform.python_version()}\n"
+        f"# host: {host}\n"
+        f"# artifact: {artifact}\n"
+        f"# build: {build}\n"
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--samples", type=int, default=4000)
@@ -231,7 +293,8 @@ def main() -> int:
     out = REPO / args.out
     out.write_text(
         "\n".join(rows)
-        + f"\n# benign_n={len(trace)} median_ms={med:.4f} mad_ms={mad:.4f} seed={args.seed}\n",
+        + f"\n# benign_n={len(trace)} median_ms={med:.4f} mad_ms={mad:.4f} seed={args.seed}\n"
+        + _provenance_lines(args.seed),
         encoding="utf-8",
     )
     print("\n".join(rows))

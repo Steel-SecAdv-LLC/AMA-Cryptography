@@ -16,7 +16,11 @@ Usage:
     python basic_usage.py
 
 Requirements:
-    # Optional: build native C library for quantum-resistant signatures
+    pip install -e .
+    # Installing this project builds its native C library, and the build is
+    # required, not optional: every primitive this example calls runs on it,
+    # and the library has no fallback path (INVARIANT-7) — on a fresh
+    # checkout without the install, the import below fails.
 
 .. warning::
 

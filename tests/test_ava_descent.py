@@ -238,6 +238,60 @@ class TestReviewHardening:
             with pytest.raises(ValueError, match="omni_scalar"):
                 d.catalan_step([0.0], [1.0], omni_scalar=bad)
 
+    def test_an_int_outside_float_range_is_refused_not_leaked(self) -> None:
+        """PIN (review finding, 2026-10-07): ``math.isfinite(10**1000)`` and
+        ``float(10**1000)`` raise ``OverflowError``, so an int too large to
+        convert to float escaped every documented ``ValueError`` refusal —
+        through the constructor's finiteness check, ``descend``'s tolerance
+        check, and the ``asvec`` coercion of every vector argument.  Each
+        site now refuses it as the non-finite value it is in these
+        operators' float domain.  Mutation: restoring bare ``math.isfinite``
+        at the scalar sites, or unwrapping any ``asvec`` coercion, leaks
+        ``OverflowError`` and fails exactly the matching case here."""
+        huge = 10**1000
+        d = AvaDescent()
+        with pytest.raises(ValueError, match="finite positive"):
+            AvaDescent(alpha=huge)
+        with pytest.raises(ValueError, match="finite positive"):
+            AvaDescent(equity_gain=huge)
+        with pytest.raises(ValueError, match="tolerance"):
+            d.descend(TARGET, zeros(DIM), tolerance=huge)
+        with pytest.raises(ValueError, match="float range"):
+            d.descend([huge], [1.0])
+        with pytest.raises(ValueError, match="float range"):
+            d.descend([1.0], [huge])
+        with pytest.raises(ValueError, match="velocity"):
+            d.momentum_step([1.0], [1.0], [huge])
+        with pytest.raises(ValueError, match="variance"):
+            d.select_alpha([0.5], huge, 0.99)
+        with pytest.raises(ValueError, match="float range"):
+            d.select_alpha([huge], 0.1, 0.99)
+        with pytest.raises(ValueError, match="omni_scalar"):
+            d.catalan_step([0.0], [1.0], omni_scalar=huge)
+        from ama_cryptography.double_helix_engine import AmaEquationEngine
+
+        engine = AmaEquationEngine(state_dim=DIM, random_seed=42)
+        with pytest.raises(ValueError, match="float range"):
+            engine.converge([huge] + [0.1] * (DIM - 1), max_steps=2)
+        with pytest.raises(ValueError, match="tolerance"):
+            engine.converge(zeros(DIM), max_steps=2, tolerance=huge)
+
+    def test_converge_tolerance_contract_is_method_independent(self) -> None:
+        """PIN (review finding, 2026-10-07): the ``descent`` branch refused
+        NaN/inf tolerance in ``AvaDescent.descend`` while the ``helix``
+        branch interpreted them (NaN never stops, inf stops after one
+        step), so one documented contract validated method-dependently.
+        ``converge`` now refuses non-finite tolerance before dispatch.
+        Mutation: dropping the pre-dispatch check reverts the helix rows
+        here to silent acceptance and fails exactly this test."""
+        from ama_cryptography.double_helix_engine import AmaEquationEngine
+
+        engine = AmaEquationEngine(state_dim=DIM, random_seed=42)
+        for bad in (math.nan, math.inf):
+            for method in ("helix", "descent"):
+                with pytest.raises(ValueError, match="tolerance"):
+                    engine.converge(zeros(DIM), max_steps=2, tolerance=bad, method=method)
+
     def test_a_subnormal_contraction_factor_is_refused(self) -> None:
         """PIN (review finding): operand positivity does not survive floating
         point — alpha = equity_gain = 1e-308 underflows the product to 0,

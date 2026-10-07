@@ -15,8 +15,11 @@ Features:
 - Key rotation support
 
 Usage:
-    pip install flask
-    # Optional: build native C library for quantum-resistant signatures
+    pip install -e ".[examples]"
+    # Installing this project builds its native C library, and the build is
+    # required, not optional: the cryptography this example serves runs on
+    # it with no fallback path (INVARIANT-7).  The [examples] extra supplies
+    # Flask; Flask alone leaves the import below failing on a fresh checkout.
     python flask_integration.py
 
 Then visit:

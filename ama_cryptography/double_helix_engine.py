@@ -88,6 +88,21 @@ __version__ = "5.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 
+def _isfinite_number(value: float) -> bool:
+    """``math.isfinite`` over ``int | float`` without the ``OverflowError``
+    leak: ``math.isfinite(10**1000)`` raises ``OverflowError`` instead of
+    answering, so an int too large to convert to float escaped the defined
+    ``ValueError`` refusals of every validator that called ``math.isfinite``
+    on a caller-supplied scalar (review finding, 2026-10-07).  A finite int
+    outside float range is outside these operators' float domain, so it
+    reads as non-finite and is refused by the same branch.
+    """
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 class AmaEquationEngine:
     """
     AMA Equation Engine with Double-Helix Evolution Architecture.
@@ -257,6 +272,14 @@ class AmaEquationEngine:
             vec = asvec(state, copy=False)
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"{argument}: {exc}") from None
+        except OverflowError:
+            # float(10**1000) inside the conversion raises OverflowError,
+            # which escaped this boundary's documented TypeError/ValueError
+            # contract (review finding, 2026-10-07; same class as
+            # _isfinite_number at module level).
+            raise ValueError(
+                f"{argument}: state holds an int outside float range (reads as non-finite)"
+            ) from None
         if len(vec) != self.state_dim:
             raise ValueError(
                 f"{argument}: state has {len(vec)} elements but this engine "
@@ -641,7 +664,9 @@ class AmaEquationEngine:
             TypeError: ``initial_state`` is not array-like, or holds
                 non-numbers.
             ValueError: ``initial_state`` is not 1-D, its length is not
-                ``state_dim``, or ``max_steps`` / ``tolerance`` is negative.
+                ``state_dim``, ``max_steps`` is negative, or ``tolerance``
+                is negative or non-finite (NaN and inf are refused for both
+                methods, not interpreted).
 
         Example:
             >>> engine = AmaEquationEngine(state_dim=8, random_seed=42)
@@ -676,8 +701,13 @@ class AmaEquationEngine:
             raise ValueError(f"unknown method: {method!r} (expected 'helix' or 'descent')")
         if max_steps < 0:
             raise ValueError(f"max_steps must be >= 0, got {max_steps}")
-        if tolerance < 0:
-            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+        if not _isfinite_number(tolerance) or tolerance < 0:
+            # Shared by both methods, validated BEFORE dispatch: descent's
+            # own validator refused NaN/inf while the helix walk interpreted
+            # them (NaN never stops, inf stops after the first step), making
+            # the one documented contract method-dependent (review finding,
+            # 2026-10-07).
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance}")
 
         if initial_state is None:
             state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
@@ -787,7 +817,7 @@ class AvaDescent:
 
     def __init__(self, alpha: float = 0.618, equity_gain: float = EQUITY_GAIN) -> None:
         for name, value in (("alpha", alpha), ("equity_gain", equity_gain)):
-            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            if not isinstance(value, (int, float)) or not _isfinite_number(value) or value <= 0:
                 raise ValueError(f"{name} must be a finite positive number, got {value!r}")
         gain = alpha * equity_gain
         if gain >= 2.0:
@@ -818,8 +848,16 @@ class AvaDescent:
     # -- validation --------------------------------------------------------
     @staticmethod
     def _coerce_pair(state: object, gradient: object, where: str) -> Tuple[Vec, Vec]:
-        s = asvec(state)
-        g = asvec(gradient)
+        try:
+            s = asvec(state)
+            g = asvec(gradient)
+        except OverflowError:
+            # float(10**1000) inside the conversion raises before the
+            # finiteness scan below can refuse it; same ValueError contract
+            # (review finding, 2026-10-07).
+            raise ValueError(
+                f"{where}: a component is an int outside float range (reads as non-finite)"
+            ) from None
         if len(s) == 0:
             raise ValueError(f"{where}: state is empty — descent over zero components is undefined")
         if len(s) != len(g):
@@ -918,7 +956,12 @@ class AvaDescent:
                 f"{self.alpha * (1.0 - beta):g} vs {2.0 * (1.0 + beta):g}"
             )
         s, g = self._coerce_pair(state, gradient, "momentum_step")
-        v = asvec(velocity)
+        try:
+            v = asvec(velocity)
+        except OverflowError:
+            raise ValueError(
+                "momentum_step: velocity holds an int outside float range (reads as non-finite)"
+            ) from None
         if len(v) != len(s):
             raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
         if any(not math.isfinite(x) for x in v.tolist()):
@@ -945,7 +988,7 @@ class AvaDescent:
         caller supplies it to steer the trajectory, knowing the settle
         point moves.
         """
-        if not math.isfinite(omni_scalar):
+        if not _isfinite_number(omni_scalar):
             raise ValueError(f"omni_scalar must be finite, got {omni_scalar}")
         s, g = self._coerce_pair(state, gradient, "catalan_step")
         return self._require_finite_result(self._catalan_core(s, g, omni_scalar), "catalan_step")
@@ -973,11 +1016,16 @@ class AvaDescent:
         """
         if not 0.0 <= ethical_score <= 1.0:
             raise ValueError(f"ethical_score must be in [0, 1], got {ethical_score}")
-        if not math.isfinite(variance) or variance < 0.0:
+        if not _isfinite_number(variance) or variance < 0.0:
             # NaN fails every comparison, so without this check it would
             # fall through to the most aggressive row of the table.
             raise ValueError(f"variance must be finite and >= 0, got {variance}")
-        g = asvec(gradient)
+        try:
+            g = asvec(gradient)
+        except OverflowError:
+            raise ValueError(
+                "select_alpha: gradient holds an int outside float range (reads as non-finite)"
+            ) from None
         if any(not math.isfinite(x) for x in g.tolist()):
             raise ValueError("select_alpha: gradient holds a non-finite component")
         if ethical_score < 0.93:
@@ -1022,7 +1070,7 @@ class AvaDescent:
             )
         if max_steps < 0:
             raise ValueError(f"max_steps must be >= 0, got {max_steps}")
-        if not math.isfinite(tolerance) or tolerance < 0:
+        if not _isfinite_number(tolerance) or tolerance < 0:
             # tolerance=inf stops after the first move whatever the error;
             # tolerance=nan never stops: both are refused, not interpreted.
             raise ValueError(f"tolerance must be finite and >= 0, got {tolerance}")

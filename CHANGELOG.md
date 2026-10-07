@@ -34,6 +34,50 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `07ea1d5`: ints outside float range refused everywhere, `converge`'s tolerance contract method-independent, efficacy provenance recorded and re-measured, example install instructions corrected — 2026-10-07
+
+- **An int too large to convert to float escaped every documented
+  `ValueError` refusal in the math layer (`double_helix_engine.py`).**
+  Medium: `math.isfinite(10**1000)` and `float(10**1000)` raise
+  `OverflowError` instead of answering, so the constructor's finiteness
+  check, `descend`'s tolerance check, `catalan_step`'s forcing scalar,
+  `select_alpha`'s variance, and the `asvec` coercion of every vector
+  argument (state, gradient, velocity — engine and operators alike) leaked
+  `OverflowError` through contracts that document `ValueError` (measured on
+  all nine paths before fixing). A module-level `_isfinite_number` answers
+  `False` where `math.isfinite` raises, and every coercion boundary maps
+  the conversion overflow to its documented refusal. PIN
+  `test_an_int_outside_float_range_is_refused_not_leaked` — three mutants
+  (bare `math.isfinite` restored at the constructor, the `converge`
+  pre-dispatch check dropped, a coercion unwrapped) each fail exactly the
+  claiming test.
+- **`converge`'s tolerance validated method-dependently.** Medium: the
+  `descent` branch refused NaN/inf inside `AvaDescent.descend` while the
+  default helix walk interpreted them (NaN never stops, inf stops after
+  one step; both measured), so one documented contract meant two things.
+  Finiteness is now validated before dispatch, for both methods. PIN
+  `test_converge_tolerance_contract_is_method_independent`.
+- **The efficacy table's provenance now satisfies §8 item 7, by
+  mechanism.** `r3_efficacy_eval.py` records the run identifier, commit,
+  Python version, host CPU model and count, the exact native artifact by
+  SHA-256, and the build flags from `CMakeCache.txt` in the table's
+  trailer on every regeneration. The committed 2026-10-06 figures carried
+  host, date, seed, n, median and MAD but no build flags, artifact or run
+  id, and those cannot be reconstructed for an artifact that no longer
+  exists — so the table was re-measured 2026-10-07 under the new trailer
+  (median 0.104 ms, MAD 0.002 ms; the qualitative story is unchanged:
+  points at 10x 100%/100% with 3R at the lower FPR, bursts at 2x 100% vs
+  54%, +5% steps caught by 3R alone) and the README rolled with it under
+  the existing table↔prose pins. One honest movement: on this trace the
+  baseline catches a +10% step after 2 samples (3R after 19), where the
+  10-06 trace showed it missing the step entirely — stated as measured.
+- **Three shipped examples told a fresh checkout to install only the
+  example's framework and called the native build "optional".** Low:
+  under INVARIANT-7 there is no fallback path, so on an unbuilt checkout
+  each example fails at import. `basic_usage.py`, `flask_integration.py`
+  (via the `[examples]` extra) and `fastapi_integration.py` now install
+  the project first and say why the build is required.
+
 ### Review round on the 10-06 head: the resonance analysis window capped onto the pinned table, Windows CI steps fail at the first failed command, the release date rolled — 2026-10-07
 
 - **`detect_resonance` is capped at `_MAX_RESONANCE_SAMPLES` (= 2 × the
