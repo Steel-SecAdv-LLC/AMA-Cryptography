@@ -2486,8 +2486,38 @@ class ResonanceTimingMonitor:
             return 0.0
         return sum(sorted(scanned, reverse=True)[:j]) / mean_power
 
-    #: Measured null thresholds for the split-line statistic, keyed by
-    #: scanned-bin count; filled on first use per size.
+    #: Pinned null bars for the split-line statistic at every spectrum size
+    #: the detection pipeline produces (window lengths 8..10,000 zero-pad to
+    #: powers of two, so the scanned half-spectrum is one of these twelve).
+    #: Each value is the measured (1 - RESONANCE_FALSE_ALARM_RATE) order
+    #: statistic over _MULTILINE_NULL_TRIALS seeded draws — byte-identical
+    #: to what _multiline_threshold derives, pinned because the derivation
+    #: is pure Python and the largest size measured 8.65 s of synchronous
+    #: first-use latency inside get_security_report (review finding,
+    #: 2026-10-07).  Regenerate after changing the statistic, the trial
+    #: count or the seed:
+    #:     python -c "from ama_cryptography.monitoring import \
+    #:         ResonanceTimingMonitor as R; R._MULTILINE_THRESHOLDS.clear(); \
+    #:         print({m: R._multiline_threshold(m) for m in \
+    #:         (4,8,16,32,64,128,256,512,1024,2048,4096,8192)})"
+    #: tests/test_timing_detector_calibration.py re-derives one size from
+    #: scratch and fails if the table and the procedure drift apart.
+    _MULTILINE_THRESHOLDS: ClassVar[Dict[int, float]] = {
+        4: 3.9085868452824046,
+        8: 6.334665931862912,
+        16: 8.798758633121482,
+        32: 11.140622898267086,
+        64: 13.13619164949844,
+        128: 14.449134490438645,
+        256: 15.97584012589801,
+        512: 18.075354985495213,
+        1024: 19.36283077664833,
+        2048: 20.83478835631275,
+        4096: 22.312320102580543,
+        8192: 23.897051177165363,
+    }
+    #: Runtime cache for sizes outside the pinned table (an external caller
+    #: driving detect_resonance at a non-pipeline size); filled on first use.
     _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[int, float]] = {}
     #: Null-measurement trials behind each cached threshold.  4,000 resolves
     #: the 1% tail (40 exceedances expected) and keeps the one-time per-size
@@ -2507,8 +2537,23 @@ class ResonanceTimingMonitor:
         processes, and the result is cached: the draw runs once per
         distinct spectrum size per process, off the hot path
         (detect_resonance is on-demand, not per-record).
+
+        The iid-exponential null is an IDEALISATION shared with Fisher's
+        analytic bar above it: the pipeline zero-pads n samples to the next
+        power of two, and for n below that power the padded ordinates are
+        correlated, so one m-keyed bar serves every n that pads to it.
+        The deviation is measured, not assumed: through the real
+        centred-and-padded pipeline at the production size (n = 100,
+        m = 64), the split-line channel's clean rate is 1.17% against the
+        1% target and the Fisher bar's is 0.50-1.0% under the identical
+        idealisation — both documented, neither exceeding twice the
+        budget on any measured stream.  A per-(n, m) simulated null would
+        buy back the remaining 0.17 points at twelve times the table.
         """
         m = max(1, int(scanned_bins))
+        pinned = cls._MULTILINE_THRESHOLDS.get(m)
+        if pinned is not None:
+            return pinned
         cached = cls._MULTILINE_THRESHOLD_CACHE.get(m)
         if cached is not None:
             return cached

@@ -329,7 +329,24 @@ class TestSplitLineResonance:
         first = ResonanceTimingMonitor._multiline_threshold(64)
         again = ResonanceTimingMonitor._multiline_threshold(64)
         assert first == again
-        assert 10.0 < first < 16.0, first  # measured 12.78 at m=64
+        assert 10.0 < first < 16.0, first  # pinned 13.136 at m=64
+
+    def test_the_pinned_table_matches_a_fresh_derivation(self) -> None:
+        """PIN: the pinned thresholds and the derivation procedure cannot
+        drift apart — one size is re-derived from scratch and compared to
+        its table entry exactly (same seed, same arithmetic, so equality is
+        byte-level).  A corrupted or stale table entry fails here."""
+        m = 32
+        table_value = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[m]
+        pinned = dict(ResonanceTimingMonitor._MULTILINE_THRESHOLDS)
+        try:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLDS.clear()
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(m, None)
+            fresh = ResonanceTimingMonitor._multiline_threshold(m)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLDS.update(pinned)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(m, None)
+        assert fresh == table_value, (fresh, table_value)
 
     def test_a_multiline_only_verdict_reaches_report_and_posture(self) -> None:
         """PIN (review finding): get_security_report admitted an analysis
