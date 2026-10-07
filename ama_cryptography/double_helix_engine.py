@@ -940,7 +940,7 @@ class AvaDescent:
         ``next_velocity = beta * velocity + (1 - beta) * gradient``."""
         if not 0.0 <= beta < 1.0:
             raise ValueError(f"beta must be in [0, 1), got {beta}")
-        if self.alpha * (1.0 - beta) >= 2.0 * (1.0 + beta):
+        if self._momentum_unstable(self.alpha, beta):
             # The constructor bounds alpha * equity_gain, but momentum
             # applies alpha WITHOUT the equity gain, so a large alpha paired
             # with a small gain passes construction and diverges here
@@ -971,6 +971,17 @@ class AvaDescent:
             self._require_finite_result(nxt, "momentum_step"),
             self._require_finite_result(velocity_next, "momentum_step velocity"),
         )
+
+    @staticmethod
+    def _momentum_unstable(alpha: float, beta: float) -> bool:
+        """The Jury stability bound ``alpha * (1 - beta) >= 2 * (1 + beta)``
+        in ONE expression, so the per-call check (``momentum_step``) and the
+        loop-entry check (``descend(mode="momentum")``, beta fixed at 0.9)
+        cannot disagree at the float boundary (review finding, 2026-10-07:
+        the loop's pre-evaluated ``0.1``/``3.8`` form refused
+        ``alpha=38, equity_gain=0.01`` while ``momentum_step`` accepted it,
+        because ``1.0 - 0.9`` is not exactly ``0.1``)."""
+        return alpha * (1.0 - beta) >= 2.0 * (1.0 + beta)
 
     def _momentum_core(self, s: Vec, g: Vec, v: Vec, beta: float) -> Tuple[Vec, Vec]:
         velocity_next = beta * v + (1.0 - beta) * g
@@ -1058,12 +1069,14 @@ class AvaDescent:
         """
         if mode not in ("equity", "variance", "momentum", "catalan", "adaptive"):
             raise ValueError(f"unknown mode: {mode!r}")
-        if mode == "momentum" and self.alpha * 0.1 >= 3.8:
+        if mode == "momentum" and self._momentum_unstable(self.alpha, 0.9):
             # The loop iterates on the raw momentum core with beta = 0.9, so
             # the stability bound alpha * (1 - beta) < 2 * (1 + beta) —
             # enforced per-call in momentum_step — is enforced here once at
-            # entry with the loop's fixed beta (0.1 and 3.8 are that bound
-            # evaluated at 0.9).
+            # entry with the loop's fixed beta, through the SAME expression
+            # momentum_step evaluates (a pre-evaluated 0.1/3.8 form refused
+            # configurations momentum_step accepts; review finding,
+            # 2026-10-07).
             raise ValueError(
                 f"alpha {self.alpha} exceeds the momentum stability bound "
                 f"alpha * (1 - beta) < 2 * (1 + beta) at the loop's beta of 0.9"

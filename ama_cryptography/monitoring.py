@@ -2492,9 +2492,10 @@ class ResonanceTimingMonitor:
         return math.log(m / alpha)
 
     #: Ordinates the split-line statistic sums.  Two is the measured
-    #: operating point: it doubles two-tone detection over Fisher while
-    #: still edging the single-line case; three measured no better on
-    #: either family and pays a higher bar.
+    #: operating point: it lifts two-tone detection from 34% to 56% over
+    #: Fisher (14/40 to 22/40 on the deterministic test seeds) while still
+    #: edging the single-line case; three measured no better on either
+    #: family and pays a higher bar.
     MULTILINE_ORDINATES: ClassVar[int] = 2
 
     @staticmethod
@@ -2558,7 +2559,18 @@ class ResonanceTimingMonitor:
     #: above); it serves direct _multiline_threshold callers — the
     #: calibration suite's table↔procedure coupling test re-derives a
     #: pinned size through this path — and is filled on first use.
-    _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[Tuple[int, int], float]] = {}
+    _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[Tuple[int, int, float, int], float]] = {}
+    #: The configuration the pinned table's bars were MEASURED under —
+    #: (MULTILINE_ORDINATES, RESONANCE_FALSE_ALARM_RATE,
+    #: _MULTILINE_NULL_TRIALS) at measurement time.  A historical fact of
+    #: the table, not an alias of the live class attributes: a subclass
+    #: that overrides any of the three changes the statistic or its null,
+    #: so _multiline_threshold reads the table only when the live
+    #: configuration matches this one and derives the bar otherwise
+    #: (review finding, 2026-10-07: the j-only gate still served the 1%
+    #: table to a subclass configured for a different alarm rate, and the
+    #: cache identity omitted the rate and the trial count).
+    _MULTILINE_TABLE_CONFIG: ClassVar[Tuple[int, float, int]] = (2, 0.01, 4000)
     #: Null-measurement trials behind each cached threshold.  4,000 resolves
     #: the 1% tail (40 exceedances expected) and keeps the one-time per-size
     #: cost well under a second of pure Python.
@@ -2592,25 +2604,29 @@ class ResonanceTimingMonitor:
         """
         m = max(1, int(scanned_bins))
         j = max(1, int(cls.MULTILINE_ORDINATES))
-        # The pinned table was measured for the shipped statistic, the
-        # top-2 sum; a subclass or override that changes MULTILINE_ORDINATES
-        # changes the statistic, so the table no longer answers for it and
-        # the bar is derived for the configured j instead (review finding,
-        # 2026-10-07: the simulation hard-coded the top two while the
-        # statistic read the class variable, so an override would have moved
-        # the statistic without moving its threshold).  The cache is keyed
-        # by (m, j) for the same reason.
-        if j == 2:
+        alpha = cls.RESONANCE_FALSE_ALARM_RATE
+        trials = cls._MULTILINE_NULL_TRIALS
+        # The pinned table answers only for the configuration its bars were
+        # measured under — _MULTILINE_TABLE_CONFIG.  An override of the
+        # statistic (MULTILINE_ORDINATES), the target rate
+        # (RESONANCE_FALSE_ALARM_RATE) or the null's resolution
+        # (_MULTILINE_NULL_TRIALS) changes what the bar must be, so any
+        # other configuration derives it, and the cache identity carries
+        # every threshold-defining parameter so entries cannot be served
+        # across configurations (review findings, 2026-10-07: first the
+        # hard-coded top-2 simulation under a configurable statistic, then
+        # a j-only gate that still served the 1% table to a subclass
+        # configured for another alarm rate).
+        if (j, alpha, trials) == cls._MULTILINE_TABLE_CONFIG:
             pinned = cls._MULTILINE_THRESHOLDS.get(m)
             if pinned is not None:
                 return pinned
-        cached = cls._MULTILINE_THRESHOLD_CACHE.get((m, j))
+        cache_key = (m, j, alpha, trials)
+        cached = cls._MULTILINE_THRESHOLD_CACHE.get(cache_key)
         if cached is not None:
             return cached
-        alpha = cls.RESONANCE_FALSE_ALARM_RATE
         seed = 0x3C0 + m
         rng = random.Random(seed)  # noqa: S311 -- fixed-seed null bar, not key material (RTM-001)
-        trials = cls._MULTILINE_NULL_TRIALS
         stats = []
         for _ in range(trials):
             # One pass per trial: total plus the j largest, no materialised
@@ -2618,8 +2634,8 @@ class ResonanceTimingMonitor:
             # window (10,000 samples -> 8,192 scanned bins) the sorted form
             # performed 4,000 full 8,192-element sorts before first return
             # (review finding, 2026-10-06); the draws themselves are the
-            # irreducible cost and run once per (size, j) per process.  For
-            # j = 2 the arithmetic is byte-identical to the top1/top2 form
+            # irreducible cost and run once per cache identity per process.
+            # For j = 2 the arithmetic is byte-identical to the top1/top2 form
             # this replaces (same draws, same descending-order sum), which
             # the table<->procedure coupling test proves byte-exactly.
             total = 0.0
@@ -2640,7 +2656,7 @@ class ResonanceTimingMonitor:
         stats.sort()
         rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
         threshold = stats[rank]
-        cls._MULTILINE_THRESHOLD_CACHE[(m, j)] = threshold
+        cls._MULTILINE_THRESHOLD_CACHE[cache_key] = threshold
         return threshold
 
 

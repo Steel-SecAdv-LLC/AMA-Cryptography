@@ -276,6 +276,27 @@ class TestReviewHardening:
         with pytest.raises(ValueError, match="tolerance"):
             engine.converge(zeros(DIM), max_steps=2, tolerance=huge)
 
+    def test_momentum_stability_agrees_between_operator_and_loop(self) -> None:
+        """PIN (review finding, 2026-10-07): the loop-entry check in
+        ``descend(mode="momentum")`` pre-evaluated the Jury bound at
+        beta = 0.9 as ``alpha * 0.1 >= 3.8``, which is NOT the expression
+        ``momentum_step`` evaluates — ``1.0 - 0.9`` is not exactly ``0.1``,
+        so ``alpha = 38.0`` was accepted by the operator and refused by the
+        loop.  Both paths now call the one ``_momentum_unstable`` expression.
+        Mutation: restoring the pre-evaluated form fails exactly the
+        boundary acceptance below."""
+        d = AvaDescent(alpha=38.0, equity_gain=0.01)
+        # Boundary configuration: 38 * (1.0 - 0.9) = 3.799... < 3.8 — both
+        # paths accept.
+        d.momentum_step([0.0], [0.1], [0.0])
+        d.descend([0.5], [0.0], max_steps=1, mode="momentum")
+        # One step past the bound: both paths refuse.
+        unstable = AvaDescent(alpha=39.0, equity_gain=0.01)
+        with pytest.raises(ValueError, match="momentum stability"):
+            unstable.momentum_step([0.0], [0.1], [0.0])
+        with pytest.raises(ValueError, match="momentum stability"):
+            unstable.descend([0.5], [0.0], max_steps=1, mode="momentum")
+
     def test_converge_tolerance_contract_is_method_independent(self) -> None:
         """PIN (review finding, 2026-10-07): the ``descent`` branch refused
         NaN/inf tolerance in ``AvaDescent.descend`` while the ``helix``

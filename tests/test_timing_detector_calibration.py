@@ -330,7 +330,12 @@ class TestSplitLineResonance:
         m = 64 is pinned and returned before the cache is ever read, so the
         earlier form of this test passed with the cache broken (review
         finding, 2026-10-07)."""
-        key = (24, 2)
+        key = (
+            24,
+            ResonanceTimingMonitor.MULTILINE_ORDINATES,
+            ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+            ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+        )
         assert 24 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
         ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
         first = ResonanceTimingMonitor._multiline_threshold(24)
@@ -357,7 +362,15 @@ class TestSplitLineResonance:
             two = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[32]
             assert three > two, (three, two)
         finally:
-            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((32, 3), None)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(
+                (
+                    32,
+                    3,
+                    ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+                    ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+                ),
+                None,
+            )
 
     def test_the_pinned_table_matches_a_fresh_derivation(self) -> None:
         """PIN: the pinned thresholds and the derivation procedure cannot
@@ -369,11 +382,11 @@ class TestSplitLineResonance:
         pinned = dict(ResonanceTimingMonitor._MULTILINE_THRESHOLDS)
         try:
             ResonanceTimingMonitor._MULTILINE_THRESHOLDS.clear()
-            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((m, 2), None)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.clear()
             fresh = ResonanceTimingMonitor._multiline_threshold(m)
         finally:
             ResonanceTimingMonitor._MULTILINE_THRESHOLDS.update(pinned)
-            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop((m, 2), None)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.clear()
         assert fresh == table_value, (fresh, table_value)
 
     def test_an_oversized_window_stays_on_the_pinned_table(self) -> None:
@@ -406,6 +419,27 @@ class TestSplitLineResonance:
         assert out["multiline_threshold"] == table[cap // 2]
         # The pinned bar answered; no size was simulated for this report.
         assert set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE) == cache_before
+
+    def test_the_table_answers_only_its_measured_configuration(self) -> None:
+        """PIN (review finding, 2026-10-07): the pinned bars were measured at
+        the 1% rate with 4,000 trials; a subclass configured for another
+        alarm rate (or trial count) must get a bar derived for ITS
+        configuration, not the table's — the Fisher channel and the reported
+        false_alarm_rate already honor the override, so serving the 1% table
+        would silently decouple the split-line bar from both.  Mutation:
+        gating the table on j alone fails exactly this test."""
+
+        class FivePercent(ResonanceTimingMonitor):
+            RESONANCE_FALSE_ALARM_RATE: ClassVar[float] = 0.05
+
+        key = (32, 2, 0.05, ResonanceTimingMonitor._MULTILINE_NULL_TRIALS)
+        try:
+            derived = FivePercent._multiline_threshold(32)
+            pinned = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[32]
+            # A five-fold larger budget sits strictly lower in the null.
+            assert derived < pinned, (derived, pinned)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
 
     def test_a_multiline_only_verdict_reaches_report_and_posture(self) -> None:
         """PIN (review finding): get_security_report admitted an analysis

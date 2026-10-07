@@ -34,6 +34,34 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `caef81c`: one Jury expression on both momentum paths, the pinned table gated on its full measured configuration — 2026-10-07
+
+- **`momentum_step` and `descend(mode="momentum")` evaluate the one
+  stability expression.** Medium: the loop-entry check pre-evaluated the
+  Jury bound at beta = 0.9 as `alpha * 0.1 >= 3.8`, which is not the
+  expression `momentum_step` computes — `1.0 - 0.9` is not exactly `0.1`,
+  so `alpha = 38.0, equity_gain = 0.01` (a valid construction) was
+  accepted by the operator and refused by the loop (measured).  Both
+  paths now call one `_momentum_unstable(alpha, beta)`.  PIN
+  `test_momentum_stability_agrees_between_operator_and_loop`
+  (mutation-earned: the pre-evaluated form restored fails exactly its
+  boundary acceptance; one step past the bound both paths still refuse).
+- **The pinned split-line table answers only its full measured
+  configuration.** Medium, the completion of the previous round's j-gate:
+  the table's bars were measured at the 1% rate with 4,000 trials, and a
+  subclass overriding `RESONANCE_FALSE_ALARM_RATE` (which the Fisher
+  channel and the reported `false_alarm_rate` honor) or
+  `_MULTILINE_NULL_TRIALS` was still served the 1% table.
+  `_MULTILINE_TABLE_CONFIG` records the measured configuration as a
+  historical fact of the table; any other live configuration derives its
+  bar, and the cache identity is `(m, j, alpha, trials)` so entries
+  cannot be served across configurations.  PIN
+  `test_the_table_answers_only_its_measured_configuration`
+  (mutation-earned: the j-only gate fails exactly it; a 5% subclass
+  measures a strictly lower bar).  A comment claiming the two-ordinate
+  statistic "doubles" two-tone detection is corrected to the measured
+  figures (34% → 56%; 14/40 → 22/40) per §6.6.
+
 ### Copilot round on `42cc5f0`: module-scope rebinding exempts, the null simulation follows its configured statistic, the efficacy table re-measured on a clean head — 2026-10-07
 
 - **The import gate exempts a nested re-import whose module-scope binding
