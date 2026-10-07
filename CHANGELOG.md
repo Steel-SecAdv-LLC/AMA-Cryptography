@@ -34,6 +34,30 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Efficacy table re-measured under the paired comparison; globals() mutations reset the import baseline — 2026-10-07
+
+- **Direct `globals()`/`vars()` mutations reset the import-gate baseline
+  like `sys.modules` mutations.** Medium: `globals()['os'] = 1` rebinds
+  the name with no Name node, so the restore import after it was flagged
+  and its deletion measured as AttributeError.  The namespace-mapping
+  detector now covers `sys.modules`, bare `globals()` and bare `vars()`
+  uniformly (subscript store/delete and mutating method calls; an alias
+  of any of them stays outside the lexical boundary, and a read mutates
+  nothing — the read contrast holds the flag).  PIN
+  `test_a_globals_mutation_makes_the_restore_import_load_bearing`
+  (mutation-earned: disabling the globals branch fails exactly it).
+
+- **`benchmarks/r3_efficacy.tsv` and the README's efficacy prose are the
+  clean-head measurement at `acd7359`, the first under `paired_rates`.**
+  With both detectors scoring identical injected traces the head-to-head
+  columns tightened to near-parity where the unpaired draws had shown
+  spread: point-10x 97% vs 96% at 1.1%/1.2% FPR, bursts 36%/40% at 2x
+  and 49%/48% at 3x, point-1.5x 16% vs 56% (still the z-score's
+  territory), the +10% step by 3R after 37 samples with the baseline not
+  at all, and +5% inside this trace's noise floor for both (median
+  0.290 ms, MAD 7.2% of it — the host moved again between runs).  The PR
+  description's efficacy sentences updated to this final measurement.
+
 ### Copilot round on `3e15d6e`: the efficacy comparison is paired — 2026-10-07
 
 - **Both detectors score identical injected traces.** Medium: the point

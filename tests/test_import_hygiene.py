@@ -306,35 +306,46 @@ def _globally_mutated_names(tree: ast.Module) -> set[str]:
     return out
 
 
-def _is_sys_modules(expr: ast.AST) -> bool:
-    """True for a literal ``sys.modules`` expression.
+def _is_namespace_mapping(expr: ast.AST) -> bool:
+    """True for a literal ``sys.modules``, bare ``globals()`` or bare
+    ``vars()`` expression — the module-namespace mappings whose direct
+    mutation re-routes or rebinds what the surrounding imports mean.
 
-    An alias of it (``m = sys.modules; m[k] = v``) is not statically
-    attributable — the boundary every lexical rule in this gate draws.
+    An alias of any of them (``m = sys.modules; m[k] = v``,
+    ``g = globals(); g[k] = v``) is not statically attributable — the
+    boundary every lexical rule in this gate draws.
     """
-    return (
+    if (
         isinstance(expr, ast.Attribute)
         and expr.attr == "modules"
         and isinstance(expr.value, ast.Name)
         and expr.value.id == "sys"
+    ):
+        return True
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id in {"globals", "vars"}
+        and not expr.args
+        and not expr.keywords
     )
 
 
-def _mutates_sys_modules(node: ast.AST) -> bool:
-    """True where ``node`` is a direct ``sys.modules`` mutation: a
-    subscript store or delete, or a mutating method call.  Such a
-    mutation re-routes what a LATER import binds without rebinding any
-    name now, so every tracked binding stops counting as continuously
-    the module and a later re-import is the restore, not a repeat
-    (review finding, 2026-10-07; measured — the re-import binds the
-    replacement).  Total on purpose, like the wildcard reset: the safe
-    direction.
+def _mutates_module_namespace(node: ast.AST) -> bool:
+    """True where ``node`` directly mutates a module-namespace mapping: a
+    subscript store or delete, or a mutating method call, on
+    ``sys.modules`` (re-routes what a LATER import binds; review finding,
+    2026-10-07 — the re-import binds the replacement) or on a bare
+    ``globals()``/``vars()`` (rebinds the name itself without any Name
+    node; review finding, 2026-10-07 — ``globals()['os'] = 1`` left the
+    restore import flagged and its deletion raised AttributeError).
+    Total on purpose, like the wildcard reset: the safe direction.
     """
     if isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)):
-        return _is_sys_modules(node.value)
+        return _is_namespace_mapping(node.value)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         mutators = {"pop", "update", "clear", "setdefault", "popitem"}
-        return node.func.attr in mutators and _is_sys_modules(node.func.value)
+        return node.func.attr in mutators and _is_namespace_mapping(node.func.value)
     return False
 
 
@@ -343,17 +354,18 @@ def _capture_bound_names(node: ast.AST, out: set[str], include_imports: bool) ->
     deletes, exception-handler and match captures (``MatchMapping.rest``
     is a plain string attribute, not a Name node — review finding,
     2026-10-07), import bindings when asked, and the ``"*"`` total-reset
-    marker for a direct ``sys.modules`` mutation, which re-routes what a
-    later import binds without rebinding any name now (review finding,
-    2026-10-07; ``"*"`` is honored by the reset and the exempt check,
-    never collected as a real name).  Nested imports count here because
+    marker for a direct module-namespace mutation — ``sys.modules``
+    re-routes what a later import binds, ``globals()``/``vars()``
+    rebinds the name itself, both without any Name node (review
+    findings, 2026-10-07; ``"*"`` is honored by the reset and the exempt
+    check, never collected as a real name).  Nested imports count here because
     an import inside a compound statement rebinds too — ``if flag:
     import pathlib as os`` leaves ``os`` possibly not the module, so the
     later restore import is load-bearing (review finding, 2026-10-07;
     measured as AttributeError); value-blind on purpose, the safe
     direction.
     """
-    if _mutates_sys_modules(node):
+    if _mutates_module_namespace(node):
         out.add("*")
     if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
         out.add(node.id)
@@ -905,6 +917,32 @@ def test_a_global_deletion_makes_the_name_volatile() -> None:
     broken_f = cast(Callable[[], str], namespace["f"])
     with pytest.raises(NameError):
         broken_f()
+
+
+def test_a_globals_mutation_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): ``globals()['os'] = 1`` rebinds
+    the name with no Name node, so the restore import after it was flagged
+    and its deletion measured as AttributeError on ``os.sep``.  Direct
+    subscript stores/deletes and mutating method calls on a bare
+    ``globals()`` (and ``vars()``) now reset the whole baseline, exactly
+    like ``sys.modules`` mutations; a ``globals()`` READ mutates nothing,
+    and the read contrast holds the flag.  Mutation: with the
+    namespace-mapping branch disabled, exactly this test fails."""
+    mutated = "import os\n\nglobals()['os'] = 1\n\nimport os\n\nvalue = os.sep\n"
+    assert duplicate_plain_imports(mutated) == []
+    popped = "import os\n\nglobals().pop('os')\n\nimport os\n\nvalue = os.sep\n"
+    assert duplicate_plain_imports(popped) == []
+    in_function = (
+        "import os\n\n\ndef f():\n    globals()['os'] = 1\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(in_function) == []
+    read_only = "import os\n\nvalue = globals()['os']\n\nimport os\n"
+    assert duplicate_plain_imports(read_only) == [(5, "os")]
+    broken = "import os\n\nglobals()['os'] = 1\n\nvalue = os.sep\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<globals-del>", "exec")
+    with pytest.raises(AttributeError):
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
 
 
 def test_a_sys_modules_mutation_makes_the_restore_import_load_bearing() -> None:
