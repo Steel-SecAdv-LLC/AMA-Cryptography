@@ -76,6 +76,12 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     finding, 2026-10-07).  The single-deletion shape that WOULD break a
     branch while going green — a same-name, different-value sibling — is
     exactly what the pairwise own-scope exemption removes from the report.
+    A conditionally executed nested import stays flagged on the same
+    reasoning (review finding, 2026-10-07): the only paths its deletion
+    changes are the ones that raise UnboundLocalError on the name today,
+    each repaired into the module binding the key matched — measured and
+    pinned — while exempting the shape would let an always-taken branch
+    hide the class CodeQL still reports.
     """
     tree = ast.parse(source)
     top_ids = set(map(id, tree.body))
@@ -770,6 +776,43 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_conditional_import_stays_flagged_and_deletion_repairs_the_unbound_path() -> None:
+    """PIN (review finding, 2026-10-07): ``if flag: import os`` under a
+    stable module import stays flagged.  Exempting conditionally executed
+    imports would let an always-taken branch hide the entire class while
+    CodeQL still reports it — a gate green while the alerts it exists to
+    block re-accumulate.  What the demanded deletion changes is measured
+    here, not asserted: every path that completes today completes
+    identically (the name resolves to the same module object), and the
+    ONLY divergent path is the one that raises UnboundLocalError on the
+    flagged name — it becomes the module binding the key matched, a
+    strict repair of an unbound read.  Exception-based feature detection
+    has its idiom (ImportError under ``try``, exempt already);
+    UnboundLocalError on a module name is not it."""
+    src = (
+        "import os\n\n\ndef f(flag):\n    if flag:\n        import os\n"
+        "    try:\n        return os.sep\n    except UnboundLocalError:\n"
+        "        return None\n"
+    )
+    assert duplicate_plain_imports(src) == [(6, "os")]
+    deleted = (
+        "import os\n\n\ndef f(flag):\n"
+        "    try:\n        return os.sep\n    except UnboundLocalError:\n"
+        "        return None\n"
+    )
+    assert duplicate_plain_imports(deleted) == []
+    before_ns: dict[str, object] = {}
+    code = compile(src, "<cond>", "exec")
+    exec(code, before_ns)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    after_ns: dict[str, object] = {}
+    code = compile(deleted, "<cond-deleted>", "exec")
+    exec(code, after_ns)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    f_before = cast(Callable[[bool], object], before_ns["f"])
+    f_after = cast(Callable[[bool], object], after_ns["f"])
+    assert f_before(True) == os.sep and f_after(True) == os.sep
+    assert f_before(False) is None and f_after(False) == os.sep
 
 
 def test_a_guarded_rebinding_import_makes_the_restore_import_load_bearing() -> None:

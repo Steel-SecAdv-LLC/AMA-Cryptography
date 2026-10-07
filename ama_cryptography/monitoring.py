@@ -1284,9 +1284,9 @@ class ResonanceTimingMonitor:
     - Two-sided winsorized CUSUM for sustained regime changes
     - High-resolution timing via perf_counter_ns() (cross-platform)
     - Sliding window FFT analysis for periodic pattern detection, with a
-      split-line channel (Siegel's top-ordinates statistic, null bar
-      measured per spectrum size) for periodic energy split across lines
-      that the single-bin maximum dilutes
+      split-line channel (an empirically calibrated top-ordinates
+      statistic, null bar measured per spectrum size) for periodic energy
+      split across lines that the single-bin maximum dilutes
     """
 
     #: Fraction of clean operations an operation's point-anomaly path may
@@ -2461,9 +2461,13 @@ class ResonanceTimingMonitor:
         # largest ordinate, so periodic energy split across two comparable
         # spectral lines — two interleaved periodic processes, or a
         # fundamental with a strong harmonic — can sit below the max/mean
-        # bar at both.  The channel is Siegel's generalisation: the sum of
-        # the top MULTILINE_ORDINATES ordinates over the spectrum mean,
-        # against a null bar measured for this spectrum size.  Measured
+        # bar at both.  The channel sums the top MULTILINE_ORDINATES
+        # ordinates over the spectrum mean, against a null bar measured
+        # for this spectrum size — motivated by the same split Siegel's
+        # threshold-excess test addresses, but an empirically calibrated
+        # statistic of its own, not Siegel's, which sums every positive
+        # excess above a cutoff (corrected per §6.6, 2026-10-07: this
+        # comment called it "Siegel's generalisation").  Measured
         # before shipping (two equal tones at m = 64, 80 seeds per
         # amplitude): detection 56% where Fisher reads 34%, and on a
         # single-line square wave it still edges Fisher (80% vs 76%) via
@@ -2529,8 +2533,9 @@ class ResonanceTimingMonitor:
 
     @staticmethod
     def _top_ordinates_ratio(scanned: List[float], j: int) -> float:
-        """Sum of the ``j`` largest ordinates over the spectrum mean
-        (Siegel's repeated-largest-ordinates statistic)."""
+        """Sum of the ``j`` largest ordinates over the spectrum mean —
+        an empirically calibrated statistic, kin in motivation to
+        Siegel's threshold-excess test but not his statistic."""
         mean_power = _mean(scanned)
         if not scanned or mean_power <= 0.0:
             return 0.0

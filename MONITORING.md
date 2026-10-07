@@ -92,8 +92,9 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
 5. Apply Fast Fourier Transform (FFT) to timing samples to surface periodic
    patterns (resonance)
 6. Judge the same spectrum's split-line statistic — the sum of the two
-   largest ordinates over the mean (Siegel's generalisation of Fisher's
-   test) — against a null bar measured per spectrum size: periodic energy
+   largest ordinates over the mean, an empirically calibrated statistic
+   motivated, like Siegel's threshold-excess test, by splits Fisher's
+   single max dilutes — against a null bar measured per spectrum size: periodic energy
    split across two comparable lines (two interleaved periodic processes,
    or a fundamental with a strong harmonic) can sit below the single-bin
    bar at both lines while the pair clears this one (measured: two-tone

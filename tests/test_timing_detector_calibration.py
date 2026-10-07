@@ -262,7 +262,7 @@ class TestCalibration:
 
 
 class TestSplitLineResonance:
-    """The split-line (Siegel top-ordinates) channel of detect_resonance.
+    """The split-line (top-two-ordinates) channel of detect_resonance.
 
     PIN test_the_channel_sums_exactly_two_ordinates — fails when the
     channel is reduced to the single largest ordinate (j = 1, Fisher's

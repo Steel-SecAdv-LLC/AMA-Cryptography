@@ -34,6 +34,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `f278d73`: the Siegel attribution corrected everywhere, provenance wording held to the measured facts, the conditional-import question answered by measurement — 2026-10-07
+
+- **The split-line statistic is no longer attributed to Siegel.** Low,
+  §6.6 (and INVARIANT-53): Siegel's periodicity statistic sums every
+  positive normalized-ordinate excess above a cutoff; the shipped channel
+  sums exactly the top MULTILINE_ORDINATES ordinates against an
+  empirically calibrated null bar — kin in motivation (splits Fisher's
+  single max dilutes), not his statistic.  Corrected in the class
+  docstring, the detect_resonance comment, `_top_ordinates_ratio`,
+  MONITORING.md step 6, the calibration-test docstring, and the
+  2026-10-06 CHANGELOG entry (amended in place per §6.6).
+
+- **README efficacy prose claims only the measured host facts.** Low:
+  "cloud container" and "shared, unpinned container" upgraded the
+  provenance trailer's evidence (virtualized, 4-vCPU, tenancy
+  unrecorded); the prose now uses the trailer's wording.
+
+- **A conditionally executed nested import stays flagged — measured, and
+  now pinned.** Medium finding, resolved by evidence: on the review's
+  shape (`if flag: import os` under a stable module import, with a
+  handled UnboundLocalError), deletion preserves every completing path
+  and changes only the raising path, which becomes the very module
+  binding the key matched — a strict repair of an unbound read.
+  Exempting the shape would let an always-taken branch hide the class
+  CodeQL still reports, failing the gate's purpose (§10).  PIN
+  `test_a_conditional_import_stays_flagged_and_deletion_repairs_the_unbound_path`;
+  the proposed exemption, applied as a mutant, fails it and the
+  sibling-imports pin.
+
 ### Copilot round on `1a19307`: integral window bounds, and nested imports rebind too — 2026-10-07
 
 - **`ResonanceTimingMonitor` requires integral `window_size` and
@@ -534,9 +563,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   family tried** — a symmetric square wave has no even harmonics, so the
   comb mean averaged dead bins (36.7% vs 76.7% at the strongest amplitude)
   — and was replaced rather than tuned, recorded here per §6.6. The
-  shipped statistic is Siegel's generalisation: the sum of the top two
-  ordinates over the spectrum mean, judged against a seeded,
-  byte-reproducible measured null cached per spectrum size. Measured at
+  shipped statistic is the sum of the top two ordinates over the spectrum
+  mean, judged against a seeded, byte-reproducible measured null cached
+  per spectrum size (this sentence originally called it "Siegel's
+  generalisation"; corrected per §6.6 on 2026-10-07 — Siegel's statistic
+  sums every positive excess above a cutoff, and the shipped one is an
+  empirically calibrated top-two sum, kin only in motivation). Measured at
   m = 64 through the real pipeline: two-tone detection 22/40 where Fisher
   reads 14/40, single-line square wave 80% vs 76% (the third harmonic is
   the margin), clean rate 1.17% against the channel's own 1% budget.
