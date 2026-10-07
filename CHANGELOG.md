@@ -34,6 +34,24 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `3e15d6e`: the efficacy comparison is paired — 2026-10-07
+
+- **Both detectors score identical injected traces.** Medium: the point
+  and burst loops put the detector outermost around a shared RNG, so 3R
+  consumed one set of injection placements and the baseline the next —
+  with five repeats and the documented trace sensitivity, the
+  head-to-head columns compared different draws.  `paired_rates` now
+  injects exactly once per (family, parameter, repeat) and every
+  detector scores that trace; the step family was already paired (its
+  injection is deterministic) and is hoisted so the pairing is
+  structural there too.  PIN
+  `test_detectors_score_identical_injected_traces` (counts injections
+  and compares the traces each detector received; the detector-outer
+  mutant doubles the count and fails both assertions).  The table and
+  the coupled README prose are re-measured from this commit's clean
+  head in the follow-up push, and the PR description's efficacy
+  sentences update to that final measurement with it.
+
 ### Copilot round on `34b2004`: globally-mutated names are volatile to the import gate — 2026-10-07
 
 - **A name some function declares `global` and binds or deletes is never

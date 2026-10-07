@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -131,6 +132,39 @@ def test_the_delay_is_to_the_first_alarm_the_shift_caused() -> None:
 def test_mismatched_runs_are_refused() -> None:
     with pytest.raises(ValueError):
         ev.step_metrics(_alarms(set()), [False] * (_N - 1), _MID)
+
+
+def test_detectors_score_identical_injected_traces() -> None:
+    """PIN (review finding, 2026-10-07): the head-to-head columns are
+    paired — the injection runs exactly once per repeat and every detector
+    scores that same trace.  The first committed form put the detector
+    loop outermost around a shared RNG, so 3R consumed one set of
+    injection placements and the baseline the next.  Mutation: with the
+    injection moved back inside the detector loop, the injection count
+    doubles and the per-detector traces diverge, failing both assertions."""
+    injections: list[list[float]] = []
+    base = [0.1] * 300
+
+    def inject(trace: list[float]) -> tuple[list[float], set[int]]:
+        t = list(trace)
+        slot = 100 + len(injections)
+        t[slot] = 9.9
+        injections.append(t)
+        return t, {slot}
+
+    seen: dict[str, list[list[float]]] = {"a": [], "b": []}
+
+    def detector(name: str) -> Callable[[list[float]], list[bool]]:
+        def run(trace: list[float]) -> list[bool]:
+            seen[name].append(list(trace))
+            return [v > 1.0 for v in trace]
+
+        return run
+
+    out = ev.paired_rates(base, inject, (("a", detector("a")), ("b", detector("b"))), 4)
+    assert len(injections) == 4, "one injection per repeat, shared by every detector"
+    assert seen["a"] == seen["b"], "both detectors must score the identical traces"
+    assert out["a"] == out["b"] == (1.0, 0.0)
 
 
 class _GitShim:

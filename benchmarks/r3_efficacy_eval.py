@@ -70,10 +70,12 @@ import os
 import platform
 import random
 import statistics
+from functools import partial
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
@@ -151,6 +153,35 @@ def rates(alarms: list[bool], injected: set[int]) -> tuple[float, float]:
     untouched = [i for i in range(WINDOW, len(alarms)) if i not in injected]
     fp = sum(1 for i in untouched if alarms[i])
     return tp / len(injected), fp / len(untouched)
+
+
+def paired_rates(
+    trace: list[float],
+    inject: Callable[[list[float]], tuple[list[float], set[int]]],
+    detectors: Sequence[tuple[str, Callable[[list[float]], list[bool]]]],
+    repeats: int,
+) -> dict[str, tuple[float, float]]:
+    """Mean ``(tpr, fpr)`` per detector over ``repeats`` SHARED injections.
+
+    The injection runs exactly once per repeat and EVERY detector scores
+    that same trace — one draw per (family, parameter, repeat).  The first
+    committed form put the detector loop outermost around a shared RNG, so
+    3R consumed one set of injection placements and the baseline the next
+    set, and the head-to-head columns compared different traces (review
+    finding, 2026-10-07).  Pinned by the pairing test, which counts
+    injections and compares the traces each detector received.
+    """
+    tprs: dict[str, list[float]] = {name: [] for name, _ in detectors}
+    fprs: dict[str, list[float]] = {name: [] for name, _ in detectors}
+    for _ in range(repeats):
+        injected_trace, idx = inject(trace)
+        for name, fn in detectors:
+            tpr, fpr = rates(fn(injected_trace), idx)
+            tprs[name].append(tpr)
+            fprs[name].append(fpr)
+    return {
+        name: (statistics.fmean(tprs[name]), statistics.fmean(fprs[name])) for name, _ in detectors
+    }
 
 
 def step_metrics(alarms: list[bool], clean: list[bool], mid: int) -> tuple[bool, int, float, float]:
@@ -294,31 +325,26 @@ def main() -> int:
         fpr = sum(alarms[WINDOW:]) / (len(alarms) - WINDOW)
         rows.append(f"clean\t-\t{name}\t-\t{fpr:.4f}\t-\t1\t-")
 
+    detectors = (("3R", r3_alarms), ("baseline", baseline_alarms))
     for k in (1.5, 2.0, 3.0, 5.0, 10.0):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            tprs, fprs = [], []
-            for _ in range(args.repeats):
-                t, idx = inject_point(trace, k, rng)
-                tpr, fpr = rates(fn(t), idx)
-                tprs.append(tpr)
-                fprs.append(fpr)
-            tpr_m = statistics.fmean(tprs)
-            fpr_m = statistics.fmean(fprs)
+        point_rates = paired_rates(
+            trace, partial(inject_point, k=k, rng=rng), detectors, args.repeats
+        )
+        for name, _ in detectors:
+            tpr_m, fpr_m = point_rates[name]
             rows.append(f"point\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for k in (1.5, 2.0, 3.0):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            tprs, fprs = [], []
-            for _ in range(args.repeats):
-                t, idx = inject_burst(trace, k, rng)
-                tpr, fpr = rates(fn(t), idx)
-                tprs.append(tpr)
-                fprs.append(fpr)
-            tpr_m = statistics.fmean(tprs)
-            fpr_m = statistics.fmean(fprs)
+        burst_rates = paired_rates(
+            trace, partial(inject_burst, k=k, rng=rng), detectors, args.repeats
+        )
+        for name, _ in detectors:
+            tpr_m, fpr_m = burst_rates[name]
             rows.append(f"burst\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for s in (0.05, 0.10, 0.30, 1.00):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            t, mid = inject_step(trace, s)
+        # inject_step is deterministic, so the step family was paired
+        # already; hoisting the injection makes that structural too.
+        t, mid = inject_step(trace, s)
+        for name, fn in detectors:
             detected, delay, fpr, excess = step_metrics(fn(t), clean_alarms[name], mid)
             rows.append(
                 f"step\t+{int(s*100)}%\t{name}"
