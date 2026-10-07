@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-06 |
+| Last Updated | 2026-10-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,9 +19,9 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-10-06
+## [5.0.0] - 2026-10-07
 
-> **Released 2026-10-06.** Until 2026-09-24 this heading carried the date
+> **Released 2026-10-07.** Until 2026-09-24 this heading carried the date
 > 2026-09-10, on which no release was cut; dating it is part of cutting the
 > release, and `tools/check_release_state.py` refuses the tag while the
 > shipped documents still call the version unreleased. What follows is the
@@ -33,6 +33,44 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### Review round on the 10-06 head: the resonance analysis window capped onto the pinned table, Windows CI steps fail at the first failed command, the release date rolled — 2026-10-07
+
+- **`detect_resonance` is capped at `_MAX_RESONANCE_SAMPLES` (= 2 × the
+  largest pinned spectrum size, 16,384), so every null bar it can ask for
+  is in the pinned table for ANY constructor `window_size`.** Medium, a
+  review finding on the split-line channel below: a
+  `ResonanceTimingMonitor(window_size=20000, max_history=20000)` is
+  accepted and produced m = 16,384 — off the twelve-entry pinned table —
+  so the first report ran the measured-null simulation synchronously
+  (65.5 million draws, 15.1 s in the review container) plus a 32,768-point
+  pure-Python FFT. The cap is derived from the table (`2 * max(...)`), so
+  the two cannot drift; the runtime simulation path remains for direct
+  `_multiline_threshold` callers (the table↔procedure coupling test
+  re-derives through it) and is now unreachable from the public pipeline.
+  PIN `test_an_oversized_window_stays_on_the_pinned_table`
+  (mutation-earned: the cap removed fails exactly that test).
+- **Four Windows CI steps ran multi-command `run:` blocks under the
+  default `pwsh`, where a non-final failed command does not fail the
+  step.** Medium, measured on job 112595010110 (windows-latest/3.14): a
+  transient PyPI resolution failure aborted `pip install -e ".[dev,...]"`
+  mid-step, the trailing `clang-format` install succeeded, the step
+  passed — and the job went red only when the INVARIANT-1
+  vendor-isolation gate found no compiled objects, attributing an install
+  failure to vendor isolation. The dependency-install and Windows-build
+  steps of `ci.yml` and `ci-build-test.yml` now pin `shell: bash`
+  (`-e -o pipefail`, the semantics every Linux/macOS step already has).
+  The ruff resolution failure itself was infrastructure by the §8
+  standard: the same constraint resolved on every other lane of the same
+  run, and on re-run.
+- **The release date rolled 2026-10-06 → 2026-10-07 across the five
+  release-state documents and the relocation constants**, by the
+  last-merge-before-the-tag rule (the 10-06 head was still unmerged when
+  10-07 arrived). Two stale clauses in the pre-emptive-review-round entry
+  below are corrected in place per §6.6, marked with this date: the
+  import gate's intermediate unaliased-only form (shipped: keyed on the
+  `(module, asname)` binding) and `oss-fuzz/build.sh`'s intermediate
+  `read -ra` split (shipped: `read -rd ''`).
 
 ### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05/06
 
@@ -233,7 +271,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   correction matters, so the scorer keeps its fixed gain rather than
   carrying a decorative dependency.
 
-- **Pre-emptive review round, before the bots (same date).** Three measured additions. First, the new gate's own adversarial review found it covered one of CodeQL's three shapes: two plain top-level imports (the rule's canonical example) and a same-scope duplicate both evaded it, and an ALIASED top-level import wrongly counted as the earlier binding — a latent false positive whose "fix" would delete a load-bearing local import (measured: NameError). `duplicate_plain_imports` now flags all three shapes and counts only unaliased imports on both sides, with guarded (`try`/`if`) module-level imports never counted as the earlier binding; six unit pins plus the tree assertion, and three mutants (a planted top-level pair, a planted same-scope pair, the aliased guard dropped) each fail exactly their tests — the third also fails the tree assertion, which is the measurement that the tree really contains the load-bearing aliased pattern the guard protects. Second, `oss-fuzz/build.sh` and `tools/run_dudect.sh` — the two tracked scripts no shellcheck lane reads — carried six findings; the four `$CC $CFLAGS` word-splits are OSS-Fuzz's own contract and are now explicit `read -ra` argv arrays (split-equivalence probed; the exact rewritten compile and link lines executed against a real fuzz target and the probe binary runs; the script's full run is validated by the ClusterFuzzLite lane, since this container lacks OSS-Fuzz's `/src` layout and `fuzzer-no-link` runtime), and the two command-substitution quotings are behavior-identical. Both scripts are shellcheck-clean at style level. Third, three example docstrings instructed `pip install cryptography` — the third-party PyCA package — though nothing in the examples imports it (measured: `basic_usage.py` runs to completion with that import blocked); a library whose first invariant is zero external crypto dependencies does not tell its consumers to install one. The hints now name only what each example uses. Also executed this round, all clean: bandit and semgrep with their severity gates, the secret scan (1,623 files), full-scope `mypy --strict` (416 modules) with the scope gate, ctest 155/155, and a five-class note-level detector sweep (unused/redefined, constant-condition, import-shadowing, bare-except, mutable defaults) over the package and tools: zero findings.
+- **Pre-emptive review round, before the bots (same date).** Three measured additions. First, the new gate's own adversarial review found it covered one of CodeQL's three shapes: two plain top-level imports (the rule's canonical example) and a same-scope duplicate both evaded it, and an ALIASED top-level import wrongly counted as the earlier binding — a latent false positive whose "fix" would delete a load-bearing local import (measured: NameError). `duplicate_plain_imports` now flags all three shapes, with guarded (`try`/`if`) module-level imports never counted as the earlier binding; six unit pins plus the tree assertion, and three mutants (a planted top-level pair, a planted same-scope pair, the aliased guard dropped) each fail exactly their tests — the third also fails the tree assertion, which is the measurement that the tree really contains the load-bearing aliased pattern the guard protects. (This round's form counted only unaliased imports on both sides; the later review rounds replaced that with the shipped keying on the `(module, asname)` binding, under which a verbatim repeated alias is also a duplicate — corrected here per §6.6, 2026-10-07.) Second, `oss-fuzz/build.sh` and `tools/run_dudect.sh` — the two tracked scripts no shellcheck lane reads — carried six findings; the four `$CC $CFLAGS` word-splits are OSS-Fuzz's own contract and are now explicit argv arrays (split-equivalence probed; the exact rewritten compile and link lines executed against a real fuzz target and the probe binary runs; the script's full run is validated by the ClusterFuzzLite lane, since this container lacks OSS-Fuzz's `/src` layout and `fuzzer-no-link` runtime), and the two command-substitution quotings are behavior-identical. (This round split with `read -ra`, which stops at the first newline and was later measured dropping every flag after it; the shipped form is `read -rd ''` — see the fine-tooth round above; corrected here per §6.6, 2026-10-07.) Both scripts are shellcheck-clean at style level. Third, three example docstrings instructed `pip install cryptography` — the third-party PyCA package — though nothing in the examples imports it (measured: `basic_usage.py` runs to completion with that import blocked); a library whose first invariant is zero external crypto dependencies does not tell its consumers to install one. The hints now name only what each example uses. Also executed this round, all clean: bandit and semgrep with their severity gates, the secret scan (1,623 files), full-scope `mypy --strict` (416 modules) with the scope gate, ctest 155/155, and a five-class note-level detector sweep (unused/redefined, constant-condition, import-shadowing, bare-except, mutable defaults) over the package and tools: zero findings.
 
 - **A module imported twice, 26 sites (`ama_cryptography/monitoring.py`, `crypto_api.py`, `legacy_compat.py`, 11 test modules, the Wycheproof runner).** Low; CodeQL filed `py/repeated-import` as Notes #750/#751 against `monitoring.py`'s two function-local `import importlib` re-imports, and a tree-wide AST sweep by the same rule found 24 more of the class — each a plain, unaliased `import X` whose module the file already imports at top level, each a pure redundancy, each deleted. Seven aliased locals (`import os as _os`) bind a different name than the plain top-level imports beside them and were examined and left (the final gate keys on bindings, so a VERBATIM repeated alias is in scope — see the review rounds below); local `from X import name` is frequently deliberate late binding and is out of scope. Because Note-severity CodeQL does not block CI, the class is now gated: `tests/test_import_hygiene.py` scans every tracked `.py` and refuses the class — in its final form keyed by the `(module, asname)` binding, with two documented deliberate supersets (verbatim dotted repeats and same-list repeats inside one function or block, which the upstream query's module-scope requirement leaves out) — pinned by a planted duplicate (replanting `monitoring.py`'s own removed import fails it) and a negative control for the aliased and `from` forms. The release date moved to 2026-10-05 across the five release-state documents and the relocation suite's constants when this entry was filed, and rolled once more to 2026-10-06 when the same pull request grew the 10-06 review round — the merge before the tag carries the date of its last validated push, per this entry's own rule.
 
@@ -8926,7 +8964,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.0.0 | 2026-10-06 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
+| 5.0.0 | 2026-10-07 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
 | 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |

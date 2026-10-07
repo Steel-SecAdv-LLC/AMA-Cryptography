@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -347,6 +348,37 @@ class TestSplitLineResonance:
             ResonanceTimingMonitor._MULTILINE_THRESHOLDS.update(pinned)
             ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(m, None)
         assert fresh == table_value, (fresh, table_value)
+
+    def test_an_oversized_window_stays_on_the_pinned_table(self) -> None:
+        """PIN (review finding, 2026-10-07): the analysis window is capped
+        at ``_MAX_RESONANCE_SAMPLES``, so a monitor constructed with any
+        ``window_size`` stays on the pinned null-bar table.  Uncapped,
+        16,385 samples pad to 32,768 and scan m = 16,384 — off the table,
+        into the 65.5-million-draw synchronous null simulation (measured
+        15.1 s) plus a 32,768-point pure-Python FFT.  Mutation: with the
+        ``min(...)`` cap removed from ``detect_resonance``, the
+        ``scanned_bins`` assertion fails (after paying exactly the latency
+        this cap exists to refuse).
+
+        History is injected directly: the pin is on ``detect_resonance``'s
+        window, and 16,385 ``record_timing`` calls at window_size=20,000
+        cost ~23 s of windowed-MAD work that buys the pin nothing.
+        """
+        cap = ResonanceTimingMonitor._MAX_RESONANCE_SAMPLES
+        table = ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        assert cap == 2 * max(table)
+        monitor = ResonanceTimingMonitor(window_size=20000, max_history=20000)
+        rng = random.Random(777)  # noqa: S311 -- test stream, not key material (TDC-001)
+        samples = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(cap + 1)]
+        with monitor._lock:
+            history = monitor.timing_history.setdefault("op", deque(maxlen=monitor.max_history))
+            history.extend(samples)
+        cache_before = set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE)
+        out = monitor.detect_resonance("op")
+        assert out["scanned_bins"] == cap // 2, out["scanned_bins"]
+        assert out["multiline_threshold"] == table[cap // 2]
+        # The pinned bar answered; no size was simulated for this report.
+        assert set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE) == cache_before
 
     def test_a_multiline_only_verdict_reaches_report_and_posture(self) -> None:
         """PIN (review finding): get_security_report admitted an analysis

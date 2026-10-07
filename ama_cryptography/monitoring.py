@@ -2353,7 +2353,16 @@ class ResonanceTimingMonitor:
 
         Note:
             Requires minimum 8 samples. Returns empty dict if insufficient
-            data. This is an on-demand operation (not hot path).
+            data. This is an on-demand operation (not hot path).  The
+            analysis takes at most :attr:`_MAX_RESONANCE_SAMPLES` of the
+            most recent samples regardless of ``window_size``: the cap is
+            twice the largest pinned spectrum size, so every null bar this
+            method can ask for is in :attr:`_MULTILINE_THRESHOLDS` and the
+            pure-Python FFT stays bounded (review finding, 2026-10-07: a
+            ``window_size=20000`` monitor produced m = 16,384, off the
+            pinned table, and the first report ran a 65.5-million-draw
+            synchronous null simulation — measured 15.1 s — plus a
+            32,768-point FFT).
         """
         # Snapshot under the monitor lock: record_timing() appends to this
         # same deque under self._lock on every instrumented operation, and
@@ -2374,7 +2383,8 @@ class ResonanceTimingMonitor:
             if operation not in self.timing_history:
                 return {}
             history_list = list(self.timing_history[operation])
-        timings = history_list[-self.window_size :]
+        effective_window = min(self.window_size, self._MAX_RESONANCE_SAMPLES)
+        timings = history_list[-effective_window:]
 
         if len(timings) < 8:
             return {}
@@ -2487,8 +2497,10 @@ class ResonanceTimingMonitor:
         return sum(sorted(scanned, reverse=True)[:j]) / mean_power
 
     #: Pinned null bars for the split-line statistic at every spectrum size
-    #: the detection pipeline produces (window lengths 8..10,000 zero-pad to
-    #: powers of two, so the scanned half-spectrum is one of these twelve).
+    #: the detection pipeline produces (the analysed window zero-pads to a
+    #: power of two and detect_resonance caps it at
+    #: :attr:`_MAX_RESONANCE_SAMPLES`, so the scanned half-spectrum is one
+    #: of these twelve for ANY constructor ``window_size``).
     #: Each value is the measured (1 - RESONANCE_FALSE_ALARM_RATE) order
     #: statistic over _MULTILINE_NULL_TRIALS seeded draws — byte-identical
     #: to what _multiline_threshold derives, pinned because the derivation
@@ -2516,8 +2528,22 @@ class ResonanceTimingMonitor:
         4096: 22.312320102580543,
         8192: 23.897051177165363,
     }
-    #: Runtime cache for sizes outside the pinned table (an external caller
-    #: driving detect_resonance at a non-pipeline size); filled on first use.
+    #: Cap on the samples detect_resonance analyses, derived from the pinned
+    #: table so the two cannot drift: n samples zero-pad to the next power
+    #: of two and the scanned half-spectrum is half of that, so twice the
+    #: largest pinned size is the largest window whose null bar is pinned.
+    #: Without it, a monitor constructed with window_size above this cap
+    #: fell through to the measured-null simulation below on its first
+    #: report — 65.5 million draws at m = 16,384, measured 15.1 s of
+    #: synchronous latency inside get_security_report, plus a 32,768-point
+    #: pure-Python FFT (review finding, 2026-10-07).  Frequency resolution
+    #: beyond 16,384 samples buys this detector nothing it acts on.
+    _MAX_RESONANCE_SAMPLES: ClassVar[int] = 2 * max(_MULTILINE_THRESHOLDS)
+    #: Runtime cache for sizes outside the pinned table.  detect_resonance
+    #: can no longer reach it (its spectrum sizes are capped onto the table
+    #: above); it serves direct _multiline_threshold callers — the
+    #: calibration suite's table↔procedure coupling test re-derives a
+    #: pinned size through this path — and is filled on first use.
     _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[int, float]] = {}
     #: Null-measurement trials behind each cached threshold.  4,000 resolves
     #: the 1% tail (40 exceedances expected) and keeps the one-time per-size

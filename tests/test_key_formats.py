@@ -315,10 +315,10 @@ def test_pq_seed_and_expanded_forms_describe_the_same_key() -> None:
         for algorithm, entries in by_algorithm.items():
             assert len(entries) == 3, f"{algorithm}: expected all three arms"
             keys = {arm: key.key for arm, key in entries}
+            key_lengths = {arm: len(v) for arm, v in keys.items()}
             assert len(set(keys.values())) == 1, (
                 f"{algorithm}: the seed, expandedKey and both arms of the same "
-                f"published key decoded to different secret keys: "
-                f"{ {arm: len(v) for arm, v in keys.items()} }"
+                f"published key decoded to different secret keys: {key_lengths}"
             )
 
 

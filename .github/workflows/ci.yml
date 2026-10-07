@@ -204,6 +204,12 @@ jobs:
 
     - name: Build native C library (Windows)
       if: runner.os == 'Windows'
+      # bash, not the Windows default pwsh: under pwsh only the LAST
+      # command's exit code decides the step, so a failed configure with a
+      # succeeding (cached/partial) build would pass.  bash runs with
+      # -e -o pipefail and fails the step on the first failed command —
+      # the same semantics every Linux/macOS step already has.
+      shell: bash
       run: |
         cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
         cmake --build build --config Release --parallel
@@ -374,6 +380,15 @@ jobs:
         fi
 
     - name: Install Python dependencies
+      # bash, not the Windows default pwsh: under pwsh a non-final failed
+      # command does not fail the step.  Measured on this exact step (job
+      # 112595010110, windows-latest/3.14): the editable install below
+      # aborted on a transient PyPI resolution failure, the trailing
+      # clang-format install succeeded, the step passed — and the job only
+      # went red when the vendor-isolation gate found no compiled objects,
+      # pointing at INVARIANT-1 instead of the real failure.  bash's
+      # -e -o pipefail fails the step at the pip error itself.
+      shell: bash
       run: |
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         # [legacy] + [benchmark] supply PyCA cryptography / PyNaCl, and
