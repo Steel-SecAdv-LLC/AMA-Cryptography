@@ -55,7 +55,10 @@ def test_the_readme_states_the_measured_point_anomaly_rates() -> None:
 
 def _detection(row: list[str]) -> str:
     """How the README words one step row: its delay, or that nothing fired."""
-    return f"after {row[2]} samples" if row[0] == "1" else "not at all"
+    if row[0] != "1":
+        return "not at all"
+    unit = "sample" if row[2] == "1" else "samples"
+    return f"after {row[2]} {unit}"
 
 
 def test_the_readme_states_the_measured_step_delays() -> None:

@@ -210,13 +210,17 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
 
     The walk stops at nested function and class bodies — their internal
     bindings live in their own scopes — while the nested statement's NAME
-    itself binds here.  Comprehension targets are over-collected (they have
-    their own scope since Python 3), which can only widen the shadowing
-    exemption below; the exemption is the safe direction, since the
-    alternative forces a behavior-changing deletion.  A walrus inside a
-    nested function's decorator or default (which evaluates in this scope)
-    is the one binding the stop skips — vanishingly rare, and missing it
-    only leaves a flag standing for a human to judge.
+    itself binds here.  Comprehension TARGETS are excluded: since Python 3
+    a comprehension is its own scope, so ``[os for os in ()]`` binds
+    nothing in the containing function, and collecting it exempted a
+    genuinely redundant nested import — a false-negative path in a
+    CI-blocking gate (review finding, 2026-10-07; the first form of this
+    walk over-collected them as "the safe direction").  A walrus inside a
+    comprehension binds in the CONTAINING scope (PEP 572) and is still
+    collected, because only the generator targets are skipped.  A walrus
+    inside a nested function's decorator or default (which evaluates in
+    this scope) is the one binding the stop skips — vanishingly rare, and
+    missing it only leaves a flag standing for a human to judge.
     ``include_imports=False`` drops the bindings import statements create,
     for the own-scope question below: whether an import exempts its own
     scope is value-dependent, so it is answered pairwise by
@@ -254,6 +258,19 @@ def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]
         elif isinstance(node, ast.ImportFrom) and include_imports:
             for alias in node.names:
                 out.add(alias.asname or alias.name)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            # Walk the comprehension's expressions (a walrus there binds in
+            # THIS scope) but never its generator targets, which bind only
+            # inside the comprehension's own scope.
+            generators = {id(gen) for gen in node.generators}
+            stack.extend(
+                child for child in ast.iter_child_nodes(node) if id(child) not in generators
+            )
+            for gen in node.generators:
+                stack.extend(
+                    child for child in ast.iter_child_nodes(gen) if child is not gen.target
+                )
+            continue
         stack.extend(ast.iter_child_nodes(node))
     return out
 
@@ -485,6 +502,22 @@ def test_a_shadowed_nested_import_is_load_bearing() -> None:
         "        import os\n\n        return os.sep\n\n    return inner\n"
     )
     assert duplicate_plain_imports(match_shadow) == []
+    # A comprehension target binds only the comprehension's own scope, so
+    # it exempts NOTHING: the re-import stays flagged, and deleting it is
+    # behavior-preserving (measured — review finding, 2026-10-07; the
+    # first collector over-collected these targets and hid the duplicate).
+    comp_target = (
+        "import os\n\n\ndef f():\n    import os\n\n"
+        "    values = [os for os in ()]\n    return os.sep, values\n"
+    )
+    assert duplicate_plain_imports(comp_target) == [(5, "os")]
+    # A walrus INSIDE a comprehension binds the containing scope (PEP 572),
+    # so it still exempts.
+    comp_walrus = (
+        "import os\n\n\ndef f():\n    import os\n\n"
+        "    values = [(os := v) for v in (1,)]\n    return os, values\n"
+    )
+    assert duplicate_plain_imports(comp_walrus) == []
 
 
 def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:

@@ -2454,7 +2454,13 @@ class ResonanceTimingMonitor:
         # symmetric square wave has no even harmonics, so the comb mean
         # averaged dead bins) and was replaced by this statistic rather
         # than tuned.
-        multiline_ratio = self._top_ordinates_ratio(scanned, self.MULTILINE_ORDINATES)
+        # One normalization for the statistic, its threshold and the
+        # reported count: _multiline_threshold clamps the configured j to at
+        # least 1, and using the raw value here let an override of 0 report
+        # a zero ratio against a top-1 bar, and a negative one invoke
+        # Python's negative-slice semantics (review finding, 2026-10-07).
+        multiline_ordinates = max(1, int(self.MULTILINE_ORDINATES))
+        multiline_ratio = self._top_ordinates_ratio(scanned, multiline_ordinates)
         multiline_threshold = self._multiline_threshold(len(scanned))
 
         return {
@@ -2468,7 +2474,7 @@ class ResonanceTimingMonitor:
             "has_resonance": ratio > threshold,
             "multiline_ratio": multiline_ratio,
             "multiline_threshold": multiline_threshold,
-            "multiline_ordinates": self.MULTILINE_ORDINATES,
+            "multiline_ordinates": multiline_ordinates,
             "has_multiline_resonance": multiline_ratio > multiline_threshold,
         }
 
@@ -2576,9 +2582,25 @@ class ResonanceTimingMonitor:
     #: cache identity omitted the rate and the trial count).
     _MULTILINE_TABLE_CONFIG: ClassVar[Tuple[int, float, int]] = (2, 0.01, 4000)
     #: Null-measurement trials behind each cached threshold.  4,000 resolves
-    #: the 1% tail (40 exceedances expected) and keeps the one-time per-size
-    #: cost well under a second of pure Python.
+    #: the 1% tail (40 exceedances expected).  The one-time derivation cost
+    #: grows with the spectrum size: measured on this project's shared
+    #: 4-vCPU container, well under a second at the small sizes, 5.2 s at
+    #: the capped worst size m = 8,192 (the 8.65 s the pinned-table comment
+    #: records was the same worst size on an earlier host, before the table
+    #: made the default configuration never pay it), and ~11 us from the
+    #: cache afterwards.  Only a non-default configuration reaches the
+    #: derivation at all — the window cap keeps every default-pipeline size
+    #: on the pinned table (corrected per §6.6, 2026-10-07: this comment
+    #: claimed "well under a second" unconditionally).
     _MULTILINE_NULL_TRIALS: ClassVar[int] = 4000
+    #: Serializes the measured-null derivation: concurrent first reports
+    #: for an overridden configuration would otherwise all miss the cache
+    #: and each pay the full simulation (review finding, 2026-10-07).  One
+    #: lock for all keys — the path is one-time per configuration, so a
+    #: second configuration waiting out the first's derivation is cheaper
+    #: than per-key in-flight bookkeeping.  The double-check inside
+    #: _multiline_threshold makes the waiters reuse the winner's result.
+    _MULTILINE_DERIVE_LOCK: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
     def _multiline_threshold(cls, scanned_bins: int) -> float:
@@ -2645,39 +2667,47 @@ class ResonanceTimingMonitor:
         cached = cls._MULTILINE_THRESHOLD_CACHE.get(cache_key)
         if cached is not None:
             return cached
-        seed = 0x3C0 + m
-        rng = random.Random(seed)  # noqa: S311 -- fixed-seed null bar, not key material (RTM-001)
-        stats = []
-        for _ in range(trials):
-            # One pass per trial: total plus the j largest, no materialised
-            # draw list and no per-trial sort.  At the largest advertised
-            # window (10,000 samples -> 8,192 scanned bins) the sorted form
-            # performed 4,000 full 8,192-element sorts before first return
-            # (review finding, 2026-10-06); the draws themselves are the
-            # irreducible cost and run once per cache identity per process.
-            # For j = 2 the arithmetic is byte-identical to the top1/top2 form
-            # this replaces (same draws, same descending-order sum), which
-            # the table<->procedure coupling test proves byte-exactly.
-            total = 0.0
-            tops = [0.0] * j
-            for _i in range(m):
-                x = rng.expovariate(1.0)
-                total += x
-                if x > tops[-1]:
-                    for idx in range(j):
-                        if x > tops[idx]:
-                            tops.insert(idx, x)
-                            tops.pop()
-                            break
-            top_sum = 0.0
-            for value in tops:
-                top_sum += value
-            stats.append(top_sum / (total / m) if total > 0.0 else 0.0)
-        stats.sort()
-        rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
-        threshold = stats[rank]
-        cls._MULTILINE_THRESHOLD_CACHE[cache_key] = threshold
-        return threshold
+        with cls._MULTILINE_DERIVE_LOCK:
+            # Double-check under the lock: a concurrent first report
+            # may have derived this key while this caller waited
+            # (review finding, 2026-10-07: unsynchronized misses each
+            # paid the full simulation).
+            cached = cls._MULTILINE_THRESHOLD_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            seed = 0x3C0 + m
+            rng = random.Random(seed)  # noqa: S311 -- fixed-seed null bar, not keys (RTM-001)
+            stats = []
+            for _ in range(trials):
+                # One pass per trial: total plus the j largest, no materialised
+                # draw list and no per-trial sort.  At the largest advertised
+                # window (10,000 samples -> 8,192 scanned bins) the sorted form
+                # performed 4,000 full 8,192-element sorts before first return
+                # (review finding, 2026-10-06); the draws themselves are the
+                # irreducible cost and run once per cache identity per process.
+                # For j = 2 the arithmetic is byte-identical to the top1/top2 form
+                # this replaces (same draws, same descending-order sum), which
+                # the table<->procedure coupling test proves byte-exactly.
+                total = 0.0
+                tops = [0.0] * j
+                for _i in range(m):
+                    x = rng.expovariate(1.0)
+                    total += x
+                    if x > tops[-1]:
+                        for idx in range(j):
+                            if x > tops[idx]:
+                                tops.insert(idx, x)
+                                tops.pop()
+                                break
+                top_sum = 0.0
+                for value in tops:
+                    top_sum += value
+                stats.append(top_sum / (total / m) if total > 0.0 else 0.0)
+            stats.sort()
+            rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
+            threshold = stats[rank]
+            cls._MULTILINE_THRESHOLD_CACHE[cache_key] = threshold
+            return threshold
 
 
 class RecursionPatternMonitor:

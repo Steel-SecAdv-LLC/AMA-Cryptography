@@ -22,6 +22,7 @@ import random
 from collections import deque
 from pathlib import Path
 from typing import ClassVar, cast
+from unittest import mock
 
 import pytest
 
@@ -345,6 +346,93 @@ class TestSplitLineResonance:
         # Between the pinned neighbours (16: 8.80, 32: 11.14).
         assert 8.8 < first < 11.2, first
         ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+
+    def test_a_degenerate_ordinates_override_is_normalized(self) -> None:
+        """PIN (review finding, 2026-10-07): ``detect_resonance`` used the
+        raw ``MULTILINE_ORDINATES`` while ``_multiline_threshold`` clamps it
+        to at least 1, so an override of 0 reported a zero ratio against a
+        top-1 bar (and a negative one invoked negative-slice semantics).
+        The statistic, the threshold and the reported count now share one
+        normalization.  Mutation: dropping the ``max(1, ...)`` in
+        ``detect_resonance`` fails exactly this test."""
+
+        class ZeroLine(ResonanceTimingMonitor):
+            MULTILINE_ORDINATES: ClassVar[int] = 0
+
+        monitor = ZeroLine()
+        rng = random.Random(7)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for _ in range(100):
+            monitor.record_timing("op", 0.1 + 0.004 * rng.gauss(0.0, 1.0))
+        try:
+            out = monitor.detect_resonance("op")
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(
+                (
+                    64,
+                    1,
+                    ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+                    ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+                ),
+                None,
+            )
+        assert out["multiline_ordinates"] == 1
+        # The top-1 sum over the mean IS the Fisher ratio; the raw j = 0
+        # slice summed nothing and read 0.0 against a top-1 bar.
+        assert out["multiline_ratio"] == out["resonance_ratio"], out
+
+    def test_concurrent_first_derivations_run_the_simulation_once(self) -> None:
+        """PIN (review finding, 2026-10-07): unsynchronized cache misses let
+        concurrent first reports each pay the full null simulation.  Two
+        threads released together at an off-table size must produce exactly
+        ONE derivation — the loser reuses the winner's result through the
+        double-check under ``_MULTILINE_DERIVE_LOCK``.  Instantiations of
+        the seeded RNG count the derivations (the derivation's only RNG
+        construction).  Mutation: the lock and double-check removed, both
+        threads construct an RNG and the count reads 2, failing exactly
+        here."""
+        import threading as _threading
+
+        key = (
+            19,
+            ResonanceTimingMonitor.MULTILINE_ORDINATES,
+            ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+            ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+        )
+        assert 19 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        import ama_cryptography.monitoring as monitoring_module
+
+        # monitoring's module-level ``import random`` binds the same module object,
+        # so the stdlib import above is the original to delegate to and restore.
+        real_random_module = random
+        constructions: list[int] = []
+
+        class _CountingRandomModule:
+            def __getattr__(self, name: str) -> object:
+                return getattr(real_random_module, name)
+
+            def Random(self, seed: int) -> object:  # noqa: N802 -- mirrors random.Random (TDC-001)
+                constructions.append(seed)
+                return real_random_module.Random(seed)
+
+        barrier = _threading.Barrier(2)
+        results: list[float] = []
+
+        def derive() -> None:
+            barrier.wait()
+            results.append(ResonanceTimingMonitor._multiline_threshold(19))
+
+        try:
+            with mock.patch.object(monitoring_module, "random", _CountingRandomModule()):
+                threads = [_threading.Thread(target=derive) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        assert len(results) == 2 and results[0] == results[1], results
+        assert len(constructions) == 1, constructions
 
     def test_the_threshold_follows_the_configured_ordinates(self) -> None:
         """PIN (review finding, 2026-10-07): the null simulation derives the

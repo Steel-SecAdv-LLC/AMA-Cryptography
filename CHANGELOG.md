@@ -34,6 +34,45 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `2b3546a`: one j-normalization across the split-line surface, the derivation serialized, the binding walk comprehension-scope-aware — 2026-10-07
+
+- **`detect_resonance` normalizes `MULTILINE_ORDINATES` the way its
+  threshold does.** Medium: `_multiline_threshold` clamps the configured j
+  to at least 1 while the statistic path used the raw value, so an
+  override of 0 reported a zero ratio against a top-1 bar and a negative
+  one invoked negative-slice semantics.  One `max(1, ...)` now feeds the
+  statistic, the threshold and the reported ordinate count.  PIN
+  `test_a_degenerate_ordinates_override_is_normalized` (mutation-earned —
+  the first mutation run measured the guard unpinned, per §6.2, and this
+  test was added until the mutant failed exactly here).
+- **Concurrent first derivations run the simulation once.** Medium:
+  unsynchronized misses of the class-level cache let simultaneous first
+  reports for an overridden configuration each pay the full measured-null
+  simulation (documented at 5.2 s for the capped worst size).
+  `_MULTILINE_DERIVE_LOCK` serializes the derivation with a double-check,
+  so the loser reuses the winner's result.  PIN
+  `test_concurrent_first_derivations_run_the_simulation_once` — two
+  barrier-released threads at an off-table size construct exactly one
+  seeded RNG; the lock and double-check removed, the count reads 2 and
+  fails exactly there.
+- **The binding walk is comprehension-scope-aware.** Medium, a §6.6
+  correction of this round's own earlier justification: comprehension
+  targets live in the comprehension's scope since Python 3, so collecting
+  them as function bindings exempted a genuinely redundant nested import
+  (`[os for os in ()]` beside a re-import of `os` — measured: deleting the
+  import changes nothing) — a false-negative path in a CI-blocking gate,
+  not "the safe direction" the first comment called it.  Generator targets
+  are now skipped while a walrus inside the comprehension (which binds the
+  containing scope, PEP 572) is still collected; both directions pinned in
+  the shadowing test, the reverted walk failing exactly there.
+- **Documented latency figures reconciled; one plural corrected.** Low:
+  the trial-count comment claimed the derivation stays "well under a
+  second" unconditionally, contradicting the measured 5.2 s worst-size
+  cost (and the 8.65 s pre-cap figure the table comment records); it now
+  states the measured scale and that only non-default configurations reach
+  the derivation at all.  The README's step row reads "after 1 sample",
+  and the coupling test's expected-string helper pluralizes with it.
+
 ### Copilot round on `4cb3c59`: imports rebind too, and the derivation cost for an overridden configuration is a stated contract — 2026-10-07
 
 - **The import gate missed that imports themselves rebind.** High, the
