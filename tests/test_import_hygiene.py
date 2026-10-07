@@ -82,6 +82,18 @@ def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
     each repaired into the module binding the key matched — measured and
     pinned — while exempting the shape would let an always-taken branch
     hide the class CodeQL still reports.
+
+    The converse direction states this gate's coverage boundary (review
+    finding, 2026-10-07): a MODULE-SCOPE rebinding inside a compound
+    statement may or may not execute, and this gate does not evaluate
+    conditions, so the key stops counting as continuously module and the
+    later nested import is exempt — forced, because in every world where
+    the rebinding runs, the deletion a flag demands breaks (measured:
+    AttributeError).  The cost is only shapes whose rebinding is
+    statically dead (``if False: os = 1``), which remain the CodeQL
+    scan's to report: this gate blocks the SAFELY-DELETABLE members of
+    the class, and the repository's CodeQL CI lane stays the independent
+    reporter of the rest.
     """
     tree = ast.parse(source)
     top_ids = set(map(id, tree.body))
@@ -776,6 +788,31 @@ def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead(
         "import os\nvalue = f()\n"
     )
     assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_maybe_rebinding_at_module_scope_forces_the_exemption() -> None:
+    """PIN (review finding, 2026-10-07): a module-scope rebinding inside a
+    compound statement MAY execute, the gate does not evaluate conditions,
+    and in every world where it runs the deletion a flag would demand
+    breaks — measured below: with the condition true and the nested
+    import deleted, ``os`` is 1 and ``os.sep`` raises AttributeError.  So
+    the maybe-rebound key stops counting as continuously module and the
+    nested import is exempt, for ``if False:`` exactly as for ``if cond:``
+    (the gate treats them identically; the statically-dead shape stays the
+    CodeQL lane's to report).  Mutation: a definite-only reset that skips
+    compound statements — the proposed 'track definite state' direction —
+    flags the live-rebinding shape and fails exactly this test."""
+    maybe = "import os\n\nif cond:\n    os = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(maybe) == []
+    dead = "import os\n\nif False:\n    os = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(dead) == []
+    broken = "import os\n\ncond = True\nif cond:\n    os = 1\n\n\ndef f():\n    return os.sep\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<maybe>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    broken_f = cast(Callable[[], str], namespace["f"])
+    with pytest.raises(AttributeError):
+        broken_f()
 
 
 def test_a_conditional_import_stays_flagged_and_deletion_repairs_the_unbound_path() -> None:

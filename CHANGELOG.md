@@ -34,6 +34,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Copilot round on `456d87f`: the maybe-rebinding exemption is the gate's stated coverage boundary — 2026-10-07
+
+- **A module-scope rebinding inside a compound statement forces the
+  exemption, and the boundary is now stated and pinned.** Medium finding
+  (the reset "hides" a repeat behind `if False: os = 1`), resolved by
+  evidence: the gate does not evaluate conditions, and in every world
+  where the maybe-rebinding runs, the deletion a flag would demand
+  breaks — measured as AttributeError with the condition true.  The
+  proposed definite-only reset, applied as a mutant per §6.2, flags that
+  live shape and fails the new pin AND the guarded-rebinding pin.  The
+  cost is exactly the shapes whose rebinding is statically dead, which
+  remain the CodeQL CI lane's to report: the gate blocks the
+  safely-deletable members of the class, and the docstring now says so.
+  PIN `test_a_maybe_rebinding_at_module_scope_forces_the_exemption`.
+
 ### Copilot round on `f278d73`: the Siegel attribution corrected everywhere, provenance wording held to the measured facts, the conditional-import question answered by measurement — 2026-10-07
 
 - **The split-line statistic is no longer attributed to Siegel.** Low,
