@@ -31,14 +31,14 @@
 # --- Core test framework ---
 pytest==9.1.1
 pytest-cov==7.1.0
-hypothesis==6.168.0
-coverage==7.16.1
+hypothesis==6.168.4
+coverage==7.16.2
 
 # --- Linting & formatting ---
-black==26.5.1
-mypy==2.3.1
+black==26.10.0
+mypy==2.4.0
 mypy_extensions==1.1.0
-ruff==0.16.8
+ruff==0.16.10
 
 # --- Security scanning ---
 bandit==1.9.4
@@ -59,15 +59,15 @@ setuptools==84.0.0
 wheel==0.48.0
 
 # --- Transitive dependencies ---
-ast_serialize==0.11.2
+ast_serialize==0.12.1
 click==8.5.0
 iniconfig==2.3.0
-librt==0.15.0
+librt==0.16.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
 packaging==26.3
 pathspec==1.1.1
-platformdirs==4.11.10
+platformdirs==4.12.3
 pluggy==1.6.0
 # Pygments >= 2.20.0 includes the CVE-2026-4539 AdlLexer ReDoS fix.
 # Pygments remains a transitive dev dependency only; it is not used at runtime.
