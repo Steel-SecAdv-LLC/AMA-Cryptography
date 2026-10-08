@@ -969,39 +969,66 @@ def _attach_native_artifact(block: "Dict[str, Any]") -> None:
         block["native_build"] = unpinned
 
 
-def stamp_c_harness_provenance(results_json: Path, linked_library: Path) -> "Dict[str, Any]":
+def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
     """Stamp the C harness's result file with this checkout's provenance.
 
     ``multi_library_bench.cpp`` writes its rows with no provenance, and
     ``generate_competitive.py`` refuses to render a record whose measuring
     build is unknown.  This computes the same block the Python-plane
-    harnesses record and pins the shared object the C binary linked: its
-    SHA3-256 must be byte-identical to the attested loaded backend, or the
-    record is marked unattributable — a stale ``build/lib`` object would
-    otherwise be published under the fresh commit, the relabelling class
-    the provenance block exists to stop (review finding on b8471c4).
+    harnesses record and pins the object the C PROCESS ITSELF reports
+    having resolved: the harness records ``loaded_library`` from
+    ``dladdr(ama_sha3_256)`` — the module that provided the symbol it
+    called — digested by that library's own SHA3.  The first form of this
+    function hashed a caller-supplied path instead, which the dynamic
+    loader may never have mapped (LD_LIBRARY_PATH, RPATH or ldconfig can
+    resolve another same-named object; review finding on 8a26498).  A
+    record without the harness's own ``loaded_library``, or whose loaded
+    object is not byte-identical to the attested backend, is marked
+    unattributable — fail closed, never a guess (review finding on
+    b8471c4).
     """
-    from ama_cryptography.pqc_backends import native_sha3_256
-
     provenance = _measurement_provenance()
-    linked_digest = native_sha3_256(linked_library.read_bytes()).hex()
+    data = json.loads(results_json.read_text(encoding="utf-8"))
+    raw_loaded = data.get("loaded_library")
+    loaded: Optional[Dict[str, Any]] = raw_loaded if isinstance(raw_loaded, dict) else None
+    if loaded is not None and not (
+        isinstance(loaded.get("path"), str)
+        and isinstance(loaded.get("sha3_256"), str)
+        and len(str(loaded.get("sha3_256"))) == 64
+    ):
+        loaded = None
     artifact = provenance.get("native_artifact")
-    pinned = isinstance(artifact, dict) and artifact.get("sha3_256") == linked_digest
-    provenance["linked_library"] = {
-        "file": linked_library.name,
-        "sha3_256": linked_digest,
-        "byte_identical_to_loaded_backend": bool(pinned),
-    }
+    pinned = (
+        loaded is not None
+        and isinstance(artifact, dict)
+        and artifact.get("sha3_256") == loaded["sha3_256"]
+    )
+    if loaded is not None:
+        provenance["linked_library"] = {
+            "file": Path(str(loaded["path"])).name,
+            "path": str(loaded["path"]),
+            "sha3_256": str(loaded["sha3_256"]),
+            "recorded_by": str(loaded.get("method", "the harness")),
+            "byte_identical_to_loaded_backend": bool(pinned),
+        }
+    else:
+        provenance["linked_library"] = (
+            "unrecorded (the harness wrote no loaded_library block, so the "
+            "object its process resolved cannot be named)"
+        )
     if not pinned:
         provenance["attributable"] = False
+        provenance["ama_commit"] = "unknown"
         reasons = list(provenance.get("unattributable_because", []))
         reasons.append(
-            "the shared object the C harness linked is not byte-identical to "
-            "the attested loaded backend, so neither the commit nor the build "
-            "configuration is evidence of what it ran"
+            "the object the C harness process resolved is not pinned "
+            "byte-identical to the attested loaded backend, so neither the "
+            "commit nor the build configuration is evidence of what it ran"
+            if loaded is not None
+            else "the harness recorded no loaded_library block, so the object "
+            "its process resolved cannot be tied to the attested backend"
         )
         provenance["unattributable_because"] = reasons
-    data = json.loads(results_json.read_text(encoding="utf-8"))
     data.pop("provenance", None)
     merged: Dict[str, Any] = {"provenance": provenance}
     merged.update(data)
@@ -1073,11 +1100,6 @@ if __name__ == "__main__":
             if len(sys.argv) > 2
             else _repo / "benchmarks" / "multi_library_results.json"
         )
-        _linked = (
-            Path(sys.argv[3])
-            if len(sys.argv) > 3
-            else _repo / "build" / "lib" / "libama_cryptography.so"
-        )
-        print(json.dumps(stamp_c_harness_provenance(_results, _linked), indent=1))
+        print(json.dumps(stamp_c_harness_provenance(_results), indent=1))
     else:
         main()

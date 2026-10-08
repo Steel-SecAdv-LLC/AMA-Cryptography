@@ -174,41 +174,87 @@ class TestTheNativeArtifactIsPinned:
     def test_stamping_pins_a_byte_identical_linked_object(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """A copy of the attested backend's bytes is pinned as identical,
-        and the stamped file carries the block the generator requires."""
+        """The harness-recorded loaded object, matching the attested
+        backend byte for byte, is pinned, and the stamped file carries the
+        block the generator requires.  The evidence is the harness's OWN
+        ``loaded_library`` record (dladdr + self-hash), never a
+        caller-supplied path the loader may not have mapped (review
+        finding on 8a26498)."""
+        from ama_cryptography.pqc_backends import native_sha3_256
+
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        source = self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
-        linked = tmp_path / "libama_cryptography.so"
-        linked.write_bytes(source.read_bytes())
+        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        digest = native_sha3_256(b"synthetic backend bytes").hex()
         results = tmp_path / "multi_library_results.json"
-        results.write_text(json.dumps({"results": []}), encoding="utf-8")
-        block = cb.stamp_c_harness_provenance(results, linked)
+        results.write_text(
+            json.dumps(
+                {
+                    "loaded_library": {
+                        "path": "/opt/run/libama_cryptography.so",
+                        "sha3_256": digest,
+                        "method": "dladdr(ama_sha3_256); self-hash",
+                    },
+                    "results": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        block = cb.stamp_c_harness_provenance(results)
         assert block["linked_library"]["byte_identical_to_loaded_backend"] is True
         assert block["attributable"] is True
         written = json.loads(results.read_text(encoding="utf-8"))
         assert written["provenance"]["linked_library"] == block["linked_library"]
-        assert written["provenance"]["native_artifact"]["sha3_256"] == (
-            block["linked_library"]["sha3_256"]
-        )
+        assert written["provenance"]["native_artifact"]["sha3_256"] == digest
 
-    def test_a_differing_linked_object_disowns_the_record(
+    def test_a_differing_loaded_object_disowns_the_record(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """PIN (mutation-earned): a linked object whose bytes differ from
-        the attested backend marks the record unattributable with the
-        stale-build reason.  Mutation: with the mismatch branch removed,
-        exactly this test fails while the byte-identical case still
-        passes."""
+        """PIN (mutation-earned): a harness-recorded loaded object whose
+        bytes differ from the attested backend marks the record
+        unattributable with the stale-build reason and clears the commit.
+        Mutation: with the mismatch branch removed, exactly this test
+        fails while the byte-identical case still passes."""
+        from ama_cryptography.pqc_backends import native_sha3_256
+
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
         self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
-        linked = tmp_path / "libama_cryptography.so"
-        linked.write_bytes(b"not the attested backend")
         results = tmp_path / "multi_library_results.json"
-        results.write_text(json.dumps({"results": []}), encoding="utf-8")
-        block = cb.stamp_c_harness_provenance(results, linked)
+        results.write_text(
+            json.dumps(
+                {
+                    "loaded_library": {
+                        "path": "/opt/stale/libama_cryptography.so",
+                        "sha3_256": native_sha3_256(b"a stale build").hex(),
+                        "method": "dladdr(ama_sha3_256); self-hash",
+                    },
+                    "results": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        block = cb.stamp_c_harness_provenance(results)
         assert block["linked_library"]["byte_identical_to_loaded_backend"] is False
         assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
         assert any("byte-identical" in r for r in block["unattributable_because"])
+
+    def test_a_record_without_the_harness_block_is_disowned(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """PIN (review finding on 8a26498, mutation-earned with the
+        mismatch pin): a result file with no ``loaded_library`` block —
+        an old harness binary, a non-dladdr platform, a static link that
+        hashed nothing — cannot name the object its process resolved, so
+        the stamp refuses the attribution outright."""
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        results = tmp_path / "multi_library_results.json"
+        results.write_text(json.dumps({"results": []}), encoding="utf-8")
+        block = cb.stamp_c_harness_provenance(results)
+        assert isinstance(block["linked_library"], str)
+        assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
+        assert any("no loaded_library" in r for r in block["unattributable_because"])
 
     def test_an_unpinnable_artifact_disowns_the_commit(
         self, monkeypatch: pytest.MonkeyPatch

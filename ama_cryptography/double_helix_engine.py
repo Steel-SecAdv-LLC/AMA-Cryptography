@@ -1076,20 +1076,23 @@ class AvaDescent:
         """
         if mode not in ("equity", "variance", "momentum", "catalan", "adaptive"):
             raise ValueError(f"unknown mode: {mode!r}")
-        if mode == "momentum" and self._momentum_unstable(self.alpha, 0.9):
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if mode == "momentum" and max_steps > 0 and self._momentum_unstable(self.alpha, 0.9):
             # The loop iterates on the raw momentum core with beta = 0.9, so
             # the stability bound alpha * (1 - beta) < 2 * (1 + beta) —
             # enforced per-call in momentum_step — is enforced here once at
             # entry with the loop's fixed beta, through the SAME expression
             # momentum_step evaluates (a pre-evaluated 0.1/3.8 form refused
             # configurations momentum_step accepts; review finding,
-            # 2026-10-07).
+            # 2026-10-07).  It is an operational bound of the iteration, so
+            # it binds only when a step will run: max_steps=0 keeps its
+            # documented contract — the initial state and an empty history —
+            # whatever the operator's alpha (review finding, 2026-10-08).
             raise ValueError(
                 f"alpha {self.alpha} exceeds the momentum stability bound "
                 f"alpha * (1 - beta) < 2 * (1 + beta) at the loop's beta of 0.9"
             )
-        if max_steps < 0:
-            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
         if not _isfinite_number(tolerance) or tolerance < 0:
             # tolerance=inf stops after the first move whatever the error;
             # tolerance=nan never stops: both are refused, not interpreted.

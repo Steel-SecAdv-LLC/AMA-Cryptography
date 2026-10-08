@@ -444,7 +444,7 @@ installs byte-identical source.
 
 | Channel | Status | Needs a C toolchain? |
 |---|---|---|
-| Source install from a git tag | Available (`v5.0.0`, released 2026-10-07) | Yes |
+| Source install from a git tag | Available (`v5.0.0`, released 2026-10-08) | Yes |
 | Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
 | PyPI (`pip install ama-cryptography`) | **Not published yet** — see channel 3 before using | No |
 | Self-hosted PEP 503 index | Supported pattern, opt-in | No |

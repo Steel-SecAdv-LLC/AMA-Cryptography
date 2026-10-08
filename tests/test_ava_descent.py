@@ -297,6 +297,27 @@ class TestReviewHardening:
         with pytest.raises(ValueError, match="momentum stability"):
             unstable.descend([0.5], [0.0], max_steps=1, mode="momentum")
 
+    def test_zero_step_momentum_keeps_its_documented_contract(self) -> None:
+        """PIN (review finding, 2026-10-08): the Jury bound is an
+        operational property of the iteration (its fixed beta = 0.9), but
+        it was validated before the ``max_steps=0`` path, so a
+        constructible operator like ``alpha=100, equity_gain=0.01`` raised
+        where the docstring promises the initial state and an empty
+        history.  The bound now binds only when a step will run.
+        Mutation: dropping the ``max_steps > 0`` condition fails exactly
+        the zero-step case while the one-step refusal holds."""
+        d = AvaDescent(alpha=100.0, equity_gain=0.01)
+        state, history = d.descend([0.0, 0.0], [1.0, 2.0], max_steps=0, mode="momentum")
+        assert state.tolist() == [1.0, 2.0]
+        assert history == []
+        # The operational refusal is untouched the moment a step would run.
+        with pytest.raises(ValueError, match="momentum stability"):
+            d.descend([0.0, 0.0], [1.0, 2.0], max_steps=1, mode="momentum")
+        # And max_steps=0 still validates its own arguments: a negative
+        # count refuses ahead of the zero-step return.
+        with pytest.raises(ValueError, match="max_steps"):
+            d.descend([0.0], [1.0], max_steps=-1, mode="momentum")
+
     def test_converge_tolerance_contract_is_method_independent(self) -> None:
         """PIN (review finding, 2026-10-07): the ``descent`` branch refused
         NaN/inf tolerance in ``AvaDescent.descend`` while the ``helix``

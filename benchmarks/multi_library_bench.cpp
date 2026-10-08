@@ -32,6 +32,10 @@
 #include <string>
 #include <algorithm>
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
 extern "C" {
 #include "ama_cryptography.h"
 }
@@ -772,6 +776,41 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The AMA object THIS PROCESS resolved and called, recorded by the
+    // harness itself: dladdr names the module that provided ama_sha3_256
+    // to this process, and that module's own SHA3 digests its file.  The
+    // provenance stamper used to hash a caller-supplied path instead,
+    // which the dynamic loader may never have mapped — LD_LIBRARY_PATH,
+    // RPATH or ldconfig can resolve another same-named library (review
+    // finding on 8a26498).  A static link resolves to the executable and
+    // a non-matching digest, which the stamper then refuses to attribute:
+    // fail closed, never a guess.
+    std::string loaded_path, loaded_digest;
+#ifndef _WIN32
+    {
+        Dl_info dli;
+        if (dladdr(reinterpret_cast<void*>(&ama_sha3_256), &dli) && dli.dli_fname &&
+            *dli.dli_fname && !strchr(dli.dli_fname, '"') && !strchr(dli.dli_fname, '\\')) {
+            FILE* lf = fopen(dli.dli_fname, "rb");
+            if (lf) {
+                std::vector<uint8_t> bytes;
+                uint8_t chunk[1 << 16];
+                size_t got;
+                while ((got = fread(chunk, 1, sizeof chunk, lf)) > 0)
+                    bytes.insert(bytes.end(), chunk, chunk + got);
+                fclose(lf);
+                uint8_t dig[32];
+                if (!bytes.empty() && ama_sha3_256(bytes.data(), bytes.size(), dig) == AMA_SUCCESS) {
+                    char hex[65];
+                    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dig[i]);
+                    loaded_path = dli.dli_fname;
+                    loaded_digest = hex;
+                }
+            }
+        }
+    }
+#endif
+
     // JSON for the report generator.
     FILE* j = fopen("multi_library_results.json", "w");
     if (j) {
@@ -785,6 +824,13 @@ int main(int argc, char** argv) {
         fprintf(j, "    \"avx2\": %d, \"avx512f\": %d, \"sha_ni\": %d, \"bmi2\": %d, \"adx\": %d\n",
                 h.avx2, h.avx512f, h.sha_ni, h.bmi2, h.adx);
         fprintf(j, "  },\n");
+        if (!loaded_path.empty() && !loaded_digest.empty()) {
+            fprintf(j,
+                    "  \"loaded_library\": {\"path\": \"%s\", \"sha3_256\": \"%s\", "
+                    "\"method\": \"dladdr(ama_sha3_256); whole-file SHA3-256 computed "
+                    "by the resolved library itself\"},\n",
+                    loaded_path.c_str(), loaded_digest.c_str());
+        }
         fprintf(j, "  \"libraries_compiled\": [\"AMA\"");
 #ifdef HAVE_OPENSSL
         fprintf(j, ", \"OpenSSL\"");

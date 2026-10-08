@@ -155,7 +155,7 @@ which is authoritative.
 
 | Version | Security Support |
 |---------|-----------------|
-| 5.0.x | ✓ Current line; 5.0.0 released 2026-10-07 |
+| 5.0.x | ✓ Current line; 5.0.0 released 2026-10-08 |
 | 4.0.x | ✗ Superseded by v5.0 (eleven breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | ✗ Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
