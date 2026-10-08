@@ -34,6 +34,221 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### CI on `90c8d19`, and what proving its fix found — 2026-10-08
+
+`90c8d19` failed every test lane on one test and the docs build on one
+warning. The test passed locally only because a shallow clone lacks the
+calibration commit, so it skipped; this pass ran it against the full history.
+Proving the fix measured this branch's own performance, and the measurement
+found more than the failure did. Every guard below is PIN by mutation unless
+marked otherwise.
+
+- **The floor-drift guard could not see the Cython bindings** (High: a gate
+  that missed what it claims). `_FLOORED_CODE_PATHS` named `src/c`, `include`
+  and the package, but not `src/cython`, through which five floored rows run.
+  It does now, and a test requires every source a `setup.py` extension
+  compiles to lie under a floored path.
+- **Two regressions this branch introduced, fixed at source.** Taking secret
+  arguments as typed memoryviews cost `hkdf_derive` 13% and `hmac_sha3_256`
+  8% (one buffer acquisition per argument). The bindings now read `bytes`
+  and `bytearray` straight from their storage under the GIL (other buffers
+  keep a view), and HKDF writes into a `bytearray` created uninitialised and
+  filled once by the kernel. Both rows measure at parity with `774d050`.
+- **Secrets written where they live.** Ed25519 key generation, ML-KEM-1024
+  encapsulation and decapsulation, and X25519 now have the C side write the
+  secret straight into the `bytearray` returned (`_secret_out`): no staging
+  buffer, no copy, nothing to wipe. Ed25519 generation and the SHA-256 and
+  RNG wrappers lost redundant marshalling.
+- **What remains is the price of INVARIANT-6/-7, measured.** Ed25519 key
+  generation and ML-KEM encapsulation stay a few percent slower than
+  `774d050`: the seed is drawn through the library's own health-tested
+  CSPRNG into wipeable storage instead of `os.urandom`, and the containers
+  zero what only they hold when they die (1.69 µs per object against 0.35 µs
+  for a plain dataclass). Recorded per file in `baseline.json` with the
+  host, method and figures.
+- **A key that failed its pairwise test was released to the garbage
+  collector intact** (INVARIANT-6, every exit path). All twenty keygen call
+  sites share the three pairwise-test helpers, which now zero the key they
+  were handed — `bytearray`, writable view or ctypes buffer — whenever the
+  test raises, including when it could not run.
+- **The Base64 decoder read and wrote its verdict in one expression**
+  (`tests/test_unsequenced_predicate_gate.py`; MSVC may sequence it either
+  way). `dec6` is now a pure function returning the value and an invalid
+  flag; the codec's mutants were re-run and it is 0/0 on gcc 13 and clang 18,
+  count and taint.
+- **Fixed on the way:** the `key_formats` support-matrix table was malformed
+  (Sphinx `-W`); POST's RNG tests patched a `secrets` binding the stage no
+  longer reads (retargeted to the entropy seam, both PIN); the CHANGELOG
+  relocation test now peels glance rows appended after its pinned 23 (PIN),
+  and the breaking-change total reads twelve everywhere; `ama_base64` and
+  `ama_platform_rand` are classified in the SBOM; docs cited new files git
+  did not yet track.
+- **Copilot round on `90c8d19`:** the PR template's standards list names
+  every shipped primitive and calls FROST "RFC 9591-style"; `setup.cfg` no
+  longer says nothing reads it; the dashboard's "old floors" section, which
+  divided this run's figures by another host's floors, is gone, the table
+  shows the gate's real criterion, the secp256k1 tiles say they are a
+  2026-07-29 record, and a row with no label is refused rather than filed
+  as a hash (PIN).
+- **Measured, not yet remediated:** of the shared library's 196 exported
+  entry points, 78 are reached by a fuzz harness, 105 by C tests only, and
+  13 by neither (`ama_kem_decapsulate`, `ama_kem_encapsulate`,
+  `ama_dilithium_sign_ctx`, the SHA-2 HKDF and PBKDF2 entry points,
+  `ama_sha384`, `ama_sha3_384`, among others); whether the Python suites reach
+  those 13 is not yet established. No document maps the attack surface to its
+  defences; that inventory is the next pass.
+
+### Whole-system diagnostics: four defects fixed at source, two escalated — 2026-10-08
+
+Every gate was run as CI runs it: the 50 `tools/check_*.py` scripts (the
+argument-taking ones against the built library or a generated report), the
+20 instruction-count constant-time targets under valgrind, bandit and
+semgrep at CI's pinned versions, tree-wide `mypy --strict` in CI's exact
+environment (417 modules, scope gate green), the package self-test, and the
+full suites. Everything passed. What the passing gates did not cover:
+
+- **`tools/verify_install_oob.py` passed a tree that hijacks a signed module**
+  (High: a gate that cannot detect what it claims; carried in AGENTS.md
+  section 11). A sourceless `crypto_api/__init__.pyc` sits outside the
+  digest, the binding map and the `__pycache__` pass, yet the import system
+  resolves the package directory ahead of `crypto_api.py`. Measured: RESULT
+  PASS on the planted tree while `find_spec` resolved the import to the
+  plant. The package's own import guard refuses it, but that guard lives in
+  the tree an attacker controls. The tool now applies the same rule out of
+  band (`find_import_shadowing`: sourceless bytecode, nested or shadowing
+  extensions, package directories shadowing modules, symlinked package
+  directories), and a parity test pins the two copies to identical verdicts
+  on every fault class. PIN: removing the stage from `main` fails exactly the
+  CLI test; dropping the bytecode branch fails exactly the two parity cases
+  holding sourceless bytecode.
+- **Secret-material comparisons used `!=` (INVARIANT-12 rule 3).**
+  `key_formats` compared a seed-expanded ML-DSA/ML-KEM private key with the
+  embedded one, and re-encoded private PEM and JWK bodies with their input,
+  through early-exit comparison; the public-key consistency checks there and
+  in `crypto_api` did too. All go through `constant_time_compare` now
+  (semgrep's advisory findings 37 to 25; every remaining one compares public
+  structure: DER and COSE tags, version integers, PEM labels, a SEC1 format
+  byte, page arithmetic, ELF tags). Mutation showed the JWK canonical-encoding
+  guard unprotected, since no test sent non-zero trailing pad bits; one does
+  now (PIN). The seed-consistency and PEM guards were already pinned.
+- **The helix path leaked `OverflowError`** (recorded and deferred above; no
+  longer deferred). `lyapunov_function` squared and summed past the float
+  range for states more than ~1.34e154 from the target. Every term is
+  non-negative, so that overflow proves V exceeds the largest double: a new
+  kernel reads it as +inf, `lyapunov_function` refuses it by name for finite
+  inputs, and `descend` routes through the kernel into its own named refusal.
+  Representable values take the unchanged arithmetic (the byte-identical
+  helix pin passes). Swept across nine magnitudes and three shapes: every
+  case converges finite or refuses by name; the boundary sits at 1.3e154
+  (computed) versus 1.4e154 (refused), where the arithmetic puts it. PINs:
+  removing the refusal fails 5 subtests, letting the kernel leak fails 6,
+  routing `descend` through the public function fails exactly its pin.
+- **CI timeouts from an apt budget that was per call, not per job.** The
+  cancelled `Test ubuntu-latest / Python 3.10` leg on `774d050` was not slow
+  tests: its cross-toolchain install took 548 s against a 5-7 s norm, and
+  system dependencies 186 s against 5-13 s, three bounded retries as designed,
+  leaving pytest 16 of the 17 minutes it needed. The helper allowed 600 s per
+  call, and 13 of 38 jobs could spend more than half their timeout in it;
+  `test`, with three calls, could spend all of it. The budget is now one
+  deadline per job, written by the first call into `$RUNNER_TEMP`; every job
+  sets a budget that fits half its timeout, and `test` sets 300 s so ~20
+  minutes of measured work plus apt fits its 30. A new gate test fails any
+  job whose budget does not fit (it failed on all 11 before the fix); PIN:
+  ignoring the shared state fails exactly the three sharing tests. The tests
+  isolate themselves from the job's real deadline, since they run inside it.
+- **Escalated, then fixed the same day.** The CSPRNG entry point returned
+  immutable `bytes`, so no secret drawn in Python could be wiped, and nine
+  public keygens returned `bytes` secret keys; `key_formats` ran private keys
+  through CPython's base64 codec, whose secret-indexed lookups INVARIANT-12
+  rule 4 prohibits. Both are resolved in the next subsection.
+
+### Secrets wipeable end to end, a constant-time Base64 codec, BIP32 in C — 2026-10-08
+
+The two items escalated above, resolved at source, and what resolving them
+uncovered. Every guard below is PIN by mutation unless marked otherwise.
+
+- **Critical: a container's finalizer zeroed keys its caller still held.**
+  `sk = generate_kyber_keypair().secret_key` drops the keypair in the same
+  statement, and its `__del__` zeroed the bytearray the caller had just
+  taken: an all-zero 3168-byte ML-KEM decapsulation key, which implicit
+  rejection does not refuse (it derives a well-formed, wrong shared secret).
+  All four PQC keypair classes. Finalizers now zero only what dies with the
+  container, read from the reference count against a threshold measured at
+  import through the same code path (`_secret_material`), verified on
+  CPython 3.10 through 3.14; `wipe()` stays unconditional. INVARIANT-6's text
+  told consumers to copy keys out to dodge this; the copy is no longer
+  needed, and the invariant is amended to say what is now true.
+- **Every secret draw comes from the native CSPRNG, in place.**
+  `ama_random_bytes` (new, `include/ama_cryptography.h`) exposes the
+  library's own OS-entropy source; on any failure it zeroes the whole buffer
+  (the internal `ama_randombytes` did not). `secure_random_fill` writes
+  through it straight into a caller's `bytearray`, under the FIPS 140-3
+  §4.9.2 continuous test, and zeroes on any failure; POST's RNG stage draws
+  through the same seam. `secrets.token_bytes` is no longer reached from the
+  package, and the RNG sweep's two allowlist entries for it were removed when
+  their count read 0.
+- **Every secret the library mints is a `bytearray`** (Breaking, row 24):
+  keygens; KEM, X25519 and ECDH shared secrets; HKDF, PBKDF2 and Argon2id
+  output (the Cython HKDF now writes into the bytearray it returns); FROST
+  dealt shares; HD-derived keys; the hybrid combiner's output. Native wrappers
+  return through `_take_secret`, which wipes the ctypes staging buffer, and
+  read secret inputs in place (`_borrow`). Containers holding secrets
+  (`KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult`,
+  `HybridEncapsulation`, `KyberEncapsulation`, `PrivateKey`,
+  `HDKeyDerivation`, `KeyManagementSystem`) share the `SecretMaterial`
+  storage rules. Immutable copies made inside the library were removed where
+  found: the X25519 batch wrapper copied every scalar to `bytes` under a
+  comment saying it did not; FROST's dealer returned `bytes` slices of all n
+  shares and never wiped its buffer; the hybrid KEM decapsulation copied the
+  whole secret key; the pairwise tests on every keygen dropped their shared
+  secrets intact. MAC tags stay `bytes`.
+- **A measurement instead of an argument.** `tools/measure_secret_residue.py`
+  runs an operation, wipes its secret, and scans every readable mapping of
+  the process for another copy. Thirteen operations: 0 live copies each. Its
+  control finds the copy the continuous-RNG test would keep without its
+  digest form. Its limit is stated, not hidden: freed memory is not reliably
+  scanned (a freed `bytes` copy was missed in the control run), so a zero
+  means no reachable copy, not that none was ever made.
+- **BIP32 child keys were computed with Python integers on two secrets**
+  (INVARIANT-12 rule 1). `(IL + k_par) mod n` and the master key's range
+  check now run on new constant-time entry points,
+  `ama_secp256k1_seckey_verify` and `ama_secp256k1_seckey_tweak_add`
+  (libsecp256k1's names and semantics), and every intermediate is wiped. The
+  BIP32 test vector 1 hardened step passes end to end in C; the AMA vectors
+  are unchanged. All six C guards PIN.
+- **Constant-time Base64 / Base64url** (`src/c/ama_base64.c`): no tables,
+  strict canonical decoding (alphabet, padding, RFC 4648 §3.5 pad bits) with
+  one verdict, refused output zeroed. Tested against RFC 4648 §10, every
+  string of length 0 to 4 over a 74-character probe alphabet (60,794,702),
+  and random differentials, all from exact-size heap buffers so ASan sees an
+  over-read. `key_formats` PEM and JWK go through it. The PEM body regex no
+  longer uses `[A-Za-z0-9+/=]`, which the regex engine compiles to a bitmap
+  indexed by each character of the key, and CRLF is folded by splitting
+  rather than `str.replace`, whose search branches on character bits. Two
+  guards collapsed into one after mutation showed them redundant; one AND is
+  documented redundant with the alphabet check (6.3).
+- **Two new constant-time targets** (`base64`, `secp256k1-seckey`): 0/0
+  under gcc 13 and clang 18, Release, LTO off, count and taint; each fails
+  on a planted branch, and a planted table lookup in the codec is caught by
+  taint (count reads it as inconclusive). The inventory is twenty-two.
+- **What accepting a mutable key broke, found by sweeping for it.**
+  `create_crypto_package` memoized a signing key's expansion by element
+  identity, sound only while keys were immutable: a bytearray seed
+  overwritten in place with another key would have kept signing with the
+  previous one, silently. A hit now also requires the expansion to match the
+  key's current value (constant-time, zero-copy), and a superseded expansion
+  is zeroed (PIN). `PrivateKey` stopped being hashable as a side effect; it
+  is now unhashable by decision, with an error saying what to key on (PIN).
+  No other identity-keyed cache, hash or set membership on key material
+  exists in the package.
+- **Fixed on the way:** `create_crypto_package` refused a bytearray signing
+  key, the CBOR encoder a bytearray byte string, the hybrid combiner a
+  bytearray shared secret, FROST verify and aggregate bytearray shares;
+  `tools/check_error_state_gating.py` read a wrapped `def` signature as its
+  body and flagged a guarded binding (PIN); the release-pins tests restated
+  the cmake floor and failed the routine bump to 4.4.4; the mypy premise
+  test now measures both sides of mypy 2.4.0's docstring change.
+
 ### Staleness audit: every file untouched for four weeks re-verified against the tree — 2026-10-08
 
 All 228 tracked files whose last commit predates 2026-09-10 were checked
@@ -1908,7 +2123,7 @@ unchanged but the work, the timing, or the failure mode is not.
 
 | # | Kind | Change | Migration |
 |---|---|---|---|
-| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — 107 native entry points across `pqc_backends`, `ascon`, `agent_binding` and `secure_memory`, the ten Cython binding entry points, `AmaContext`, Ascon, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — 112 native entry points across `pqc_backends`, `ascon`, `agent_binding` and `secure_memory`, the ten Cython binding entry points, `AmaContext`, Ascon, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
 | 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
 | 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm it cannot rank, which 4.x silently mapped onto the weakest rung (INVARIANT-35). Strength ladders are now per algorithm family: `KYBER_1024` and `HYBRID_KEM` rank on a KEM ladder (they previously ranked nowhere), and a posture escalation can no longer cross families and answer a KEM escalation with a signature scheme. `AES_256_GCM` remains unrankable — an AEAD with nothing stronger to escalate to | pass a name from `ALGORITHM_FAMILIES`; the error lists them by family |
 | 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
@@ -1931,6 +2146,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
 | 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported, nor are the 24 undeclared helpers the export map now localises (the `ama_has_*` / `ama_cpuid_has_*` CPU probes and three raw Keccak permutations), none of which any installed header ever declared | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
+| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output, FROST dealt shares and nonces, HD-derived keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (it raises `TypeError` saying so). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —
@@ -9798,7 +10014,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.0.0 | 2026-10-08 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
+| 5.0.0 | 2026-10-08 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×12 — see `[5.0.0]` |
 | 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |

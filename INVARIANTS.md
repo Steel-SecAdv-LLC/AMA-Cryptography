@@ -287,13 +287,29 @@ validate inputs **before** the `ctypes` call:
 
 ## INVARIANT-6 — Secret Key Zeroing on All Exit Paths
 
-PQC key-pair dataclasses (`DilithiumKeyPair`, `KyberKeyPair`, `SphincsKeyPair`)
-**must** store secret key material in mutable `bytearray` objects (not immutable
-`bytes`) so that it can be securely zeroed via `secure_memzero`. Key-pair
-objects **must** provide a `wipe()` method and a `__del__` destructor that zeros
-secret key material. Consumers that extract secret keys from these objects
-**must** copy the key via `bytes(kp.secret_key)` or `bytearray(kp.secret_key)`
-to avoid use-after-wipe when the source KeyPair is garbage collected.
+Every secret the Python layer mints -- a private key, a shared secret, KDF
+output, a key share, a nonce -- **must** be held and returned in a mutable
+`bytearray` (never an immutable `bytes`), so that whoever holds it can zero it.
+Secret draws **must** be written in place by the native CSPRNG
+(`secure_random_fill` / `ama_random_bytes`), and native wrappers **must** return
+secrets through a path that wipes their ctypes staging buffers (`_take_secret`)
+and read secret inputs in place (`_borrow`). MAC tags are public and stay
+`bytes`.
+
+Objects that hold secrets (the PQC key-pair dataclasses, `KeyPair`,
+`EncapsulatedSecret`, `CryptoPackageResult`, `PrivateKey` and the rest of
+`SecretMaterial`'s users) **must** provide a `wipe()` that zeroes every secret
+they hold, unconditionally, and a `__del__` that zeroes each secret the object
+holds the **last reference** to. A secret someone else still references is not
+zeroed by collection: its new holder's lifetime governs it. (The earlier rule --
+zero unconditionally in `__del__`, and require consumers to copy keys out --
+zeroed a key taken from a temporary in the same statement that took it.)
+
+Enforcement: `tests/test_secret_wipeability.py` (return types across the
+secret-output surface, the last-owner rule both ways, in-place and
+zero-on-failure draws) and `tools/measure_secret_residue.py` with
+`tests/test_secret_residue.py`, which scans process memory for any live copy
+of a secret after its holder has wiped it.
 
 ## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 
@@ -2463,7 +2479,7 @@ internal modules do.  Each now calls `check_crypto_permitted()` first.
 The count is not written down here, because a number in prose is a number that
 goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
 modules' own ASTs and fails when any entry point is ungated, and its output is
-the authoritative figure (107 native entry points across `pqc_backends`, `ascon`,
+the authoritative figure (112 native entry points across `pqc_backends`, `ascon`,
 `agent_binding` and `secure_memory`, plus 10 Cython binding entry points at the
 time of writing, with 4 documented exemptions, and a discovery step that fails
 if any other module reaches the native library while listed in neither the
@@ -2764,7 +2780,9 @@ or encaps/decaps), and the BIP32 master and child derivations in
 `key_management`. Every Python-side entropy draw that mints key material —
 the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
 routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
-rather than a bare `secrets.token_bytes` / `os.urandom`.
+rather than a bare `secrets.token_bytes` / `os.urandom`; since 2026-10-08
+that draw is the native `ama_random_bytes`, written in place into a
+wipeable buffer (`secure_random_fill`, INVARIANT-6).
 
 **Scope — the Python API surface, not the bare `.so` (audit M1).** This
 pairwise test, POST (INVARIANT-39) and the error-state output inhibition are

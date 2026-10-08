@@ -236,8 +236,12 @@ def quick_hkdf(
     salt: bytes | None = None,
     info: bytes = b"",
     algorithm: str = "sha256",
-) -> bytes: ...
+) -> bytearray: ...
 ```
+
+`quick_hkdf` returns key material, so it comes back in a `bytearray` the
+caller can zero when done (INVARIANT-6); `quick_hmac`'s tag is public and is
+`bytes`.
 
 Usage:
 
@@ -320,8 +324,9 @@ pk, sk = kp.public_key, kp.secret_key
 # and .shared_secret (32 bytes).
 enc = kyber_encapsulate(public_key: bytes)
 
-# Decapsulate (receiver side) -> 32-byte shared secret
-ss: bytes = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes
+# Decapsulate (receiver side) -> 32-byte shared secret, in a bytearray the
+# caller can zero (INVARIANT-6).  .secret_key above is a bytearray too.
+ss: bytearray = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytearray
 ```
 
 #### SPHINCS+-SHA2-256f

@@ -281,7 +281,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 
 ```mermaid
 flowchart TD
-    master["Master Secret\nsecrets.token_bytes(32)"]:::gray --> hkdf["ama_hkdf.c\nHKDF-SHA3-256"]:::gold
+    master["Master Secret\nama_random_bytes(32)"]:::gray --> hkdf["ama_hkdf.c\nHKDF-SHA3-256"]:::gold
     hkdf --> hmac_key["HMAC Key (256-bit)"]:::blue
     hkdf --> ed_seed["Ed25519 Seed (256-bit)"]:::blue
     hkdf --> dil_seed["Dilithium Seed"]:::blue

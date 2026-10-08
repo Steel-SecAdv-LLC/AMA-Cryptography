@@ -43,6 +43,9 @@ endmacro()
 
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
+# Constant-time Base64 / Base64url codec: RFC 4648 vectors, an exhaustive and
+# random differential against a naive reference, refusal zeroing.
+add_ama_test(test_base64 test_base64.c)
 add_ama_test(test_core test_core.c)
 # Core-dump hygiene (commit 17e5d79): ama_secure_mlock() must leave
 # the kernel's own "dd" (MADV_DONTDUMP) VmFlag on every page of a locked,

@@ -486,7 +486,7 @@ class TestTheKemCommitmentIsCheckedBeforeDecapsulation:
         seen: list[bytes] = []
         original = crypto_api.KyberProvider.decapsulate
 
-        def spy(self: Any, ciphertext: bytes, secret_key: Any) -> bytes:
+        def spy(self: Any, ciphertext: bytes, secret_key: Any) -> bytearray:
             seen.append(bytes(ciphertext))
             return original(self, ciphertext, secret_key)
 

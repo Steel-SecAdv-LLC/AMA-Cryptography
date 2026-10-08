@@ -273,6 +273,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -662,7 +664,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
-    # 20 covered the callgrind targets alone; the secret-taint lane (fifteen
+    # 20 covered the callgrind targets alone; the secret-taint lane (seventeen
     # Memcheck runs, `slhdsa-sign` the longest at roughly a minute of CPU for
     # its two parameter sets) and the shipped-shared-object lane (an LTO build
     # plus nine more Memcheck runs) below roughly double the job.
@@ -990,6 +992,26 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
 
+      - name: Base64 / Base64url codec instruction count must not depend on the key
+        # Private keys leave the library as PEM (Base64) and JWK (Base64url).
+        # A table-driven codec indexes its alphabet by every secret 6-bit group
+        # and its reverse table by every secret character (INVARIANT-12 rule
+        # 4); src/c/ama_base64.c has no tables.  Measured 0/0 on gcc 13 and
+        # clang 18, and the gate fails a planted branch on the character class.
+        # A planted table lookup is cache-resident and retires the same count,
+        # which is why the taint lane below runs this target too.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target base64
+
+      - name: BIP32 private-child step must not depend on the key or the tweak
+        # ama_secp256k1_seckey_tweak_add, (I_L + k_par) mod n, replaced Python
+        # bigint arithmetic on both secrets in HD key derivation.  The classes
+        # put the sum on both sides of n, so the mod-n fold takes both arms.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target secp256k1-seckey
+
       # ---- Secret-taint lane ---------------------------------------------
       # Instruction, data-reference and cache-miss counts cannot see a
       # secret-indexed load that stays cache-resident, a conditional move on
@@ -1023,7 +1045,7 @@ jobs:
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding aead-verify \
-                        slhdsa-sign; do
+                        base64 secp256k1-seckey slhdsa-sign; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done
@@ -1036,8 +1058,9 @@ jobs:
       # builds the shared object the way the wheel does and runs the taint
       # gate against it for every target whose driver uses only public
       # symbols (ghash and aead-verify need the test-only scalar-forcing hook;
-      # ecdsa and nistp-ecdsa carry declassification points that are no-ops
-      # outside AMA_TESTING_MODE and would be reported here by design).
+      # ecdsa, nistp-ecdsa, base64 and secp256k1-seckey carry declassification
+      # points that are no-ops outside AMA_TESTING_MODE and would be reported
+      # here by design).
       - name: Build the shipped shared library (LTO on, as the wheel ships it)
         run: |
           cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \

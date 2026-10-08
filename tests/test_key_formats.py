@@ -314,7 +314,8 @@ def test_pq_seed_and_expanded_forms_describe_the_same_key() -> None:
             by_algorithm.setdefault(key.algorithm, []).append((record["arm"], key))
         for algorithm, entries in by_algorithm.items():
             assert len(entries) == 3, f"{algorithm}: expected all three arms"
-            keys = {arm: key.key for arm, key in entries}
+            # bytes() for hashing: private keys are held in bytearrays.
+            keys = {arm: bytes(key.key) for arm, key in entries}
             key_lengths = {arm: len(v) for arm, v in keys.items()}
             assert len(set(keys.values())) == 1, (
                 f"{algorithm}: the seed, expandedKey and both arms of the same "
@@ -1045,7 +1046,7 @@ def test_a_private_key_never_leaks_into_a_public_encoding(name: str) -> None:
     for key in (private, seeded):
         if key is None:
             continue
-        secrets: list[tuple[str, bytes]] = [("key", key.key)]
+        secrets: list[tuple[str, bytes | bytearray]] = [("key", key.key)]
         if key.seed is not None:
             secrets.append(("seed", key.seed))
         for form, encoded in _public_encodings(key.public()):
@@ -1477,6 +1478,32 @@ def test_jwk_with_padded_or_standard_base64_is_refused() -> None:
         jwk["x"] = mutate(jwk["x"])
         with pytest.raises(KeyFormatError, match="base64url"):
             kf.jwk_to_public_key(jwk)
+
+
+def test_jwk_with_non_zero_trailing_pad_bits_is_refused() -> None:
+    """RFC 4648 §3.5: the unused low bits of the final character must be zero.
+
+    A 32-byte Ed25519 ``d`` encodes to 43 characters whose last one carries
+    only four significant bits, so ``...A`` and ``...B`` decoded to the same
+    private key — two JWKs, one secret, two thumbprints.  The re-encode
+    comparison in ``_unb64u`` is the only guard against it (PIN: replacing
+    that comparison with ``True`` makes this test fail; the padded and
+    standard-alphabet refusals above do not cover it).
+    """
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    record = next(r for r in JOSE_COSE if r["format"] == "jwk" and r["kind"] == "private")
+    jwk = dict(record["jwk"])
+    d = jwk["d"]
+    unused_bits = (len(d) * 6) % 8
+    assert unused_bits, "fixture: this member length leaves no unused pad bits"
+    last = alphabet.index(d[-1])
+    assert last & ((1 << unused_bits) - 1) == 0, "fixture: the published vector is canonical"
+    jwk["d"] = d[:-1] + alphabet[last | 1]
+    assert base64.urlsafe_b64decode(jwk["d"] + "=") == base64.urlsafe_b64decode(
+        d + "="
+    ), "fixture: both spellings must decode to the same key for this to test anything"
+    with pytest.raises(KeyFormatError, match="not canonically encoded"):
+        kf.jwk_to_private_key(jwk)
 
 
 def test_jwk_with_a_non_string_member_is_refused() -> None:
@@ -2420,6 +2447,7 @@ def _key_material_window(
     correct as encodings change.
     """
     alg = kf.ALGORITHMS[name]
+    material: bytes | bytearray
     if which == "spki":
         material = (b"\x04" + public.key) if alg.kind == "ec" else public.key
     else:

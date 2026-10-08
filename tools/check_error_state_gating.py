@@ -978,7 +978,13 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
         # cannot satisfy the guard check, and a ``# ... ama_foo()`` mention in a comment
         # is not mistaken for a native call.  Require the guard as a real, no-arg call
         # (optional inner whitespace), not a bare substring.
-        body = [_strip_comment(ln) for ln in _strip_leading_docstring(lines[start + 1 : end])]
+        # The body begins after the signature, which may span several lines:
+        # read from the line that closes the def's parameter list.  Starting
+        # at ``start + 1`` took a continuation line of a wrapped signature for
+        # the body, so its deeper indentation became the "base" and a guard
+        # at the real body's indentation was reported missing.
+        body_start = _signature_end(lines, start, end) + 1
+        body = [_strip_comment(ln) for ln in _strip_leading_docstring(lines[body_start:end])]
         # At the body's own indentation; indented further, the guard sits in a
         # block some path skips.
         base = next((_indent(ln) for ln in body if ln.strip()), None)
@@ -995,6 +1001,22 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
             # Guard present but after a native call — output already produced.
             ungated.append((name, start + 1))
     return ungated
+
+
+def _signature_end(lines: list[str], start: int, end: int) -> int:
+    """Index of the line that closes the ``def`` at ``start``'s parameter list.
+
+    Counts parentheses (outside comments) from the ``def`` line until they
+    balance; a signature is the only bracketed span a line scan has to step
+    over before the body.  Returns ``start`` for a one-line signature.
+    """
+    depth = 0
+    for i in range(start, end):
+        text = _strip_comment(lines[i])
+        depth += text.count("(") - text.count(")")
+        if depth <= 0:
+            return i
+    return start
 
 
 def _indent(line: str) -> int:

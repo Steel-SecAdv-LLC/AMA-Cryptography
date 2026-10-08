@@ -269,7 +269,7 @@ class BenchmarkValidator:
             master = secrets.token_bytes(32)
             salt = secrets.token_bytes(32)
 
-            def hkdf_derive() -> bytes:
+            def hkdf_derive() -> bytearray:
                 return native_hkdf(master, 32, salt, b"ama-cryptography-key")
 
             stats = self.benchmark_operation("hkdf", hkdf_derive)

@@ -168,7 +168,7 @@ class TestHybridRoundTrip:
         assert encap.pqc_ciphertext == ct_p
         assert encap.classical_shared_secret == ss_c
         assert encap.pqc_shared_secret == ss_p
-        assert isinstance(encap.combined_secret, bytes)
+        assert isinstance(encap.combined_secret, bytearray)  # wipeable (INVARIANT-6)
 
     def test_mismatched_ciphertext_breaks_decapsulation(self) -> None:
         """Using wrong ciphertext in decapsulation must produce different secret."""

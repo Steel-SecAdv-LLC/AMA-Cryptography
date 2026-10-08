@@ -42,7 +42,18 @@ import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -53,8 +64,9 @@ if TYPE_CHECKING:
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
 # in *this* module's namespace.
 # ---------------------------------------------------------------------------
-from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
 from ama_cryptography._package_transcript import transcript as _transcript
+from ama_cryptography._secret_material import SecretBytes, SecretMaterial
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -367,7 +379,7 @@ def canonical_hash_code(
 # ============================================================================
 
 
-def hmac_authenticate(message: bytes, key: bytes) -> bytes:
+def hmac_authenticate(message: bytes, key: SecretBytes) -> bytes:
     """Generate HMAC-SHA3-256 authentication tag (RFC 2104)."""
     _enforce_invariant7_lc()
     if len(key) < 32:
@@ -376,7 +388,7 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     return hmac_sha3_256(key, message)
 
 
-def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
+def hmac_verify(message: bytes, tag: bytes, key: SecretBytes) -> bool:
     """Verify HMAC-SHA3-256 authentication tag (constant-time).
 
     ``tag`` is caller-supplied and therefore untrusted.  Its length is public —
@@ -396,7 +408,7 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
 
 
 @dataclass
-class Ed25519KeyPair:
+class Ed25519KeyPair(SecretMaterial):
     """Ed25519 elliptic curve key pair (RFC 8032).
 
     Key Sizes:
@@ -405,13 +417,18 @@ class Ed25519KeyPair:
         - Signature: 64 bytes (R || s format)
     """
 
-    private_key: bytes = field(
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("private_key",)
+
+    private_key: Union[bytes, bytearray] = field(
         repr=False
     )  # 64 bytes (seed||pk) — excluded from repr to prevent exposure
     public_key: bytes  # 32 bytes
 
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
-def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
+
+def generate_ed25519_keypair(seed: Optional[SecretBytes] = None) -> Ed25519KeyPair:
     """Generate Ed25519 key pair using native C backend (RFC 8032, Section 5.1.5)."""
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
@@ -429,7 +446,7 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
 
 
-def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
+def ed25519_sign(message: bytes, private_key: SecretBytes) -> bytes:
     """Sign message with Ed25519 (deterministic) using native C backend."""
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
@@ -687,13 +704,16 @@ def create_ethical_hkdf_context(
 
 
 def derive_keys(
-    master_secret: bytes,
+    master_secret: SecretBytes,
     info: str,
     num_keys: int = 3,
     ethical_vector: Optional[Dict[str, float]] = None,
     salt: Optional[bytes] = None,
-) -> Tuple[List[bytes], bytes]:
-    """Derive multiple independent keys from master secret using HKDF (RFC 5869)."""
+) -> Tuple[List[bytearray], bytes]:
+    """Derive multiple independent keys from master secret using HKDF (RFC 5869).
+
+    Each derived key is a wipeable ``bytearray`` (INVARIANT-6).
+    """
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
@@ -734,11 +754,13 @@ def derive_keys(
 
 
 @dataclass
-class KeyManagementSystem:
+class KeyManagementSystem(SecretMaterial):
     """Secure key storage and management system."""
 
-    master_secret: bytes = field(repr=False)
-    hmac_key: bytes = field(repr=False)
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("master_secret", "hmac_key")
+
+    master_secret: Union[bytes, bytearray] = field(repr=False)
+    hmac_key: Union[bytes, bytearray] = field(repr=False)
     hkdf_salt: bytes = field(repr=False)
     ed25519_keypair: Ed25519KeyPair
     dilithium_keypair: Optional[DilithiumKeyPair]
@@ -747,6 +769,9 @@ class KeyManagementSystem:
     version: str
     ethical_vector: Dict[str, float]
     quantum_signatures_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 def generate_key_management_system(
@@ -758,7 +783,7 @@ def generate_key_management_system(
         ethical_vector = ETHICAL_VECTOR.copy()
 
     # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
-    master_secret = secure_token_bytes(32)
+    master_secret = secure_token_bytearray(32)
 
     derived_keys, hkdf_salt = derive_keys(
         master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
@@ -1410,7 +1435,7 @@ def verify_crypto_package(
     codes: str,
     helix_params: List[Tuple[float, float]],
     package: CryptoPackage,
-    hmac_key: bytes,
+    hmac_key: SecretBytes,
     monitor: Optional[AmaCryptographyMonitor] = None,
     require_quantum_signatures: Optional[bool] = None,
 ) -> Dict[str, Optional[bool]]:

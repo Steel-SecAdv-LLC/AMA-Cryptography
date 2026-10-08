@@ -128,7 +128,7 @@ class TestHKDFSHA3256:
         keys, _ = derive_keys(master_secret, info, num_keys=5, salt=fixed_salt)
 
         # All keys should be unique
-        assert len(set(keys)) == 5
+        assert len({bytes(k) for k in keys}) == 5  # bytearray keys are not hashable
 
         # No key should be derivable from another (statistical test)
         for i, key_i in enumerate(keys):

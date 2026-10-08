@@ -99,7 +99,7 @@ class TestHkdfSha256Rfc5869:
 class TestHkdfSha2Differential:
     """Byte-identity to an independent hmac+hashlib HKDF reference."""
 
-    CASES: ClassVar[list[tuple[Callable[..., bytes], Callable[..., Any], int]]] = [
+    CASES: ClassVar[list[tuple[Callable[..., bytes | bytearray], Callable[..., Any], int]]] = [
         (native_hkdf_sha256, hashlib.sha256, 32),
         (native_hkdf_sha384, hashlib.sha384, 48),
         (native_hkdf_sha512, hashlib.sha512, 64),

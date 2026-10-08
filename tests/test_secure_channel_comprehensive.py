@@ -51,7 +51,7 @@ skip_no_native = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def kem_keypair() -> tuple[bytes, bytes]:
+def kem_keypair() -> tuple[bytes, bytes | bytearray]:
     """Generate a hybrid KEM keypair for Responder."""
     from ama_cryptography.crypto_api import HybridKEMProvider
 
@@ -61,7 +61,7 @@ def kem_keypair() -> tuple[bytes, bytes]:
 
 
 @pytest.fixture()
-def sig_keypair() -> tuple[bytes, bytes]:
+def sig_keypair() -> tuple[bytes, bytes | bytearray]:
     """Generate a hybrid signature keypair for Responder."""
     from ama_cryptography.crypto_api import HybridSignatureProvider
 

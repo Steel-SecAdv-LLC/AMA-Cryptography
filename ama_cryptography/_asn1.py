@@ -54,7 +54,7 @@ distinct thumbprints.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Generic, TypeVar, Union
 
 from ama_cryptography.exceptions import KeyFormatError
 
@@ -95,7 +95,7 @@ def _der_len(n: int) -> bytes:
     return bytes([0x80 | len(body)]) + body
 
 
-def _tlv(tag: int, body: bytes) -> bytes:
+def _tlv(tag: int, body: Union[bytes, bytearray]) -> bytes:
     return bytes([tag]) + _der_len(len(body)) + body
 
 
@@ -110,7 +110,7 @@ def der_integer(value: int) -> bytes:
     return _tlv(TAG_INTEGER, body)
 
 
-def der_octet_string(data: bytes) -> bytes:
+def der_octet_string(data: Union[bytes, bytearray]) -> bytes:
     return _tlv(TAG_OCTET_STRING, data)
 
 
@@ -127,7 +127,7 @@ def der_sequence(*elements: bytes) -> bytes:
     return _tlv(TAG_SEQUENCE, b"".join(elements))
 
 
-def der_tagged(number: int, body: bytes, *, constructed: bool = True) -> bytes:
+def der_tagged(number: int, body: Union[bytes, bytearray], *, constructed: bool = True) -> bytes:
     """Encode a context-specific ``[number]`` tag."""
     if not 0 <= number <= 30:
         raise KeyFormatError(f"context tag {number} out of the supported range")
@@ -276,7 +276,13 @@ def oid_to_string(body: bytes) -> str:
 # ---------------------------------------------------------------------------
 # DER decoding
 # ---------------------------------------------------------------------------
-class DerReader:
+#: The octet type a DerReader is over, and returns slices of: ``bytes`` for
+#: public structures, ``bytearray`` for a private key's DER, so that every
+#: slice of the key is a wipeable copy rather than an immutable one.
+_Octets = TypeVar("_Octets", bytes, bytearray)
+
+
+class DerReader(Generic[_Octets]):
     """A strict, non-backtracking DER reader over a byte string.
 
     Every accessor consumes exactly one TLV and validates it. ``finish()`` is
@@ -287,8 +293,8 @@ class DerReader:
 
     __slots__ = ("_buf", "_end", "_pos")
 
-    def __init__(self, data: bytes, start: int = 0, end: int | None = None) -> None:
-        self._buf = data
+    def __init__(self, data: _Octets, start: int = 0, end: int | None = None) -> None:
+        self._buf: _Octets = data
         self._pos = start
         self._end = len(data) if end is None else end
 
@@ -339,12 +345,12 @@ class DerReader:
             return None
         return self._buf[self._pos]
 
-    def read_sequence(self) -> DerReader:
+    def read_sequence(self) -> DerReader[_Octets]:
         _, start, end = self._read_header(TAG_SEQUENCE)
         self._pos = end
         return DerReader(self._buf, start, end)
 
-    def read_set(self) -> DerReader:
+    def read_set(self) -> DerReader[_Octets]:
         """Read a SET (or SET OF) and return a reader over its contents.
 
         Needed by the RFC 5652 ``SignedData`` descent in
@@ -356,7 +362,7 @@ class DerReader:
         self._pos = end
         return DerReader(self._buf, start, end)
 
-    def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader:
+    def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader[_Octets]:
         tag = 0x80 | number | (0x20 if constructed else 0x00)
         _, start, end = self._read_header(tag)
         self._pos = end
@@ -374,12 +380,12 @@ class DerReader:
         self._pos = end
         return int.from_bytes(body, "big")
 
-    def read_octet_string(self) -> bytes:
+    def read_octet_string(self) -> _Octets:
         _, start, end = self._read_header(TAG_OCTET_STRING)
         self._pos = end
         return self._buf[start:end]
 
-    def read_bit_string(self) -> bytes:
+    def read_bit_string(self) -> _Octets:
         _, start, end = self._read_header(TAG_BIT_STRING)
         if end - start < 1:
             raise KeyFormatError("empty BIT STRING")
@@ -394,7 +400,7 @@ class DerReader:
     def read_oid(self) -> str:
         _, start, end = self._read_header(TAG_OID)
         self._pos = end
-        return oid_to_string(self._buf[start:end])
+        return oid_to_string(bytes(self._buf[start:end]))
 
     def read_null(self) -> None:
         _, start, end = self._read_header(TAG_NULL)
@@ -402,7 +408,7 @@ class DerReader:
             raise KeyFormatError("NULL with a non-empty body")
         self._pos = end
 
-    def read_any_raw(self) -> bytes:
+    def read_any_raw(self) -> _Octets:
         """Consume one TLV and return its complete encoding."""
         start_tlv = self._pos
         _, _, end = self._read_header(None)
@@ -471,8 +477,10 @@ def cbor_encode_canonical(value: Any) -> bytes:
         if value >= 0:
             return _cbor_head(_CBOR_UINT, value)
         return _cbor_head(_CBOR_NEGINT, -value - 1)
-    if isinstance(value, bytes):
-        return _cbor_head(_CBOR_BYTES, len(value)) + value
+    if isinstance(value, (bytes, bytearray)):
+        # A bytearray is a byte string too: private keys are held in one so
+        # they can be wiped (INVARIANT-6).
+        return _cbor_head(_CBOR_BYTES, len(value)) + bytes(value)
     if isinstance(value, str):
         raw = value.encode("utf-8")
         return _cbor_head(_CBOR_TEXT, len(raw)) + raw

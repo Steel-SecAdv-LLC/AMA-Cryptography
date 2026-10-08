@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 95 C test suites, 274 Python test modules |
+| `tests/c/`, `tests/` | 96 C test suites, 276 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -423,15 +423,25 @@ dispatch from the release commit must be observed green; the independent
 cryptographic review (1) and the signed v5.0.0 tag (4) remain with the
 maintainer, and no gate enforces (1).
 
-Two follow-ups #394 recorded only in its merge-commit message, carried here
-so they live in the tree (one more, the visuals manifest, was closed by
-`tools/refresh_derived_docs.py` and its gate): the ML-DSA and ML-KEM keygens
-in `ama_cryptography/pqc_backends.py` return `bytes`-typed secret keys, an
-immutable copy no caller can wipe (the SLH-DSA keygens' interim copy of the
-same shape was removed on 2026-10-03 by copying through a memoryview); and
-`tools/verify_install_oob.py` scans only the package directory's top level
-for bindings while its bytecode pass reads only `__pycache__`, measured
-passing with a planted `crypto_api/__init__.pyc`. The canonical-host benchmark figures have a
+Two follow-ups #394 recorded only in its merge-commit message were carried
+here (one more, the visuals manifest, was closed by
+`tools/refresh_derived_docs.py` and its gate). `tools/verify_install_oob.py`
+passing a planted `crypto_api/__init__.pyc` was closed on 2026-10-08: the
+tool now applies the in-process import-shadowing rule out of band, pinned
+to it by a parity test. The other, as stated here, was narrower than the
+defect (corrected per section 6.6 on 2026-10-08): nine public keygens
+returned `bytes` secret keys, and the root was the library's only CSPRNG
+entry point drawing through `secrets.token_bytes`. Both that and a second
+item escalated the same day -- `key_formats` encoding private keys through
+CPython's table-driven base64 (INVARIANT-12 rule 4) -- were closed on
+2026-10-08 (CHANGELOG, "Secrets wipeable end to end"): every secret draw is
+written in place by the native `ama_random_bytes`, every secret the Python
+layer mints is a `bytearray`, private-key PEM and JWK go through the native
+constant-time `src/c/ama_base64.c`, and BIP32 child derivation moved out of
+Python integers into `ama_secp256k1_seckey_tweak_add`. What stays open is
+stated where it is measured: `tools/measure_secret_residue.py` finds no live
+copy of a secret after its holder wipes it, and does not claim to see freed
+memory. The canonical-host benchmark figures have a
 drift mechanism (`tools/check_canonical_benchmarks.py` against
 `benchmarks/canonical-host.json`), so an edited, invented or quietly deleted
 figure fails CI, and they were re-measured on the 5.0.0 tree on 2026-09-24 on

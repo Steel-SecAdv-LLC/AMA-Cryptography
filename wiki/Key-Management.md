@@ -278,7 +278,8 @@ from ama_cryptography.key_management import (
 # existing keystores remain decryptable across parameter changes.
 #
 # If `master_password` is None or empty, a *random in-memory* 32-byte
-# encryption key is generated via `secrets.token_bytes(32)` — there is
+# encryption key is drawn from the native CSPRNG into a wipeable buffer
+# (`secure_token_bytearray(32)`) — there is
 # no stable KDF derivation in that mode, so keys stored under a
 # process's random in-memory key **cannot be decrypted after process
 # restart**. Use a stable master_password whenever the store must

@@ -809,6 +809,9 @@ endif()
 set(AMA_SOURCES
     src/c/ama_core.c
     src/c/ama_consttime.c
+    # Constant-time Base64 / Base64url (RFC 4648): the private-key PEM and JWK
+    # encodings.  Self-contained and table-free, so unconditional.
+    src/c/ama_base64.c
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
     # Agent-instance binding (INVARIANT-30): domain separation + fail-closed

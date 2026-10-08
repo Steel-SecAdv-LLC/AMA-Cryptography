@@ -579,7 +579,20 @@ def _release_tuple(value: object) -> Tuple[int, ...] | None:
 #: Paths whose contents the published floors describe.  A change under any of
 #: them after the calibration commit means the floors and the shipped code have
 #: drifted apart, whatever the change log asserts.
-_FLOORED_CODE_PATHS = ("src/c", "include", "ama_cryptography", "benchmarks/benchmark_runner.py")
+#:
+#: ``src/cython`` was missing until 2026-10-08, although five floored rows
+#: (hkdf_derive, hmac_sha3_256 and the SHA3, Ed25519 and ML-DSA paths) run
+#: through its bindings: a typed-memoryview change there cost hkdf_derive 13%
+#: and hmac_sha3_256 8%, measured against 774d050, and this guard could not
+#: see it.  tests/test_benchmark_baseline_infra.py now requires every source
+#: a shipped extension compiles to lie under one of these paths.
+_FLOORED_CODE_PATHS = (
+    "src/c",
+    "src/cython",
+    "include",
+    "ama_cryptography",
+    "benchmarks/benchmark_runner.py",
+)
 
 #: Extracts the commit from a calibration_evidence run entry, which records
 #: ``"<counter> (<commit>, <class>)"``.

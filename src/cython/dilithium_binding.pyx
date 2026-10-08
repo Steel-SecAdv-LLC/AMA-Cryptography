@@ -56,7 +56,7 @@ from ama_cryptography._module_state import check_crypto_permitted, pairwise_test
 def cy_dilithium_keygen():
     """
     Generate ML-DSA-65 keypair via native C.
-    Returns (public_key, secret_key) as bytes.
+    Returns (public_key, secret_key): bytes and a wipeable bytearray.
     Raises RuntimeError on native C failure.
     """
     check_crypto_permitted()
@@ -70,12 +70,17 @@ def cy_dilithium_keygen():
         raise MemoryError("Failed to allocate Dilithium key buffers")
 
     cdef int ret
+    cdef unsigned char[::1] sk_out
     try:
         ret = ama_dilithium_keypair(pk, sk)
         if ret != 0:
             raise RuntimeError(f"ama_dilithium_keypair failed (rc={ret})")
         public_key = bytes(pk[:DILITHIUM_PK_BYTES])
-        secret_key = bytes(sk[:DILITHIUM_SK_BYTES])
+        # Through a typed view: slicing the C buffer would mint an
+        # immutable bytes copy of the secret key first.
+        secret_key = bytearray(DILITHIUM_SK_BYTES)
+        sk_out = secret_key
+        memcpy(&sk_out[0], sk, DILITHIUM_SK_BYTES)
     finally:
         ama_secure_memzero(sk, DILITHIUM_SK_BYTES)
         free(pk)
@@ -93,7 +98,7 @@ def cy_dilithium_keygen():
     return (public_key, secret_key)
 
 
-def cy_dilithium_sign(bytes message, bytes secret_key):
+def cy_dilithium_sign(bytes message, const unsigned char[::1] secret_key):
     """
     Sign message with ML-DSA-65 via native C.
     Returns signature bytes.
@@ -118,7 +123,7 @@ def cy_dilithium_sign(bytes message, bytes secret_key):
     cdef size_t sig_len = DILITHIUM_SIG_BYTES
     cdef int ret
     try:
-        memcpy(sk_buf, <const unsigned char*>secret_key, DILITHIUM_SK_BYTES)
+        memcpy(sk_buf, &secret_key[0], DILITHIUM_SK_BYTES)
         ret = ama_dilithium_sign(
             sig, &sig_len,
             <const uint8_t*>message, len(message),

@@ -115,6 +115,13 @@ int main(void) {
     check(ama_randombytes(b, sizeof b) == AMA_SUCCESS &&
           memcmp(a, b, sizeof a) != 0 && !is_all(a, sizeof a, 0),
           "draws through the symlink are filled and differ");
+    memset(b, 0, sizeof b);
+    check(ama_random_bytes(b, sizeof b) == AMA_SUCCESS && !is_all(b, sizeof b, 0) &&
+          memcmp(a, b, sizeof a) != 0,
+          "the public ama_random_bytes draws through the same source");
+    check(ama_random_bytes(NULL, 0) == AMA_SUCCESS &&
+          ama_random_bytes(NULL, 1) == AMA_ERROR_INVALID_PARAM,
+          "ama_random_bytes: NULL is accepted only for an empty draw");
     (void)unlink(probe);
 
     /* 2. A symlink to a regular file: refused on the opened object's type. */
@@ -126,8 +133,12 @@ int main(void) {
     memset(a, 0x5A, sizeof a);
     check(ama_randombytes(a, sizeof a) == AMA_ERROR_CRYPTO,
           "a device path that is a symlink to a regular file is refused");
-    check(is_all(a, sizeof a, 0x5A),
-          "no byte of the regular file reached the caller");
+    /* Zero, not "untouched": a refused or failed draw scrubs the caller's
+     * whole buffer, so neither a byte of the file nor a partial draw from an
+     * arm that failed mid-loop can reach the caller (PIN: deleting the scrub
+     * in ama_randombytes leaves the 0x5A needle and fails both checks). */
+    check(is_all(a, sizeof a, 0),
+          "the refused draw leaves the caller's buffer zeroed");
     (void)unlink(probe);
 
     /* 3. A regular file at the device path itself. */
@@ -139,8 +150,11 @@ int main(void) {
     memset(a, 0x5A, sizeof a);
     check(ama_randombytes(a, sizeof a) == AMA_ERROR_CRYPTO,
           "a regular file at the device path is refused");
-    check(is_all(a, sizeof a, 0x5A),
-          "no byte of the regular file reached the caller");
+    check(is_all(a, sizeof a, 0),
+          "the refused draw leaves the caller's buffer zeroed");
+    memset(b, 0xA5, sizeof b);
+    check(ama_random_bytes(b, sizeof b) == AMA_ERROR_CRYPTO && is_all(b, sizeof b, 0),
+          "the public ama_random_bytes refuses the same source and zeroes the buffer");
     (void)unlink(probe);
 
     printf("\n%s (%d failure(s))\n", failures ? "FAILED" : "PASSED", failures);

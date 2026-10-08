@@ -405,14 +405,15 @@ class TestKeyManagementContextManager:
 class TestHDKeyDerivation:
     """Tests for HD key derivation."""
 
-    def test_derive_key_returns_bytes(self) -> None:
-        """derive_path with hardened-only path returns bytes."""
+    def test_derive_key_returns_a_wipeable_bytearray(self) -> None:
+        """derive_path with hardened-only path returns a bytearray (INVARIANT-6;
+        CHANGELOG [5.0.0] row 24), which the caller can zero."""
         from ama_cryptography.key_management import HDKeyDerivation
 
         hd = HDKeyDerivation()
         key, _ = hd.derive_path("m/44'/0'/0'")
 
-        assert isinstance(key, bytes)
+        assert isinstance(key, bytearray)
         assert len(key) == 32
 
     def test_different_indices_different_keys(self) -> None:

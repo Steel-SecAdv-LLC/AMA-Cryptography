@@ -76,7 +76,7 @@ import time
 from _thread import LockType
 from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
@@ -954,7 +954,7 @@ class SecureChannelInitiator:
         self._expected_responder_sig_pk = expected_responder_sig_pk
         self._kem = HybridKEMProvider()
         self._state = ChannelState.INITIATOR_START
-        self._shared_secret: Optional[bytes] = None
+        self._shared_secret: Optional[Union[bytes, bytearray]] = None
         self._handshake_hash: Optional[bytes] = None
         self._ephemeral_pk: Optional[bytes] = None
 
@@ -1135,7 +1135,7 @@ class SecureChannelInitiator:
         return session
 
     @staticmethod
-    def _derive_session(session_id: bytes, shared_secret: bytes) -> SecureSession:
+    def _derive_session(session_id: bytes, shared_secret: Union[bytes, bytearray]) -> SecureSession:
         """Derive send/recv keys from shared secret via HKDF-SHA3-256.
 
         Keys are wrapped in ``bytearray`` so that
@@ -1175,8 +1175,8 @@ class SecureChannelResponder:
 
     def __init__(
         self,
-        static_kem_sk: bytes,
-        static_sig_sk: bytes,
+        static_kem_sk: Union[bytes, bytearray],
+        static_sig_sk: Union[bytes, bytearray],
         static_sig_pk: bytes,
     ) -> None:
         """Initialize Responder with static key material.
@@ -1287,7 +1287,7 @@ class SecureChannelResponder:
         return response, session
 
     @staticmethod
-    def _derive_session(session_id: bytes, shared_secret: bytes) -> SecureSession:
+    def _derive_session(session_id: bytes, shared_secret: Union[bytes, bytearray]) -> SecureSession:
         """Derive send/recv keys from shared secret via HKDF-SHA3-256.
 
         Keys are wrapped in ``bytearray`` for in-place secure wipe on

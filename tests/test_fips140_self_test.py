@@ -19,6 +19,7 @@ Run with:  pytest tests/test_fips140_self_test.py -v -m fips
 import logging
 import sys
 import threading
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -1106,7 +1107,7 @@ class TestContinuousRNG:
             _set_operational()
 
     def test_identical_rng_output_triggers_error(self) -> None:
-        """If secrets.token_bytes returns identical consecutive values, error state."""
+        """If the entropy source repeats itself, the continuous test enters ERROR."""
         from ama_cryptography._self_test import (
             _set_operational,
             module_status,
@@ -1114,9 +1115,12 @@ class TestContinuousRNG:
         )
         from ama_cryptography.exceptions import CryptoModuleError
 
-        fixed = b"\xaa" * 32
+        def stuck_fill(view: Any) -> None:
+            memoryview(view).cast("B")[:] = b"\xaa" * memoryview(view).nbytes
+
         try:
-            with patch("ama_cryptography._self_test.secrets.token_bytes", return_value=fixed):
+            # The one seam every draw resolves its source through.
+            with patch("ama_cryptography._module_state._entropy_fill", stuck_fill):
                 # First call sets _previous_rng_output
                 secure_token_bytes(32)
                 # Second call should detect duplicate

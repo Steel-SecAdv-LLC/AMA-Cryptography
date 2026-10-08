@@ -2628,6 +2628,68 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
                                          AMA_SECP256K1_ECDSA_VERIFY_STRICT);
 }
 
+/* ===================================================================
+ * Secret-key arithmetic for hierarchical derivation (BIP32 CKDpriv)
+ * ===================================================================
+ *
+ * BIP32's private child derivation is k_i = (parse256(I_L) + k_par) mod n,
+ * refused when parse256(I_L) >= n or k_i = 0.  The Python layer did that
+ * with arbitrary-precision integers: variable-time arithmetic on two secrets
+ * (I_L is HMAC output keyed by the chain code), and INVARIANT-12 rule 1
+ * forbids Python implementing secret-dependent arithmetic at all.  These two
+ * entry points move it here, onto the constant-time mod-n scalar code ECDSA
+ * signing already uses.  Names and semantics follow libsecp256k1's
+ * secp256k1_ec_seckey_verify / secp256k1_ec_seckey_tweak_add.
+ *
+ * Each range predicate always runs; only the combined verdict decides
+ * control flow, and it is declassified because the return code publishes it
+ * (BIP32 itself says to move on to the next index on refusal, a public
+ * event). */
+
+/* 1 when `s` is a valid secret key, a scalar in [1, n-1]; constant time. */
+static int secp256k1_seckey_ok(const uint8_t s[32]) {
+    return (1 ^ secp256k1_scalar_is_zero(s)) & secp256k1_scalar_below_n(s);
+}
+
+AMA_API ama_error_t ama_secp256k1_seckey_verify(const uint8_t seckey[32]) {
+    if (!seckey) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    int ok = secp256k1_seckey_ok(seckey);
+    AMA_CT_DECLASSIFY(&ok, sizeof ok);
+    return ok ? AMA_SUCCESS : AMA_ERROR_INVALID_PARAM;
+}
+
+AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(uint8_t out[32],
+                                                   const uint8_t seckey[32],
+                                                   const uint8_t tweak[32]) {
+    secp256k1_sc k, t, r;
+    int ok;
+
+    if (!out || !seckey || !tweak) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* seckey in [1, n-1]; tweak in [0, n-1] (BIP32: parse256(I_L) < n);
+     * result non-zero.  sc_from_bytes reports whether its input was already
+     * below n and reduces it either way, so all three are evaluated in
+     * full on every call. */
+    ok = secp256k1_seckey_ok(seckey);
+    (void)sc_from_bytes(&k, seckey);
+    ok &= sc_from_bytes(&t, tweak);
+    sc_add(&r, &k, &t);
+    ok &= 1 ^ sc_is_zero(&r);
+    sc_to_bytes(out, &r);
+    ama_secure_memzero(&k, sizeof k);
+    ama_secure_memzero(&t, sizeof t);
+    ama_secure_memzero(&r, sizeof r);
+    AMA_CT_DECLASSIFY(&ok, sizeof ok);
+    if (!ok) {
+        ama_secure_memzero(out, 32);
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    return AMA_SUCCESS;
+}
+
 #ifdef AMA_TESTING_MODE
 /* Test-only export of the ECDSA public-key coordinate canonicality predicate
  * so tests/c/test_secp256k1.c can exercise the [0, p) field-element gate

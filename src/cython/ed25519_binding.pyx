@@ -64,10 +64,11 @@ cdef extern from "ama_cryptography.h":
 from ama_cryptography._module_state import check_crypto_permitted, pairwise_test_signature
 
 
-def cy_ed25519_keypair(bytes seed):
+def cy_ed25519_keypair(const unsigned char[::1] seed):
     """
     Generate Ed25519 keypair from 32-byte seed via native C.
-    Returns (public_key, secret_key) as bytes.
+    Returns (public_key, secret_key): bytes and a wipeable bytearray.  The
+    seed may be bytes or bytearray; it is read in place, never copied.
     Raises RuntimeError on native C failure.
     """
     check_crypto_permitted()
@@ -77,16 +78,21 @@ def cy_ed25519_keypair(bytes seed):
     cdef unsigned char pk[32]
     cdef unsigned char sk[64]
     cdef int ret
+    cdef unsigned char[::1] sk_out
 
     # sk holds the caller's seed from the memcpy on, so it is wiped on every
     # way out, the failed-keypair raise included (INVARIANT-6).
     try:
-        memcpy(sk, <const unsigned char*>seed, 32)
+        memcpy(sk, &seed[0], 32)
         ret = ama_ed25519_keypair(pk, sk)
         if ret != 0:
             raise RuntimeError(f"ama_ed25519_keypair failed (rc={ret})")
         public_key = bytes(pk[:32])
-        secret_key = bytes(sk[:64])
+        # Copied into a bytearray through a typed view: slicing the C array
+        # (sk[:64]) would first mint an immutable bytes no caller can wipe.
+        secret_key = bytearray(64)
+        sk_out = secret_key
+        memcpy(&sk_out[0], sk, 64)
     finally:
         ama_secure_memzero(sk, 64)
     # FIPS 140-3 pairwise consistency test (INVARIANT-41), as in
@@ -101,7 +107,7 @@ def cy_ed25519_keypair(bytes seed):
     return (public_key, secret_key)
 
 
-def cy_ed25519_sign(bytes message, bytes secret_key):
+def cy_ed25519_sign(bytes message, const unsigned char[::1] secret_key):
     """
     Sign message with Ed25519 via native C.
     Returns 64-byte signature.
@@ -115,7 +121,7 @@ def cy_ed25519_sign(bytes message, bytes secret_key):
     cdef unsigned char sk_buf[64]
     cdef int ret
 
-    memcpy(sk_buf, <const unsigned char*>secret_key, 64)
+    memcpy(sk_buf, &secret_key[0], 64)
     ret = ama_ed25519_sign(
         sig,
         <const uint8_t*>message, len(message),

@@ -36,6 +36,7 @@ exempt, and the same text anywhere else under ``docs/`` is still refused.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 import subprocess
 from pathlib import Path
@@ -75,17 +76,26 @@ V4_HEADING = "## [4.0.0] - 2026-08-01\n"
 #: section was history to ``check_documented_counts.py``; headed
 #: ``Unreleased`` it is the release notes being built, and the gate refused
 #: the figure.  Named here so the exception is exactly one substitution.
-GLANCE_CORRECTION = ("105 native entry points", "107 native entry points")
+GLANCE_CORRECTION = ("105 native entry points", "112 native entry points")
 
 #: The two edits inside the retained tail, both on the 5.0.0 row of the
 #: Version History Summary.  The row dated a release that was never tagged
 #: (2026-09-10, the same false date the heading carried), and it totalled
-#: ten breaking changes against a glance table of eleven.  Each substitution
+#: ten breaking changes against a glance table of eleven; the total now
+#: follows the glance table, twelve since row 24 (below).  Each substitution
 #: must occur exactly once in the tail, so neither can widen into a licence.
 SUMMARY_ROW_CORRECTIONS = (
     ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | 2026-10-08 |"),
-    ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d711 \u2014 see `[5.0.0]`"),
+    ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d712 \u2014 see `[5.0.0]`"),
 )
+
+#: The glance table is the 5.0.0 release notes being built, so a behavioural
+#: or breaking change made before the tag is a new row of it: leaving one out
+#: would make the table false.  Rows the relocation pinned end at 23; rows
+#: appended since are peeled off before reassembly by :func:`_peel_appended_glance_rows`,
+#: which accepts only rows numbered 24, 25, ... in order, directly after row
+#: 23.  An edit to a pinned row, or a row inserted among them, still fails.
+LAST_PINNED_GLANCE_ROW = 23
 
 #: The one edit inside the retained preamble: the ``Last Updated`` row of the
 #: Document Information table.  The pre-relocation file was stamped
@@ -96,6 +106,31 @@ SUMMARY_ROW_CORRECTIONS = (
 #: :data:`BASE_CHANGELOG_SHA256` stays the hash of the pre-relocation file.
 #: A stamp that moves without moving this row fails the exactly-once check.
 PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-08 |"),)
+
+
+_GLANCE_ROW_RE = re.compile(r"^\| (\d+) \| .*\n", re.M)
+
+
+def _peel_appended_glance_rows(glance: str) -> str:
+    """``glance`` without the rows appended after :data:`LAST_PINNED_GLANCE_ROW`."""
+    rows = list(_GLANCE_ROW_RE.finditer(glance))
+    numbers = [int(row.group(1)) for row in rows]
+    pinned = [n for n in numbers if n <= LAST_PINNED_GLANCE_ROW]
+    assert pinned == list(range(1, LAST_PINNED_GLANCE_ROW + 1)), pinned
+    appended = rows[len(pinned) :]
+    expected = list(range(LAST_PINNED_GLANCE_ROW + 1, LAST_PINNED_GLANCE_ROW + 1 + len(appended)))
+    assert [int(row.group(1)) for row in appended] == expected, (
+        "rows after the pinned glance table must be numbered on from "
+        f"{LAST_PINNED_GLANCE_ROW + 1}, in order: {numbers}"
+    )
+    if not appended:
+        return glance
+    start, end = appended[0].start(), appended[-1].end()
+    assert start == rows[len(pinned) - 1].end(), "an appended row must follow the last pinned row"
+    assert all(
+        a.end() == b.start() for a, b in itertools.pairwise(appended)
+    ), "appended glance rows must be contiguous"
+    return glance[:start] + glance[end:]
 
 
 def _journal_body(journal: str) -> str:
@@ -149,7 +184,7 @@ class TestTheTwoFilesReassembleTheOriginal:
         ]
         split_at = _line_index(glance_and_classic, FIRST_CLASSIC_ENTRY)
         before, after = GLANCE_CORRECTION
-        glance = glance_and_classic[:split_at].replace(after, before)
+        glance = _peel_appended_glance_rows(glance_and_classic[:split_at].replace(after, before))
         classic = glance_and_classic[split_at:]
         completion = _line_index(moved_release, COMPLETION_ENTRY)
         tail = changelog[_line_index(changelog, V4_HEADING) :]
@@ -171,6 +206,36 @@ class TestTheTwoFilesReassembleTheOriginal:
             + tail
         )
         assert hashlib.sha256(rebuilt.encode("utf-8")).hexdigest() == BASE_CHANGELOG_SHA256
+
+
+_PINNED_ROWS = "".join(f"| {n} | Behavioural | row {n} |\n" for n in range(1, 24))
+
+
+class TestAppendedGlanceRows:
+    """The peel admits appended rows and nothing else (RANGE; the reassembly
+    test above is the PIN: without the peel, row 24 breaks the hash)."""
+
+    def test_appended_rows_are_peeled(self) -> None:
+        appended = "| 24 | **Breaking** | new |\n| 25 | Behavioural | n |\n"
+        table = "head\n" + _PINNED_ROWS + appended + "\ntail\n"
+        assert _peel_appended_glance_rows(table) == "head\n" + _PINNED_ROWS + "\ntail\n"
+
+    def test_no_appended_rows_is_the_identity(self) -> None:
+        table = "head\n" + _PINNED_ROWS + "\ntail\n"
+        assert _peel_appended_glance_rows(table) == table
+
+    def test_a_skipped_number_is_refused(self) -> None:
+        with pytest.raises(AssertionError, match="numbered on"):
+            _peel_appended_glance_rows(_PINNED_ROWS + "| 25 | Behavioural | n |\n")
+
+    def test_a_row_inserted_among_the_pinned_rows_is_refused(self) -> None:
+        rows = _PINNED_ROWS.replace("| 23 |", "| 24 | Behavioural | early |\n| 23 |")
+        with pytest.raises(AssertionError):
+            _peel_appended_glance_rows(rows)
+
+    def test_an_appended_row_after_a_gap_is_refused(self) -> None:
+        with pytest.raises(AssertionError, match="follow the last pinned row"):
+            _peel_appended_glance_rows(_PINNED_ROWS + "\n| 24 | Behavioural | n |\n")
 
 
 def test_the_stamp_is_not_older_than_the_newest_entry() -> None:

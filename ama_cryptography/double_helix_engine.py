@@ -75,6 +75,7 @@ from ama_cryptography.equations import (
     PHI,
     PHI_CUBED,
     SIGMA_QUADRATIC_THRESHOLD,
+    _squared_distance,
     calculate_sigma_quadratic,
     enforce_sigma_quadratic_threshold,
     initialize_ethical_matrix,
@@ -666,7 +667,8 @@ class AmaEquationEngine:
             ValueError: ``initial_state`` is not 1-D, its length is not
                 ``state_dim``, ``max_steps`` is negative, or ``tolerance``
                 is negative or non-finite (NaN and inf are refused for both
-                methods, not interpreted).
+                methods, not interpreted), or the helix path's Lyapunov
+                value ||x - x*||^2 exceeds the largest finite float.
 
         Example:
             >>> engine = AmaEquationEngine(state_dim=8, random_seed=42)
@@ -1123,13 +1125,11 @@ class AvaDescent:
                 nxt = state + alpha * gradient
             moved = norm(nxt - state)
             state = nxt
-            try:
-                value = lyapunov_function(state, tgt)
-            except OverflowError:
-                # Vec.__pow__ raises past the float range (1e200 ** 2)
-                # instead of yielding inf, which would bypass the refusal
-                # below (review finding, 2026-10-06).
-                value = math.inf
+            # The kernel reads a value past the float range as +inf (a square
+            # past the range raises rather than yielding inf, which bypassed
+            # the refusal below -- review finding, 2026-10-06), so the one
+            # finiteness check that follows names every overflow.
+            value = _squared_distance(state, tgt)
             if not math.isfinite(value):
                 # Finite operands are not closed under floating-point
                 # arithmetic: descend([1e308], [-1e308]) passes entry

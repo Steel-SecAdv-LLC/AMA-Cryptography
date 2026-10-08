@@ -322,9 +322,24 @@ def _fake_dpkg_query(binroot: Path) -> None:
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
 
+def _isolated_env() -> dict[str, str]:
+    """The caller's environment minus the job-scoped budget state.
+
+    The helper shares one deadline across every call in a CI job through
+    ``$RUNNER_TEMP``.  This suite runs INSIDE such a job, after the job's own
+    apt-install.sh calls, so inheriting ``RUNNER_TEMP`` would hand every test
+    the job's real, partly spent deadline.  Each test gets its own budget
+    unless it names a state file itself.
+    """
+    e = dict(os.environ)
+    e.pop("RUNNER_TEMP", None)
+    e.pop("APT_BUDGET_STATE", None)
+    return e
+
+
 def _run_helper(tmp_path: Path, args: list[str], **env: str) -> subprocess.CompletedProcess[str]:
     binroot = _fake_sudo(tmp_path)
-    e = dict(os.environ)
+    e = _isolated_env()
     e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"
     e.update(env)
     # These tests exercise ordering, bounding and message content — not the
@@ -465,7 +480,7 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
     )
     apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
 
-    env = dict(os.environ)
+    env = _isolated_env()
     env["PATH"] = f"{binroot}{os.pathsep}{env['PATH']}"
     env.update(
         APT_ATTEMPT_TIMEOUT="2",
@@ -544,7 +559,7 @@ def test_the_total_budget_bounds_the_whole_script(tmp_path: Path) -> None:
     apt.write_text('#!/usr/bin/env bash\ntrap "" TERM\nsleep 600\n', encoding="utf-8")
     apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
 
-    env = dict(os.environ)
+    env = _isolated_env()
     env["PATH"] = f"{binroot}{os.pathsep}{env['PATH']}"
     env.update(
         APT_ATTEMPT_TIMEOUT="2",
@@ -830,7 +845,7 @@ def test_a_timed_out_final_attempt_is_diagnosed_not_a_bare_124(tmp_path: Path) -
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-    e = dict(os.environ)
+    e = _isolated_env()
     e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"
     e.update(APT_ATTEMPTS="1", APT_ATTEMPT_TIMEOUT="1", APT_TOTAL_BUDGET="4")
     r = subprocess.run(["bash", str(HELPER_PATH), "cmake"], capture_output=True, text=True, env=e)
@@ -969,3 +984,111 @@ class TestLogicalLinesAndSegmentScopedExemption:
         gate.scan_text(line, "w.yml")
         elapsed = time.perf_counter() - start
         assert elapsed < 1.0, f"24 option tokens took {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# One budget per job
+# ---------------------------------------------------------------------------
+
+
+@_LINUX_ONLY
+def test_the_first_call_in_a_job_writes_the_shared_deadline(tmp_path: Path) -> None:
+    """The first call fixes the job's deadline at now + APT_TOTAL_BUDGET."""
+    state = tmp_path / "deadline"
+    before = int(time.time())
+    r = _run_helper(tmp_path, ["cppcheck"], APT_BUDGET_STATE=str(state))
+    assert r.returncode == 0, r.stderr
+    deadline = int(state.read_text(encoding="utf-8"))
+    assert before + 600 <= deadline <= int(time.time()) + 600
+
+
+@_LINUX_ONLY
+def test_a_later_call_draws_on_what_the_job_has_left(tmp_path: Path) -> None:
+    """Calls in one job share one deadline instead of each getting a fresh one.
+
+    The budget was per CALL, so a job's worst case grew with its call count:
+    `Test ubuntu-latest / Python 3.10` (run 37786915916) calls the helper
+    three times, spent 734 s in two retrying calls, and was cancelled at its
+    30-minute timeout with pytest unfinished.  A call that finds the job's
+    deadline already passed must fail at once with the diagnosis, not start a
+    budget of its own (PIN: ignoring APT_BUDGET_STATE makes this install
+    succeed).
+    """
+    state = tmp_path / "deadline"
+    state.write_text(f"{int(time.time()) - 1}\n", encoding="utf-8")
+    r = _run_helper(tmp_path, ["cppcheck"], APT_BUDGET_STATE=str(state))
+    assert r.returncode == 1, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "shared by every" in r.stderr and "is exhausted" in r.stderr
+    assert "installed" not in r.stdout
+
+
+@_LINUX_ONLY
+def test_a_corrupt_deadline_is_refused_not_guessed(tmp_path: Path) -> None:
+    state = tmp_path / "deadline"
+    state.write_text("soon\n", encoding="utf-8")
+    r = _run_helper(tmp_path, ["cppcheck"], APT_BUDGET_STATE=str(state))
+    assert r.returncode == 2
+    assert "not a deadline" in r.stderr
+
+
+def _timeout_floor_minutes(value: object) -> int | None:
+    """The smallest timeout a job can run under: a literal, or the least
+    integer literal in an expression such as
+    ``${{ github.event_name == 'schedule' && 50 || 30 }}``."""
+    if isinstance(value, int):
+        return value
+    # Quoted operands are labels, not durations: 'macos-15-intel' is no
+    # 15-minute timeout.
+    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", "", str(value))
+    literals = [int(n) for n in re.findall(r"(?<![\w.-])(\d+)(?![\w.-])", unquoted)]
+    return min(literals) if literals else None
+
+
+def test_every_job_s_apt_budget_fits_inside_half_its_timeout() -> None:
+    """A job may spend at most half its timeout on dependencies.
+
+    With the budget shared across a job's calls, a job's worst case in the
+    helper is its effective APT_TOTAL_BUDGET -- the job's (or workflow's) env
+    override, or the script default -- however many calls it makes.  Thirteen
+    jobs could not fit that worst case into half their timeout when this was
+    first measured; each now sets its budget explicitly.  Reads the shipped
+    default, so raising it re-checks every caller.
+    """
+    import yaml
+
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    match = re.search(r'TOTAL_BUDGET="\$\{APT_TOTAL_BUDGET:-(\d+)\}"', body)
+    assert match is not None, "could not find the total budget default"
+    default = int(match.group(1))
+
+    workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml"))
+    assert workflows, "no workflows found"
+    checked = 0
+    failures: list[str] = []
+    for wf in workflows:
+        doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        wf_env = doc.get("env") or {}
+        for job_id, job in (doc.get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            calls = [st for st in steps if "apt-install.sh" in str(st.get("run", ""))]
+            if not calls:
+                continue
+            checked += 1
+            for st in calls:
+                if "APT_TOTAL_BUDGET" in (st.get("env") or {}):
+                    failures.append(
+                        f"{wf.name}:{job_id}: APT_TOTAL_BUDGET set on a step; the "
+                        "deadline is fixed by the job's first call, so set it on the job"
+                    )
+            job_env = job.get("env") or {}
+            budget = int(job_env.get("APT_TOTAL_BUDGET", wf_env.get("APT_TOTAL_BUDGET", default)))
+            floor = _timeout_floor_minutes(job.get("timeout-minutes"))
+            if floor is None:
+                failures.append(f"{wf.name}:{job_id}: installs packages with no timeout-minutes")
+            elif budget > floor * 60 // 2:
+                failures.append(
+                    f"{wf.name}:{job_id}: apt budget {budget}s exceeds half of its "
+                    f"{floor}-minute timeout ({floor * 30}s)"
+                )
+    assert checked >= 30, f"only {checked} jobs found calling the helper; the scan is broken"
+    assert not failures, "\n".join(failures)

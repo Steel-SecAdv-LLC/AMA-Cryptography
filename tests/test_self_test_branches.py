@@ -27,7 +27,6 @@ import hashlib
 import time
 from collections.abc import Generator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable, cast
 
 import pytest
@@ -379,7 +378,7 @@ class TestKatFailureBranches:
             fresh_cts.add(ct)
             return ct, ss
 
-        def _lying_decaps(ps: int | str, ct: bytes, sk: bytes) -> bytes:
+        def _lying_decaps(ps: int | str, ct: bytes, sk: bytes) -> bytes | bytearray:
             if ct in fresh_cts:
                 return real_decaps(ps, ct, sk)
             return b"\x00" * 32
@@ -637,11 +636,12 @@ class TestRunSelfTestsFailures:
     ) -> None:
         """Two identical consecutive RNG draws must fail the runner.
 
-        The stuck source is installed on ``_self_test``'s own ``secrets``
-        binding, which only the RNG stage reads.  Patching
-        ``secrets.token_bytes`` itself reached every stage that draws
-        entropy, and an earlier one failed first: the assertions held
-        whether or not the RNG stage worked.
+        The stuck source is installed on ``_self_test``'s own
+        ``entropy_source`` binding, which only the RNG stage reads.  Patching
+        the process-wide source reached every stage that draws entropy, and
+        an earlier one failed first: the assertions held whether or not the
+        RNG stage worked.  (The binding was ``secrets`` until the stage moved
+        to the native ``ama_random_bytes`` seam.)
         """
         from ama_cryptography._self_test import (
             _run_self_tests,
@@ -651,12 +651,10 @@ class TestRunSelfTestsFailures:
             module_status,
         )
 
-        fixed = b"\xaa" * 32
+        def _stuck_fill(buf: bytearray) -> None:
+            buf[:] = b"\xaa" * len(buf)
 
-        def _fake_token(n: int) -> bytes:
-            return fixed[:n]
-
-        monkeypatch.setattr(st, "secrets", SimpleNamespace(token_bytes=_fake_token))
+        monkeypatch.setattr(st, "entropy_source", lambda: _stuck_fill)
         try:
             assert _run_self_tests() is False
             assert module_status() == "ERROR"
@@ -673,9 +671,9 @@ class TestRunSelfTestsFailures:
     ) -> None:
         """An exception from the entropy source fails the RNG stage.
 
-        Installed on ``_self_test``'s own ``secrets`` binding, as above: the
-        process-wide patch this used to make failed the Ed25519 KAT first and
-        still passed with the RNG stage's exception handling removed.
+        Installed on ``_self_test``'s own ``entropy_source`` binding, as
+        above: the process-wide patch this used to make failed the Ed25519 KAT
+        first and still passed with the RNG stage's exception handling removed.
         """
         from ama_cryptography._self_test import (
             _run_self_tests,
@@ -685,10 +683,10 @@ class TestRunSelfTestsFailures:
             module_status,
         )
 
-        def _boom(_n: int) -> bytes:
+        def _boom(_buf: bytearray) -> None:
             raise RuntimeError("simulated RNG failure")
 
-        monkeypatch.setattr(st, "secrets", SimpleNamespace(token_bytes=_boom))
+        monkeypatch.setattr(st, "entropy_source", lambda: _boom)
         try:
             assert _run_self_tests() is False
             assert module_status() == "ERROR"
