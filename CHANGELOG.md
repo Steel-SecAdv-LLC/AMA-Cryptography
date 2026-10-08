@@ -38,20 +38,51 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **`benchmarks/multi_library_results.json`, `pqc_results.json` and
   `competitive.html` are a single-host, single-commit measurement of the
-  5.0.0 tree** (`5b20def`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
-  SHA-NI, the canonical-host class; method and full data in
-  `docs/BENCHMARK_HISTORY.md`). They replace the 2026-07-29 record of the
-  3.4.0 tree, measured on a host without those ISA extensions. AMA leads
-  outright on SHA3-256 (10.3% over libgcrypt), HMAC-SHA3-256, Ed25519
-  verify (1.64x libsodium), both secp256k1 ECDSA sides and ML-DSA-65
-  sign/verify (2.3x/2.0x OpenSSL 4.0.3); it trails where the page says
-  and why (OpenSSL's VAES AES-GCM pipeline 10.3x against the INVARIANT-20
+  5.0.0 tree** (`d55db17`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  SHA-NI, the canonical-host class; method, full data and the three
+  same-day passes' spans in `docs/BENCHMARK_HISTORY.md`). They replace
+  the 2026-07-29 record of the 3.4.0 tree, measured on a host without
+  those ISA extensions. AMA leads outright on HMAC-SHA3-256 (1st in all
+  three same-day runs), Ed25519 verify (1.63x libsodium), both secp256k1
+  ECDSA sides and ML-DSA-65 sign/verify (3.5x/1.9x OpenSSL 4.0.3);
+  SHA3-256 is 2nd of 6 on the committed run, a pair with libgcrypt that
+  races within this host's run-to-run variance (AMA 10.3% ahead to 12.6%
+  behind across the same-day runs); it trails where the page says and
+  why (OpenSSL's VAES AES-GCM pipeline 10.4x against the INVARIANT-20
   constant-time default, Ed25519 sign 3rd of 6 behind peers that skip
   INVARIANT-51's per-signature derivation, the known ML-KEM
   vectorisation-breadth gap, PQC keygens carrying INVARIANT-41's pairwise
   test at the measured plane). The page's NOTES prose is reconciled to
-  the new ranks, which `tests/test_competitive_page.py` enforces against
-  the rendered table.
+  the committed ranks, which `tests/test_competitive_page.py` enforces
+  against the rendered table.
+- **The C harness attests the object its own process resolved** (review
+  finding on `8a26498`, Medium): a stamp that hashes a caller-supplied
+  path proves nothing about what the dynamic loader mapped —
+  LD_LIBRARY_PATH, RPATH or ldconfig can resolve another same-named
+  object. `multi_library_bench.cpp` now records `loaded_library` from
+  `dladdr(ama_sha3_256)` — the module that provided the symbol it
+  called, digested by that library's own SHA3 — and
+  `stamp_c_harness_provenance` consumes only that record, disowning any
+  result without it or whose loaded object is not byte-identical to the
+  attested backend. PINs
+  `test_a_differing_loaded_object_disowns_the_record` and
+  `test_a_record_without_the_harness_block_is_disowned`,
+  mutation-earned.
+- **Zero-step momentum keeps its documented contract** (review finding
+  on `8a26498`, Medium). The Jury stability bound is an operational
+  property of `descend`'s iteration (its fixed beta of 0.9), but it was
+  validated ahead of the `max_steps=0` path, so a constructible
+  operator raised where the docstring promises the initial state and an
+  empty history. The bound now binds only when a step will run. PIN
+  `test_zero_step_momentum_keeps_its_documented_contract`,
+  mutation-earned.
+- **The release date rolled 2026-10-07 → 2026-10-08 across the five
+  release-state documents** (review finding on `8a26498`, Low — its
+  tag-absence half is the documented convention: dating the documents
+  precedes the tag and the release gate fail-closes until they agree;
+  its staleness half was correct under the last-merge-before-the-tag
+  rule, the same rule as the 10-06 → 10-07 roll). `check_release_state`
+  and `check_version_consistency` both exit 0 after the roll.
 - **The record cannot be mislabelled or misattributed.** Three closures,
   two of them review findings on this entry's own first push:
   `pqc_comparative_bench.py` hardcoded "OpenSSL 4.0.1" into every row —
@@ -100,7 +131,13 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   design); they now attest a synthetic pinned backend, so the pinned
   path runs identically on every platform while the macOS loader shape
   is asserted explicitly in the demotion test, and both mutations were
-  re-earned against the rewritten tests.
+  re-earned against the rewritten tests. The second CI round on
+  `8a26498` caught the same live-loader dependence in the two
+  PRE-EXISTING attribution tests, whose `attributable: true` the new
+  demotion correctly breaks off-Linux; they now pin the synthetic
+  backend too, and the whole module passes under simulated
+  non-mapped-bytes loader semantics (measured: all 14 with the live
+  attestation forced unpinned).
 - **A representable variance is computed, not refused** (review finding,
   Medium). `AvaDescent._variance` summed raw squared deviations, so
   `[1e154, -1e154]` overflowed the running sum and was refused although

@@ -55,11 +55,41 @@ def _fake_git(monkeypatch: pytest.MonkeyPatch, *, toplevel: str | None, status: 
     monkeypatch.setattr(cb, "_git_stdout", fake)
 
 
+def _pinned_attestation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: bytes) -> Path:
+    """Attest a synthetic backend with mapped-bytes evidence.
+
+    The first form of these tests read the LIVE loader's attestation,
+    which carries mapped-bytes evidence only where the loader allows a
+    procfs re-read -- green on the Linux lanes, red on macOS (measured:
+    ``Python 3.14 on macos-latest`` on a3508b6, where the preload
+    digest is not of the mapped bytes by design).  A synthetic pinned
+    backend exercises the pinned path identically on every platform;
+    the no-evidence path is the demotion test below, which every macOS
+    lane also takes against its live loader semantics.
+    """
+    import ama_cryptography._self_test as self_test
+    from ama_cryptography.pqc_backends import native_sha3_256
+
+    lib = tmp_path / "libama_cryptography_synthetic.so"
+    lib.write_bytes(payload)
+    attestation = {
+        "native_backend": {
+            "loaded": True,
+            "path": str(lib),
+            "preload_digest_hex": native_sha3_256(payload).hex(),
+            "preload_digest_is_of_mapped_bytes": True,
+        }
+    }
+    monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
+    return lib
+
+
 class TestTheBlockNamesOnlyWhatItCanShow:
     def test_a_clean_checkout_that_is_the_imported_build_is_attributed(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Non-vacuity: every refusal below could otherwise be a block that never attributes."""
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
         block = cb._measurement_provenance()
         assert block["attributable"] is True
@@ -101,9 +131,10 @@ class TestTheBlockNamesOnlyWhatItCanShow:
         assert block["dirty_paths"] == ["src/c/ama_sha3.c"]
 
     def test_unrelated_dirt_is_recorded_without_disowning_the_run(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """An earlier run's output is not a change to the measured build."""
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT), status=" M benchmarks/pqc_results.json\n")
         block = cb._measurement_provenance()
         assert block["attributable"] is True
@@ -120,37 +151,6 @@ class TestTheNativeArtifactIsPinned:
     timings published as ``attributable: true`` under the fresh commit.
     """
 
-    @staticmethod
-    def _pinned_attestation(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: bytes
-    ) -> Path:
-        """Attest a synthetic backend with mapped-bytes evidence.
-
-        The first form of these tests read the LIVE loader's attestation,
-        which carries mapped-bytes evidence only where the loader allows a
-        procfs re-read -- green on the Linux lanes, red on macOS (measured:
-        ``Python 3.14 on macos-latest`` on a3508b6, where the preload
-        digest is not of the mapped bytes by design).  A synthetic pinned
-        backend exercises the pinned path identically on every platform;
-        the no-evidence path is the demotion test below, which every macOS
-        lane also takes against its live loader semantics.
-        """
-        import ama_cryptography._self_test as self_test
-        from ama_cryptography.pqc_backends import native_sha3_256
-
-        lib = tmp_path / "libama_cryptography_synthetic.so"
-        lib.write_bytes(payload)
-        attestation = {
-            "native_backend": {
-                "loaded": True,
-                "path": str(lib),
-                "preload_digest_hex": native_sha3_256(payload).hex(),
-                "preload_digest_is_of_mapped_bytes": True,
-            }
-        }
-        monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
-        return lib
-
     def test_the_block_pins_the_loaded_backend_and_its_build(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -162,7 +162,7 @@ class TestTheNativeArtifactIsPinned:
         from ama_cryptography.pqc_backends import native_sha3_256
 
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         block = cb._measurement_provenance()
         artifact = block["native_artifact"]
         assert isinstance(artifact, dict), artifact
@@ -183,7 +183,7 @@ class TestTheNativeArtifactIsPinned:
         from ama_cryptography.pqc_backends import native_sha3_256
 
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         digest = native_sha3_256(b"synthetic backend bytes").hex()
         results = tmp_path / "multi_library_results.json"
         results.write_text(
@@ -217,7 +217,7 @@ class TestTheNativeArtifactIsPinned:
         from ama_cryptography.pqc_backends import native_sha3_256
 
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         results = tmp_path / "multi_library_results.json"
         results.write_text(
             json.dumps(
@@ -247,7 +247,7 @@ class TestTheNativeArtifactIsPinned:
         hashed nothing — cannot name the object its process resolved, so
         the stamp refuses the attribution outright."""
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         results = tmp_path / "multi_library_results.json"
         results.write_text(json.dumps({"results": []}), encoding="utf-8")
         block = cb.stamp_c_harness_provenance(results)

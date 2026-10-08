@@ -116,9 +116,9 @@ plus OpenSSL 4.0.3 for the post-quantum pair, with the results AMA loses reporte
 same weight as the results it wins, and an engineering account of each gap.</p>
 
 <div class="tiles">
-  <div class="tile win"><div class="v">7</div><div class="k">primitives where AMA is
+  <div class="tile win"><div class="v">6</div><div class="k">primitives where AMA is
     fastest of all implementations measured</div></div>
-  <div class="tile behind"><div class="v">10</div><div class="k">where at least one
+  <div class="tile behind"><div class="v">11</div><div class="k">where at least one
     peer is faster</div></div>
   <div class="tile sole"><div class="v">1</div><div class="k">measured with no peer
     implementation to compare against</div></div>
@@ -165,155 +165,155 @@ entire field.</p>
 
       <div class="cmp">
         <div class="cmp-h"><span>SHA3-256</span>
-          <span class="cmp-r up">1.10×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 8,087</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:90.71%"></div>
-          <span class="rl">libgcrypt 7,335</span></div>
+          <span class="cmp-r dn">0.89×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:88.80%"></div>
+          <span class="rl">AMA 6,883</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
+          <span class="rl">libgcrypt 7,751</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>HMAC-SHA3-256</span>
-          <span class="cmp-r up">1.11×</span></div>
+          <span class="cmp-r up">1.02×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 8,557</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:89.85%"></div>
-          <span class="rl">libgcrypt 7,689</span></div>
+          <span class="rl">AMA 6,928</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:97.71%"></div>
+          <span class="rl">OpenSSL 6,769</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>AES-256-GCM</span>
           <span class="cmp-r dn">0.10×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:9.69%"></div>
-          <span class="rl">AMA 17,153</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:9.64%"></div>
+          <span class="rl">AMA 17,088</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 176,993</span></div>
+          <span class="rl">OpenSSL 177,252</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ChaCha20-Poly1305</span>
-          <span class="cmp-r dn">0.31×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:31.25%"></div>
-          <span class="rl">AMA 15,320</span></div>
+          <span class="cmp-r dn">0.32×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:31.56%"></div>
+          <span class="rl">AMA 15,197</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 49,031</span></div>
+          <span class="rl">OpenSSL 48,149</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>Ed25519 sign</span>
-          <span class="cmp-r dn">0.78×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:78.42%"></div>
-          <span class="rl">AMA 46,772</span></div>
+          <span class="cmp-r dn">0.82×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:82.12%"></div>
+          <span class="rl">AMA 49,649</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">libsodium 59,640</span></div>
+          <span class="rl">libsodium 60,461</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>Ed25519 verify</span>
-          <span class="cmp-r up">1.64×</span></div>
+          <span class="cmp-r up">1.63×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 35,228</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:60.81%"></div>
-          <span class="rl">libsodium 21,423</span></div>
+          <span class="rl">AMA 35,466</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:61.20%"></div>
+          <span class="rl">libsodium 21,705</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>X25519 scalar-mult</span>
           <span class="cmp-r dn">0.76×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:76.49%"></div>
-          <span class="rl">AMA 22,833</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:76.29%"></div>
+          <span class="rl">AMA 22,846</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 29,852</span></div>
+          <span class="rl">OpenSSL 29,948</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>P-256 ECDSA sign</span>
-          <span class="cmp-r dn">0.16×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:15.88%"></div>
-          <span class="rl">AMA 8,134</span></div>
+          <span class="cmp-r dn">0.22×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:21.75%"></div>
+          <span class="rl">AMA 8,120</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 51,223</span></div>
+          <span class="rl">OpenSSL 37,327</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>P-256 ECDSA verify</span>
-          <span class="cmp-r dn">0.31×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:31.12%"></div>
-          <span class="rl">AMA 5,377</span></div>
+          <span class="cmp-r dn">0.40×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:39.85%"></div>
+          <span class="rl">AMA 5,223</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 17,277</span></div>
+          <span class="rl">OpenSSL 13,105</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>secp256k1 ECDSA sign</span>
-          <span class="cmp-r up">1.69×</span></div>
+          <span class="cmp-r up">1.67×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 10,843</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:59.00%"></div>
-          <span class="rl">Botan 6,397</span></div>
+          <span class="rl">AMA 10,873</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:59.90%"></div>
+          <span class="rl">Botan 6,513</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>secp256k1 ECDSA verify</span>
-          <span class="cmp-r up">1.09×</span></div>
+          <span class="cmp-r up">1.05×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 4,378</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:91.91%"></div>
-          <span class="rl">Botan 4,023</span></div>
+          <span class="rl">AMA 4,389</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:95.66%"></div>
+          <span class="rl">Botan 4,198</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-DSA-65 keygen</span>
-          <span class="cmp-r dn">0.39×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:39.26%"></div>
-          <span class="rl">AMA 1,320</span></div>
+          <span class="cmp-r dn">0.32×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:31.94%"></div>
+          <span class="rl">AMA 1,833</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 4.0.3 3,361</span></div>
+          <span class="rl">OpenSSL 4.0.3 5,740</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-DSA-65 sign</span>
-          <span class="cmp-r up">2.34×</span></div>
+          <span class="cmp-r up">3.55×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 3,542</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:42.66%"></div>
-          <span class="rl">OpenSSL 4.0.3 1,511</span></div>
+          <span class="rl">AMA 4,656</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:28.17%"></div>
+          <span class="rl">OpenSSL 4.0.3 1,312</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-DSA-65 verify</span>
-          <span class="cmp-r up">1.96×</span></div>
+          <span class="cmp-r up">1.92×</span></div>
         <div class="rowbar"><div class="rb ama" style="width:100.00%"></div>
-          <span class="rl">AMA 11,942</span></div>
-        <div class="rowbar"><div class="rb peer" style="width:50.98%"></div>
-          <span class="rl">OpenSSL 4.0.3 6,088</span></div>
+          <span class="rl">AMA 12,228</span></div>
+        <div class="rowbar"><div class="rb peer" style="width:52.08%"></div>
+          <span class="rl">OpenSSL 4.0.3 6,369</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-KEM-1024 keygen</span>
-          <span class="cmp-r dn">0.47×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:47.10%"></div>
-          <span class="rl">AMA 3,792</span></div>
+          <span class="cmp-r dn">0.48×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:47.56%"></div>
+          <span class="rl">AMA 3,884</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 4.0.3 8,052</span></div>
+          <span class="rl">OpenSSL 4.0.3 8,167</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-KEM-1024 encaps</span>
-          <span class="cmp-r dn">0.53×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:52.54%"></div>
-          <span class="rl">AMA 19,418</span></div>
+          <span class="cmp-r dn">0.52×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:52.28%"></div>
+          <span class="rl">AMA 19,209</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 4.0.3 36,961</span></div>
+          <span class="rl">OpenSSL 4.0.3 36,743</span></div>
       </div>
 
       <div class="cmp">
         <div class="cmp-h"><span>ML-KEM-1024 decaps</span>
-          <span class="cmp-r dn">0.66×</span></div>
-        <div class="rowbar"><div class="rb ama" style="width:66.28%"></div>
-          <span class="rl">AMA 15,982</span></div>
+          <span class="cmp-r dn">0.67×</span></div>
+        <div class="rowbar"><div class="rb ama" style="width:67.05%"></div>
+          <span class="rl">AMA 16,256</span></div>
         <div class="rowbar"><div class="rb peer" style="width:100.00%"></div>
-          <span class="rl">OpenSSL 4.0.3 24,114</span></div>
+          <span class="rl">OpenSSL 4.0.3 24,244</span></div>
       </div>
 </div>
 
@@ -322,24 +322,24 @@ entire field.</p>
 <thead><tr><th>Primitive</th><th>AMA ops/s</th><th>Best peer ops/s</th>
 <th>Ratio</th><th>Standing</th></tr></thead>
 <tbody>
-<tr><td class="p">SHA3-256<div class="note">libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA&#x27;s single-stream scalar permutation places first of six, 10.3% ahead of libgcrypt (the x4 AVX2 path batches four independent hashes and does not apply to one stream).</div></td><td class="n">8,087</td><td class="n">7,335</td><td class="n">1.10× libgcrypt</td><td><span class="b b-win">fastest of 6</span></td></tr>
-<tr><td class="p">HMAC-SHA3-256<div class="note">Tracks the SHA3-256 permutation result above; first of four here, 11.3% ahead of libgcrypt.</div></td><td class="n">8,557</td><td class="n">7,689</td><td class="n">1.11× libgcrypt</td><td><span class="b b-win">fastest of 4</span></td></tr>
-<tr><td class="p">AES-256-GCM<div class="note">AMA defaults to constant-time AES (INVARIANT-20), which never indexes a table with key-dependent data. OpenSSL leads 10.3x through an AES-NI + VAES + VPCLMULQDQ pipeline tuned end-to-end for this one construction, with libgcrypt, Nettle and libsodium also ahead on this host. AMA places 5th of 8, ahead of Botan, mbedTLS and wolfSSL on this build.</div></td><td class="n">17,153</td><td class="n">176,993</td><td class="n">0.10× OpenSSL</td><td><span class="b b-behind">5<span class="sup">of</span>8</span></td></tr>
-<tr><td class="p">ChaCha20-Poly1305<div class="note">OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; libsodium is 1.45x ahead. AMA&#x27;s is SIMD but not vectorised to that width. Third of seven.</div></td><td class="n">15,320</td><td class="n">49,031</td><td class="n">0.31× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>7</span></td></tr>
-<tr><td class="p">Ascon-128 AEAD</td><td class="n">6,357</td><td class="n">—</td><td class="n">—</td><td><span class="b b-sole">sole implementer</span></td></tr>
-<tr><td class="p">Ed25519 sign<div class="note">libsodium and wolfSSL lead by 1.28x and 1.20x. AMA re-derives the public half from the scalar on every signature and refuses a stored half the scalar does not generate (INVARIANT-51); the peers read the cached public half out of the key. Third of six.</div></td><td class="n">46,772</td><td class="n">59,640</td><td class="n">0.78× libsodium</td><td><span class="b b-behind">3<span class="sup">of</span>6</span></td></tr>
-<tr><td class="p">Ed25519 verify<div class="note">Fastest of six, 1.64x ahead of libsodium.</div></td><td class="n">35,228</td><td class="n">21,423</td><td class="n">1.64× libsodium</td><td><span class="b b-win">fastest of 6</span></td></tr>
-<tr><td class="p">X25519 scalar-mult<div class="note">OpenSSL and libsodium use dedicated field arithmetic with a fused multiply path. AMA is within 1.31x of OpenSSL and 1.13x of libsodium. Third of five.</div></td><td class="n">22,833</td><td class="n">29,852</td><td class="n">0.76× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>5</span></td></tr>
-<tr><td class="p">P-256 ECDSA sign<div class="note">OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation specific to this one curve. AMA uses its generic NIST-curve path, which serves P-256, P-384 and P-521 from one body of code.</div></td><td class="n">8,134</td><td class="n">51,223</td><td class="n">0.16× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
-<tr><td class="p">P-256 ECDSA verify<div class="note">Same generic-versus-curve-specific split as P-256 signing.</div></td><td class="n">5,377</td><td class="n">17,277</td><td class="n">0.31× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
-<tr><td class="p">secp256k1 ECDSA sign</td><td class="n">10,843</td><td class="n">6,397</td><td class="n">1.69× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
-<tr><td class="p">secp256k1 ECDSA verify<div class="note">Fastest of three: 8.8% ahead of Botan and 1.45x ahead of OpenSSL. The signing side also leads outright (1.69x Botan, 3.1x OpenSSL), after the fixed-base comb landed (#379).</div></td><td class="n">4,378</td><td class="n">4,023</td><td class="n">1.09× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
-<tr><td class="p">ML-DSA-65 keygen<div class="note">2.5x behind at this plane — but the AMA row is keygen plus the INVARIANT-41 pairwise consistency test (a full ML-DSA sign and verify before the keypair is released), which the peer row does not perform. Signing (2.3x) and verification (2.0x) both lead outright.</div></td><td class="n">1,320</td><td class="n">3,361</td><td class="n">0.39× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
-<tr><td class="p">ML-DSA-65 sign</td><td class="n">3,542</td><td class="n">1,511</td><td class="n">2.34× OpenSSL 4.0.3</td><td><span class="b b-win">fastest of 2</span></td></tr>
-<tr><td class="p">ML-DSA-65 verify</td><td class="n">11,942</td><td class="n">6,088</td><td class="n">1.96× OpenSSL 4.0.3</td><td><span class="b b-win">fastest of 2</span></td></tr>
-<tr><td class="p">ML-KEM-1024 keygen<div class="note">2.1x behind — and at this Python plane the AMA row also carries the FIPS 140-3 pairwise consistency test (INVARIANT-41: a full encapsulate/decapsulate before any keypair is released), which the peer&#x27;s keygen does not run.</div></td><td class="n">3,792</td><td class="n">8,052</td><td class="n">0.47× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
-<tr><td class="p">ML-KEM-1024 encaps<div class="note">The known lattice gap. AMA&#x27;s ML-KEM is SIMD-accelerated (1.28x over scalar, AVX-512 adding a further 1.22x) but is not vectorised across the breadth OpenSSL 4.0.3 reaches, which is 1.9x ahead here. Closing it is a multi-week vectorisation project, not a tuning pass, and it is not claimed as done.</div></td><td class="n">19,418</td><td class="n">36,961</td><td class="n">0.53× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
-<tr><td class="p">ML-KEM-1024 decaps<div class="note">Same vectorisation breadth gap as encapsulation; 1.5x behind.</div></td><td class="n">15,982</td><td class="n">24,114</td><td class="n">0.66× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
+<tr><td class="p">SHA3-256<div class="note">libgcrypt carries a hand-optimised Keccak permutation. AMA&#x27;s single-stream scalar permutation places second of six, 12.6% behind libgcrypt and ahead of Botan, OpenSSL, wolfSSL and Nettle — a pair that races within this host&#x27;s run-to-run variance (same-day runs span AMA 10.3% ahead to 12.6% behind; the x4 AVX2 path batches four independent hashes and does not apply to one stream).</div></td><td class="n">6,883</td><td class="n">7,751</td><td class="n">0.89× libgcrypt</td><td><span class="b b-behind">2<span class="sup">of</span>6</span></td></tr>
+<tr><td class="p">HMAC-SHA3-256<div class="note">Tracks the SHA3-256 permutation race above; first of four here, 2.3% ahead of OpenSSL, and first in each of the three same-day runs.</div></td><td class="n">6,928</td><td class="n">6,769</td><td class="n">1.02× OpenSSL</td><td><span class="b b-win">fastest of 4</span></td></tr>
+<tr><td class="p">AES-256-GCM<div class="note">AMA defaults to constant-time AES (INVARIANT-20), which never indexes a table with key-dependent data. OpenSSL leads 10.3x through an AES-NI + VAES + VPCLMULQDQ pipeline tuned end-to-end for this one construction, with libgcrypt, Nettle and libsodium also ahead on this host. AMA places 5th of 8, ahead of Botan, mbedTLS and wolfSSL on this build.</div></td><td class="n">17,088</td><td class="n">177,252</td><td class="n">0.10× OpenSSL</td><td><span class="b b-behind">5<span class="sup">of</span>8</span></td></tr>
+<tr><td class="p">ChaCha20-Poly1305<div class="note">OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; libsodium is 1.48x ahead. AMA&#x27;s is SIMD but not vectorised to that width. Third of seven.</div></td><td class="n">15,197</td><td class="n">48,149</td><td class="n">0.32× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>7</span></td></tr>
+<tr><td class="p">Ascon-128 AEAD</td><td class="n">6,319</td><td class="n">—</td><td class="n">—</td><td><span class="b b-sole">sole implementer</span></td></tr>
+<tr><td class="p">Ed25519 sign<div class="note">libsodium and wolfSSL lead by 1.22x and 1.14x. AMA re-derives the public half from the scalar on every signature and refuses a stored half the scalar does not generate (INVARIANT-51); the peers read the cached public half out of the key. Third of six.</div></td><td class="n">49,649</td><td class="n">60,461</td><td class="n">0.82× libsodium</td><td><span class="b b-behind">3<span class="sup">of</span>6</span></td></tr>
+<tr><td class="p">Ed25519 verify<div class="note">Fastest of six, 1.63x ahead of libsodium.</div></td><td class="n">35,466</td><td class="n">21,705</td><td class="n">1.63× libsodium</td><td><span class="b b-win">fastest of 6</span></td></tr>
+<tr><td class="p">X25519 scalar-mult<div class="note">OpenSSL and libsodium use dedicated field arithmetic with a fused multiply path. AMA is within 1.31x of OpenSSL and 1.12x of libsodium. Third of five.</div></td><td class="n">22,846</td><td class="n">29,948</td><td class="n">0.76× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>5</span></td></tr>
+<tr><td class="p">P-256 ECDSA sign<div class="note">OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation specific to this one curve. AMA uses its generic NIST-curve path, which serves P-256, P-384 and P-521 from one body of code.</div></td><td class="n">8,120</td><td class="n">37,327</td><td class="n">0.22× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
+<tr><td class="p">P-256 ECDSA verify<div class="note">Same generic-versus-curve-specific split as P-256 signing.</div></td><td class="n">5,223</td><td class="n">13,105</td><td class="n">0.40× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
+<tr><td class="p">secp256k1 ECDSA sign</td><td class="n">10,873</td><td class="n">6,513</td><td class="n">1.67× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
+<tr><td class="p">secp256k1 ECDSA verify<div class="note">Fastest of three: 4.6% ahead of Botan and 1.38x ahead of OpenSSL. The signing side also leads outright (1.67x Botan, 3.5x OpenSSL), after the fixed-base comb landed (#379).</div></td><td class="n">4,389</td><td class="n">4,198</td><td class="n">1.05× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
+<tr><td class="p">ML-DSA-65 keygen<div class="note">3.1x behind at this plane — but the AMA row is keygen plus the INVARIANT-41 pairwise consistency test (a full ML-DSA sign and verify before the keypair is released), which the peer row does not perform. Signing (3.5x) and verification (1.9x) both lead outright.</div></td><td class="n">1,833</td><td class="n">5,740</td><td class="n">0.32× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
+<tr><td class="p">ML-DSA-65 sign</td><td class="n">4,656</td><td class="n">1,312</td><td class="n">3.55× OpenSSL 4.0.3</td><td><span class="b b-win">fastest of 2</span></td></tr>
+<tr><td class="p">ML-DSA-65 verify</td><td class="n">12,228</td><td class="n">6,369</td><td class="n">1.92× OpenSSL 4.0.3</td><td><span class="b b-win">fastest of 2</span></td></tr>
+<tr><td class="p">ML-KEM-1024 keygen<div class="note">2.1x behind — and at this Python plane the AMA row also carries the FIPS 140-3 pairwise consistency test (INVARIANT-41: a full encapsulate/decapsulate before any keypair is released), which the peer&#x27;s keygen does not run.</div></td><td class="n">3,884</td><td class="n">8,167</td><td class="n">0.48× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
+<tr><td class="p">ML-KEM-1024 encaps<div class="note">The known lattice gap. AMA&#x27;s ML-KEM is SIMD-accelerated (1.28x over scalar, AVX-512 adding a further 1.22x) but is not vectorised across the breadth OpenSSL 4.0.3 reaches, which is 1.9x ahead here. Closing it is a multi-week vectorisation project, not a tuning pass, and it is not claimed as done.</div></td><td class="n">19,209</td><td class="n">36,743</td><td class="n">0.52× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
+<tr><td class="p">ML-KEM-1024 decaps<div class="note">Same vectorisation breadth gap as encapsulation; 1.5x behind.</div></td><td class="n">16,256</td><td class="n">24,244</td><td class="n">0.67× OpenSSL 4.0.3</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 </tbody></table></div>
 
 <h2><span class="num">4</span>Complete results — every primitive × every library</h2>
@@ -349,24 +349,24 @@ computed against a measured clock rather than an assumed one.</p>
 <div class="scroll"><table>
 <thead><tr><th>Primitive</th><th>AMA</th><th>OpenSSL</th><th>libsodium</th><th>wolfSSL</th><th>Botan</th><th>Nettle</th><th>libgcrypt</th><th>mbedTLS</th><th>OpenSSL 4.0.3</th></tr></thead>
 <tbody>
-<tr><td class="p">SHA3-256</td><td class="n lead">8,087<span class="cpb">3.96 c/B</span></td><td class="n ">6,865<span class="cpb">4.67 c/B</span></td><td class="x">—</td><td class="n ">5,761<span class="cpb">5.56 c/B</span></td><td class="n ">6,053<span class="cpb">5.29 c/B</span></td><td class="n ">4,794<span class="cpb">6.69 c/B</span></td><td class="n ">7,335<span class="cpb">4.37 c/B</span></td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">HMAC-SHA3-256</td><td class="n lead">8,557<span class="cpb">3.75 c/B</span></td><td class="n ">7,154<span class="cpb">4.48 c/B</span></td><td class="x">—</td><td class="x">—</td><td class="n ">6,011<span class="cpb">5.33 c/B</span></td><td class="x">—</td><td class="n ">7,689<span class="cpb">4.17 c/B</span></td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">AES-256-GCM</td><td class="n ">17,153<span class="cpb">1.87 c/B</span></td><td class="n lead">176,993<span class="cpb">0.18 c/B</span></td><td class="n ">31,372<span class="cpb">1.02 c/B</span></td><td class="n ">1,990<span class="cpb">16.10 c/B</span></td><td class="n ">10,972<span class="cpb">2.92 c/B</span></td><td class="n ">47,085<span class="cpb">0.68 c/B</span></td><td class="n ">86,652<span class="cpb">0.37 c/B</span></td><td class="n ">3,543<span class="cpb">9.05 c/B</span></td><td class="x">—</td></tr>
-<tr><td class="p">ChaCha20-Poly1305</td><td class="n ">15,320<span class="cpb">2.09 c/B</span></td><td class="n lead">49,031<span class="cpb">0.65 c/B</span></td><td class="n ">22,230<span class="cpb">1.44 c/B</span></td><td class="n ">6,188<span class="cpb">5.18 c/B</span></td><td class="n ">7,474<span class="cpb">4.29 c/B</span></td><td class="n ">7,620<span class="cpb">4.21 c/B</span></td><td class="x">—</td><td class="n ">4,899<span class="cpb">6.54 c/B</span></td><td class="x">—</td></tr>
-<tr><td class="p">Ascon-128 AEAD</td><td class="n lead">6,357<span class="cpb">5.04 c/B</span></td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">Ed25519 sign</td><td class="n ">46,772</td><td class="n ">25,386</td><td class="n lead">59,640</td><td class="n ">56,123</td><td class="n ">25,701</td><td class="n ">39,710</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">Ed25519 verify</td><td class="n lead">35,228</td><td class="n ">9,329</td><td class="n ">21,423</td><td class="n ">17,757</td><td class="n ">7,138</td><td class="n ">11,210</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">X25519 scalar-mult</td><td class="n ">22,833</td><td class="n lead">29,852</td><td class="n ">25,696</td><td class="n ">20,688</td><td class="x">—</td><td class="n ">17,478</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">P-256 ECDSA sign</td><td class="n ">8,134</td><td class="n lead">51,223</td><td class="x">—</td><td class="n ">17,355</td><td class="n ">6,596</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">P-256 ECDSA verify</td><td class="n ">5,377</td><td class="n lead">17,277</td><td class="x">—</td><td class="n ">13,361</td><td class="n ">4,046</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">secp256k1 ECDSA sign</td><td class="n lead">10,843</td><td class="n ">3,484</td><td class="x">—</td><td class="x">—</td><td class="n ">6,397</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">secp256k1 ECDSA verify</td><td class="n lead">4,378</td><td class="n ">3,027</td><td class="x">—</td><td class="x">—</td><td class="n ">4,023</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
-<tr><td class="p">ML-DSA-65 keygen</td><td class="n ">1,320</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">3,361</td></tr>
-<tr><td class="p">ML-DSA-65 sign</td><td class="n lead">3,542</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n ">1,511</td></tr>
-<tr><td class="p">ML-DSA-65 verify</td><td class="n lead">11,942</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n ">6,088</td></tr>
-<tr><td class="p">ML-KEM-1024 keygen</td><td class="n ">3,792</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">8,052</td></tr>
-<tr><td class="p">ML-KEM-1024 encaps</td><td class="n ">19,418</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">36,961</td></tr>
-<tr><td class="p">ML-KEM-1024 decaps</td><td class="n ">15,982</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">24,114</td></tr>
+<tr><td class="p">SHA3-256</td><td class="n ">6,883<span class="cpb">4.66 c/B</span></td><td class="n ">6,012<span class="cpb">5.33 c/B</span></td><td class="x">—</td><td class="n ">5,674<span class="cpb">5.65 c/B</span></td><td class="n ">6,295<span class="cpb">5.09 c/B</span></td><td class="n ">5,315<span class="cpb">6.03 c/B</span></td><td class="n lead">7,751<span class="cpb">4.14 c/B</span></td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">HMAC-SHA3-256</td><td class="n lead">6,928<span class="cpb">4.63 c/B</span></td><td class="n ">6,769<span class="cpb">4.74 c/B</span></td><td class="x">—</td><td class="x">—</td><td class="n ">5,650<span class="cpb">5.67 c/B</span></td><td class="x">—</td><td class="n ">4,050<span class="cpb">7.92 c/B</span></td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">AES-256-GCM</td><td class="n ">17,088<span class="cpb">1.88 c/B</span></td><td class="n lead">177,252<span class="cpb">0.18 c/B</span></td><td class="n ">31,503<span class="cpb">1.02 c/B</span></td><td class="n ">1,994<span class="cpb">16.08 c/B</span></td><td class="n ">10,920<span class="cpb">2.94 c/B</span></td><td class="n ">47,175<span class="cpb">0.68 c/B</span></td><td class="n ">86,999<span class="cpb">0.37 c/B</span></td><td class="n ">3,606<span class="cpb">8.89 c/B</span></td><td class="x">—</td></tr>
+<tr><td class="p">ChaCha20-Poly1305</td><td class="n ">15,197<span class="cpb">2.11 c/B</span></td><td class="n lead">48,149<span class="cpb">0.67 c/B</span></td><td class="n ">22,435<span class="cpb">1.43 c/B</span></td><td class="n ">6,144<span class="cpb">5.22 c/B</span></td><td class="n ">7,643<span class="cpb">4.19 c/B</span></td><td class="n ">7,758<span class="cpb">4.13 c/B</span></td><td class="x">—</td><td class="n ">4,828<span class="cpb">6.64 c/B</span></td><td class="x">—</td></tr>
+<tr><td class="p">Ascon-128 AEAD</td><td class="n lead">6,319<span class="cpb">5.07 c/B</span></td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">Ed25519 sign</td><td class="n ">49,649</td><td class="n ">25,209</td><td class="n lead">60,461</td><td class="n ">56,633</td><td class="n ">24,364</td><td class="n ">39,869</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">Ed25519 verify</td><td class="n lead">35,466</td><td class="n ">9,225</td><td class="n ">21,705</td><td class="n ">17,868</td><td class="n ">7,260</td><td class="n ">11,195</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">X25519 scalar-mult</td><td class="n ">22,846</td><td class="n lead">29,948</td><td class="n ">25,504</td><td class="n ">20,087</td><td class="x">—</td><td class="n ">16,714</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">P-256 ECDSA sign</td><td class="n ">8,120</td><td class="n lead">37,327</td><td class="x">—</td><td class="n ">13,398</td><td class="n ">7,063</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">P-256 ECDSA verify</td><td class="n ">5,223</td><td class="n lead">13,105</td><td class="x">—</td><td class="n ">11,948</td><td class="n ">3,754</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">secp256k1 ECDSA sign</td><td class="n lead">10,873</td><td class="n ">3,081</td><td class="x">—</td><td class="x">—</td><td class="n ">6,513</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">secp256k1 ECDSA verify</td><td class="n lead">4,389</td><td class="n ">3,171</td><td class="x">—</td><td class="x">—</td><td class="n ">4,198</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td></tr>
+<tr><td class="p">ML-DSA-65 keygen</td><td class="n ">1,833</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">5,740</td></tr>
+<tr><td class="p">ML-DSA-65 sign</td><td class="n lead">4,656</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n ">1,312</td></tr>
+<tr><td class="p">ML-DSA-65 verify</td><td class="n lead">12,228</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n ">6,369</td></tr>
+<tr><td class="p">ML-KEM-1024 keygen</td><td class="n ">3,884</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">8,167</td></tr>
+<tr><td class="p">ML-KEM-1024 encaps</td><td class="n ">19,209</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">36,743</td></tr>
+<tr><td class="p">ML-KEM-1024 decaps</td><td class="n ">16,256</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="x">—</td><td class="n lead">24,244</td></tr>
 </tbody></table></div>
 
 <h2><span class="num">5</span>How this was measured</h2>
@@ -374,7 +374,7 @@ computed against a measured clock rather than an assumed one.</p>
 <b>One host, one process, one set of buffers.</b> Every library is driven through its
 own native API in the same binary, on the same input, with identical iteration counts
 and best-of-5 round selection — the minimum round, because scheduler noise only ever
-adds time. The CPU clock is <b>measured</b> at 2.100 GHz via <code>rdtsc</code> against
+adds time. The CPU clock is <b>measured</b> at 2.101 GHz via <code>rdtsc</code> against
 <code>CLOCK_MONOTONIC</code>, not assumed, so cycles/byte is correct on this host rather
 than on the host the harness was written on.
 </div>
@@ -422,8 +422,8 @@ python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
-Generated 2026-10-08 05:09 UTC · message size 65,536 bytes · measured clock 2.100 GHz<br>
-Measured at commit <code>5b20def5f303906e1eb818e57e58f0023410e339</code> (2026-10-08T05:08:05.497108+00:00), AMA 5.0.0<br>
+Generated 2026-10-08 06:11 UTC · message size 65,536 bytes · measured clock 2.101 GHz<br>
+Measured at commit <code>d55db17bb53def0b407e41aaae33955cb1eb154b</code> (2026-10-08T06:10:13.044858+00:00), AMA 5.0.0<br>
 Host: Intel(R) Xeon(R) Processor @ 2.10GHz · aes_ni, pclmulqdq, vaes, vpclmulqdq, avx2, avx512f, sha_ni, bmi2, adx<br>
 AMA 5.0.0 · OpenSSL 3.0.13 · OpenSSL 4.0.3 (via cryptography 50.0.2) · libsodium 1.0.18 · wolfSSL 5.6.6 · Botan 2.19.3 · Nettle 3.9 · libgcrypt 1.10.3 · mbedTLS 2.28.8<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>

@@ -1,13 +1,13 @@
 {
   "provenance": {
     "ama_version": "5.0.0",
-    "ama_commit": "5b20def5f303906e1eb818e57e58f0023410e339",
+    "ama_commit": "d55db17bb53def0b407e41aaae33955cb1eb154b",
     "attributable": true,
     "tree_dirty": true,
     "dirty_paths": [
       "benchmarks/multi_library_results.json"
     ],
-    "measured_at": "2026-10-08T05:08:06.014570+00:00",
+    "measured_at": "2026-10-08T06:10:13.521556+00:00",
     "note": "written by the harness before measuring",
     "native_artifact": {
       "file": "libama_cryptography.so",
@@ -24,97 +24,97 @@
     {
       "primitive": "ML-DSA-65 keygen",
       "implementation": "AMA",
-      "us_per_op": 757.8060003652354,
-      "ops_per_sec": 1319.59894685188,
-      "stdev_us": 288.2017351510517,
+      "us_per_op": 545.4404999909457,
+      "ops_per_sec": 1833.3805429127467,
+      "stdev_us": 233.48760633731774,
       "iterations": 200
     },
     {
       "primitive": "ML-DSA-65 keygen",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 297.507000141195,
-      "ops_per_sec": 3361.2654476210846,
-      "stdev_us": 91.073560961046,
+      "us_per_op": 174.21149959773174,
+      "ops_per_sec": 5740.149199731819,
+      "stdev_us": 48.921976311230736,
       "iterations": 200
     },
     {
       "primitive": "ML-DSA-65 sign",
       "implementation": "AMA",
-      "us_per_op": 282.3105000970827,
-      "ops_per_sec": 3542.1991022512934,
-      "stdev_us": 254.55893069704058,
+      "us_per_op": 214.78250027939794,
+      "ops_per_sec": 4655.87279549851,
+      "stdev_us": 164.94907954398323,
       "iterations": 200
     },
     {
       "primitive": "ML-DSA-65 sign",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 661.8389998038765,
-      "ops_per_sec": 1510.9414831950537,
-      "stdev_us": 798.6615025847749,
+      "us_per_op": 762.3454998793022,
+      "ops_per_sec": 1311.74119891614,
+      "stdev_us": 652.5416509746592,
       "iterations": 200
     },
     {
       "primitive": "ML-DSA-65 verify",
       "implementation": "AMA",
-      "us_per_op": 83.74099979846505,
-      "ops_per_sec": 11941.581810661994,
-      "stdev_us": 40.056549428620535,
+      "us_per_op": 81.77900008377037,
+      "ops_per_sec": 12228.078100437146,
+      "stdev_us": 103.04624898050102,
       "iterations": 200
     },
     {
       "primitive": "ML-DSA-65 verify",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 164.2600000195671,
-      "ops_per_sec": 6087.909411182743,
-      "stdev_us": 56.466825619213864,
+      "us_per_op": 157.0179997543164,
+      "ops_per_sec": 6368.696592522413,
+      "stdev_us": 25.112808709971684,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 keygen",
       "implementation": "AMA",
-      "us_per_op": 263.68350017946796,
-      "ops_per_sec": 3792.4253861898114,
-      "stdev_us": 38.84231012491409,
+      "us_per_op": 257.4495001681498,
+      "ops_per_sec": 3884.2569099837556,
+      "stdev_us": 638.8363546868051,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 keygen",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 124.19699987731292,
-      "ops_per_sec": 8051.724284707702,
-      "stdev_us": 13.58189129568355,
+      "us_per_op": 122.45000016264385,
+      "ops_per_sec": 8166.598600830976,
+      "stdev_us": 76.10865721748773,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 encaps",
       "implementation": "AMA",
-      "us_per_op": 51.499000164767494,
-      "ops_per_sec": 19417.85271171419,
-      "stdev_us": 4.986364335592889,
+      "us_per_op": 52.05949992159731,
+      "ops_per_sec": 19208.789971206425,
+      "stdev_us": 6.541289241541614,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 encaps",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 27.05550014070468,
-      "ops_per_sec": 36961.06132946742,
-      "stdev_us": 5.2711360934620295,
+      "us_per_op": 27.21599958022125,
+      "ops_per_sec": 36743.09286537219,
+      "stdev_us": 26.603401214757916,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 decaps",
       "implementation": "AMA",
-      "us_per_op": 62.57050017666188,
-      "ops_per_sec": 15981.972290082304,
-      "stdev_us": 32.4865258693069,
+      "us_per_op": 61.515000197687186,
+      "ops_per_sec": 16256.197623122132,
+      "stdev_us": 8.109252687133747,
       "iterations": 200
     },
     {
       "primitive": "ML-KEM-1024 decaps",
       "implementation": "OpenSSL 4.0.3",
-      "us_per_op": 41.47000026932801,
-      "ops_per_sec": 24113.81706065767,
-      "stdev_us": 25.2639001255317,
+      "us_per_op": 41.246999899158254,
+      "ops_per_sec": 24244.187515330235,
+      "stdev_us": 17.730606409150802,
       "iterations": 200
     }
   ]

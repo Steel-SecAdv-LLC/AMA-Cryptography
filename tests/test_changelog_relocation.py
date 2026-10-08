@@ -58,9 +58,9 @@ OLD_HEADING = "## [5.0.0] - 2026-09-10\n"
 #: First dated on 2026-10-05 by the release-roll that filed every
 #: [Unreleased] entry under it (the heading read Unreleased from the
 #: relocation until then); rolled with each later pre-tag push, most
-#: recently to 2026-10-07 — the merge before the tag carries the date of
+#: recently to 2026-10-08 — the merge before the tag carries the date of
 #: its last validated push.
-NEW_HEADING = "## [5.0.0] - 2026-10-07\n"
+NEW_HEADING = "## [5.0.0] - 2026-10-08\n"
 UNRELEASED_GROUP = "## Entries recorded under [Unreleased]\n\n"
 RELEASE_GROUP = "## Entries recorded under [5.0.0]\n\n"
 GLANCE_HEADING = "### Behavioural and breaking changes at a glance\n"
@@ -83,7 +83,7 @@ GLANCE_CORRECTION = ("105 native entry points", "107 native entry points")
 #: ten breaking changes against a glance table of eleven.  Each substitution
 #: must occur exactly once in the tail, so neither can widen into a licence.
 SUMMARY_ROW_CORRECTIONS = (
-    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | 2026-10-07 |"),
+    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | 2026-10-08 |"),
     ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d711 \u2014 see `[5.0.0]`"),
 )
 
