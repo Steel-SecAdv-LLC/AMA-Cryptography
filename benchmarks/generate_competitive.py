@@ -264,31 +264,30 @@ NOTES = {
         "this build."
     ),
     "ChaCha20-Poly1305": (
-        "OpenSSL runs an AVX-512 vectorised ChaCha20 core, 2.7x ahead here; "
-        "libsodium is 1.25x ahead. AMA's is SIMD but not vectorised to that "
+        "OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; "
+        "libsodium is 1.45x ahead. AMA's is SIMD but not vectorised to that "
         "width. Third of seven."
     ),
     "SHA3-256": (
         "libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA's "
-        "single-stream scalar permutation places first of six, 6.3% ahead of "
+        "single-stream scalar permutation places first of six, 10.3% ahead of "
         "libgcrypt (the x4 AVX2 path batches four independent hashes and does "
         "not apply to one stream)."
     ),
     "HMAC-SHA3-256": (
         "Tracks the SHA3-256 permutation result above; first of four here, "
-        "0.07% ahead of libgcrypt — a photo finish, not a durable lead."
+        "11.3% ahead of libgcrypt."
     ),
     "Ed25519 sign": (
-        "libsodium and wolfSSL lead by 1.14x and 1.06x. AMA re-derives the "
+        "libsodium and wolfSSL lead by 1.28x and 1.20x. AMA re-derives the "
         "public half from the scalar on every signature and refuses a stored "
         "half the scalar does not generate (INVARIANT-51); the peers read the "
-        "cached public half out of the key. Third of six, and the margin is "
-        "that derivation."
+        "cached public half out of the key. Third of six."
     ),
-    "Ed25519 verify": "Fastest of six, 1.65x ahead of libsodium.",
+    "Ed25519 verify": "Fastest of six, 1.64x ahead of libsodium.",
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 12% of OpenSSL and 5% of libsodium. "
+        "multiply path. AMA is within 1.31x of OpenSSL and 1.13x of libsodium. "
         "Third of five."
     ),
     "P-256 ECDSA sign": (
@@ -298,8 +297,8 @@ NOTES = {
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
     "secp256k1 ECDSA verify": (
-        "Fastest of three: 11.8% ahead of Botan and 1.34x ahead of OpenSSL. "
-        "The signing side also leads outright (1.69x Botan, 3.6x OpenSSL), "
+        "Fastest of three: 8.8% ahead of Botan and 1.45x ahead of OpenSSL. "
+        "The signing side also leads outright (1.69x Botan, 3.1x OpenSSL), "
         "after the fixed-base comb landed (#379)."
     ),
     "ML-KEM-1024 encaps": (
@@ -311,16 +310,16 @@ NOTES = {
     ),
     "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.5x behind.",
     "ML-KEM-1024 keygen": (
-        "1.7x behind — and at this Python plane the AMA row also carries the "
+        "2.1x behind — and at this Python plane the AMA row also carries the "
         "FIPS 140-3 pairwise consistency test (INVARIANT-41: a full "
         "encapsulate/decapsulate before any keypair is released), which the "
         "peer's keygen does not run."
     ),
     "ML-DSA-65 keygen": (
-        "3.3x behind at this plane — but the AMA row is keygen plus the "
+        "2.5x behind at this plane — but the AMA row is keygen plus the "
         "INVARIANT-41 pairwise consistency test (a full ML-DSA sign and "
         "verify before the keypair is released), which the peer row does not "
-        "perform. Signing (3.6x) and verification (1.9x) both lead outright."
+        "perform. Signing (2.3x) and verification (2.0x) both lead outright."
     ),
 }
 

@@ -38,30 +38,44 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **`benchmarks/multi_library_results.json`, `pqc_results.json` and
   `competitive.html` are a single-host, single-commit measurement of the
-  5.0.0 tree** (`6b43d05`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  5.0.0 tree** (`5b20def`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
   SHA-NI, the canonical-host class; method and full data in
   `docs/BENCHMARK_HISTORY.md`). They replace the 2026-07-29 record of the
   3.4.0 tree, measured on a host without those ISA extensions. AMA leads
-  outright on SHA3-256, HMAC-SHA3-256, Ed25519 verify (1.65x libsodium),
-  both secp256k1 ECDSA sides and ML-DSA-65 sign/verify (3.6x/1.9x OpenSSL
-  4.0.3); it trails where the page says and why (OpenSSL's VAES AES-GCM
-  pipeline 10.3x against the INVARIANT-20 constant-time default, Ed25519
-  sign 3rd of 6 behind peers that skip INVARIANT-51's per-signature
-  derivation, the known ML-KEM vectorisation-breadth gap, PQC keygens
-  carrying INVARIANT-41's pairwise test at the measured plane). The
-  page's NOTES prose is reconciled to the new ranks, which
-  `tests/test_competitive_page.py` enforces against the rendered table.
-- **The PQC harness and the page generator can no longer mislabel a
-  peer.** `pqc_comparative_bench.py` hardcoded "OpenSSL 4.0.1" into every
-  row — true of the wheel on the 2026-07-29 host, silently false against
-  any other; it now labels rows from `openssl_version_text()` of the
-  library it linked and records the `cryptography` wheel and bundled
-  OpenSSL in `provenance.peer`. `generate_competitive.py` reads the PQC
-  peer's label and wheel from the result file (refusing to render
-  without them) instead of carrying both as literals, and its
-  different-host carve-out for the PQC rows is gone because the
-  condition is: both files now come from one host and one commit, which
-  the generator already enforces.
+  outright on SHA3-256 (10.3% over libgcrypt), HMAC-SHA3-256, Ed25519
+  verify (1.64x libsodium), both secp256k1 ECDSA sides and ML-DSA-65
+  sign/verify (2.3x/2.0x OpenSSL 4.0.3); it trails where the page says
+  and why (OpenSSL's VAES AES-GCM pipeline 10.3x against the INVARIANT-20
+  constant-time default, Ed25519 sign 3rd of 6 behind peers that skip
+  INVARIANT-51's per-signature derivation, the known ML-KEM
+  vectorisation-breadth gap, PQC keygens carrying INVARIANT-41's pairwise
+  test at the measured plane). The page's NOTES prose is reconciled to
+  the new ranks, which `tests/test_competitive_page.py` enforces against
+  the rendered table.
+- **The record cannot be mislabelled or misattributed.** Three closures,
+  two of them review findings on this entry's own first push:
+  `pqc_comparative_bench.py` hardcoded "OpenSSL 4.0.1" into every row —
+  it now labels rows from `openssl_version_text()` of the library it
+  linked and records the `cryptography` wheel and bundled OpenSSL in
+  `provenance.peer`; `generate_competitive.py` reads that label and wheel
+  from the result file (refusing to render without them) instead of
+  carrying both as literals; and the provenance block now pins the
+  compiled object, not just the commit — the loaded backend's
+  mapped-bytes SHA3-256 with its digest-matched build configuration (the
+  efficacy trailer's evidence rule), plus `stamp_c_harness_provenance`,
+  which digests the shared object the C harness linked and marks the
+  record unattributable unless byte-identical to the attested backend
+  (PIN `test_a_differing_linked_object_disowns_the_record`,
+  mutation-earned).
+- **A representable variance is computed, not refused** (review finding,
+  Medium). `AvaDescent._variance` summed raw squared deviations, so
+  `[1e154, -1e154]` overflowed the running sum and was refused although
+  its variance, 1e308, is a representable float. The deviation is now
+  divided by n before the multiply, so the named refusal fires only for
+  a genuinely non-representable variance. PIN
+  `test_a_representable_variance_is_computed_not_refused`,
+  mutation-earned; the `[1e200, -1e200]` refusal pin (variance 1e400)
+  holds on both sides of the mutation.
 - **INVARIANT-36 retitled** (section 6.6): "AMA Is Not Measured Against
   Another Implementation" was a sentence the invariant's own Statement
   contradicts — `benchmarks/` exists precisely to measure AMA against
