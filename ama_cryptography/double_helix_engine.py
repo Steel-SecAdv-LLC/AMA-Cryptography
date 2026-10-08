@@ -883,17 +883,17 @@ class AvaDescent:
 
     @staticmethod
     def _variance(v: Vec) -> float:
-        try:
-            m = mean(v)
-        except OverflowError:
-            # _numeric.mean sums with math.fsum, which raises
-            # "intermediate overflow" for finite inputs like [1e308, 1e308]
-            # before the finiteness refusal below can run (review finding,
-            # 2026-10-06).
-            raise ValueError(
-                "variance overflowed the float range; variance-adapted "
-                "descent is undefined for inputs of this magnitude"
-            ) from None
+        # The mean is summed from terms scaled by n, not through
+        # _numeric.mean: math.fsum raises "intermediate overflow" on the
+        # unscaled sum for finite inputs like [1e308, 1e308] whose mean,
+        # 1e308, and variance, exactly zero, are both representable
+        # (review findings, 2026-10-06 and 2026-10-08 — the first turned
+        # the leak into a refusal, the second removed the false refusal).
+        # The mean of finite floats never exceeds the largest of them, so
+        # the scaled sum cannot overflow and no refusal is needed here;
+        # a genuinely non-representable VARIANCE is still refused below.
+        n = len(v)
+        m = math.fsum(x / n for x in v.tolist())
         # d * d, not d ** 2: Python's float power RAISES OverflowError past
         # the range while multiplication yields inf, and inf is what the
         # finiteness refusal below can see (review finding, 2026-10-06:
@@ -907,7 +907,6 @@ class AvaDescent:
         # Dividing the deviation first keeps every term finite unless its
         # contribution to the variance itself is not, so the refusal below
         # fires only for a genuinely non-representable variance.
-        n = len(v)
         var = 0.0
         for x in v.tolist():
             d = x - m

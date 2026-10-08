@@ -120,29 +120,65 @@ class TestTheNativeArtifactIsPinned:
     timings published as ``attributable: true`` under the fresh commit.
     """
 
+    @staticmethod
+    def _pinned_attestation(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: bytes
+    ) -> Path:
+        """Attest a synthetic backend with mapped-bytes evidence.
+
+        The first form of these tests read the LIVE loader's attestation,
+        which carries mapped-bytes evidence only where the loader allows a
+        procfs re-read -- green on the Linux lanes, red on macOS (measured:
+        ``Python 3.14 on macos-latest`` on a3508b6, where the preload
+        digest is not of the mapped bytes by design).  A synthetic pinned
+        backend exercises the pinned path identically on every platform;
+        the no-evidence path is the demotion test below, which every macOS
+        lane also takes against its live loader semantics.
+        """
+        import ama_cryptography._self_test as self_test
+        from ama_cryptography.pqc_backends import native_sha3_256
+
+        lib = tmp_path / "libama_cryptography_synthetic.so"
+        lib.write_bytes(payload)
+        attestation = {
+            "native_backend": {
+                "loaded": True,
+                "path": str(lib),
+                "preload_digest_hex": native_sha3_256(payload).hex(),
+                "preload_digest_is_of_mapped_bytes": True,
+            }
+        }
+        monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
+        return lib
+
     def test_the_block_pins_the_loaded_backend_and_its_build(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """RANGE: with the backend attested in this process, the block
-        carries the mapped-bytes digest and a build line, never silence."""
+        """RANGE: with mapped-bytes evidence attested, the block carries
+        the digest and a build line (here "not recorded": no build tree
+        digest-matches the synthetic object, and attribution is by
+        digest-match, never by guess), and the commit attribution
+        stands."""
+        from ama_cryptography.pqc_backends import native_sha3_256
+
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         block = cb._measurement_provenance()
         artifact = block["native_artifact"]
         assert isinstance(artifact, dict), artifact
-        assert artifact["file"].startswith("libama_cryptography"), artifact
-        assert len(artifact["sha3_256"]) == 64, artifact
+        assert artifact["sha3_256"] == native_sha3_256(b"synthetic backend bytes").hex()
         assert isinstance(block["native_build"], str) and block["native_build"]
+        assert block["attributable"] is True
+        assert block["ama_commit"] == HEAD
 
     def test_stamping_pins_a_byte_identical_linked_object(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """A copy of the attested backend's bytes is pinned as identical,
         and the stamped file carries the block the generator requires."""
-        from ama_cryptography._self_test import module_attestation
-
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
-        source = Path(str(module_attestation()["native_backend"]["path"]))
-        linked = tmp_path / source.name
+        source = self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        linked = tmp_path / "libama_cryptography.so"
         linked.write_bytes(source.read_bytes())
         results = tmp_path / "multi_library_results.json"
         results.write_text(json.dumps({"results": []}), encoding="utf-8")
@@ -164,6 +200,7 @@ class TestTheNativeArtifactIsPinned:
         exactly this test fails while the byte-identical case still
         passes."""
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        self._pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
         linked = tmp_path / "libama_cryptography.so"
         linked.write_bytes(b"not the attested backend")
         results = tmp_path / "multi_library_results.json"
@@ -172,6 +209,45 @@ class TestTheNativeArtifactIsPinned:
         assert block["linked_library"]["byte_identical_to_loaded_backend"] is False
         assert block["attributable"] is False
         assert any("byte-identical" in r for r in block["unattributable_because"])
+
+    def test_an_unpinnable_artifact_disowns_the_commit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PIN (review finding on a3508b6, mutation-earned): the first form
+        recorded an unpinnable artifact as 'unrecorded' but left the commit
+        attribution standing, so on a loader without mapped-bytes evidence
+        (or on any attestation failure) the generator would still publish
+        the record under ``ama_commit``.  An unpinned artifact now clears
+        the commit and marks the block unattributable with the reason.
+        Mutation: removing the demotion block fails exactly this test."""
+        import ama_cryptography._self_test as self_test
+
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        monkeypatch.setattr(self_test, "module_attestation", lambda: {})
+        block = cb._measurement_provenance()
+        assert isinstance(block["native_artifact"], str), block["native_artifact"]
+        assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
+        assert any("could not be pinned" in r for r in block["unattributable_because"])
+        # The macOS-lane shape specifically: a digest exists but is not of
+        # the mapped bytes (the live loader semantics that failed the
+        # first form of these tests on a3508b6).
+        monkeypatch.setattr(
+            self_test,
+            "module_attestation",
+            lambda: {
+                "native_backend": {
+                    "loaded": True,
+                    "path": "/opt/libama_cryptography.dylib",
+                    "preload_digest_hex": "ab" * 32,
+                    "preload_digest_is_of_mapped_bytes": False,
+                }
+            },
+        )
+        block = cb._measurement_provenance()
+        assert "not of the mapped bytes" in str(block["native_artifact"])
+        assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
 
 
 class TestProvenanceIsTakenBeforeMeasuring:

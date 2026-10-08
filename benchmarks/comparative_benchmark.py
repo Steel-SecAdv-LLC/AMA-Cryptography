@@ -911,6 +911,22 @@ def _measurement_provenance() -> "Dict[str, Any]":
     if not attributable:
         block["unattributable_because"] = reasons
     _attach_native_artifact(block)
+    # A record whose executed artifact cannot be pinned is not published
+    # under a commit: the sources' cleanliness says nothing about which
+    # compiled object actually ran.  The first form of
+    # _attach_native_artifact recorded the artifact as unrecorded but left
+    # the commit attribution standing, which re-opened, on loaders where
+    # the preload digest is not of the mapped bytes (and on any attestation
+    # failure), the same stale-build hole the field exists to close
+    # (review finding on a3508b6).
+    if not isinstance(block.get("native_artifact"), dict):
+        block["attributable"] = False
+        block["ama_commit"] = "unknown"
+        unattributable = list(block.get("unattributable_because", []))
+        unattributable.append(
+            "the executed native artifact could not be pinned: " + str(block.get("native_artifact"))
+        )
+        block["unattributable_because"] = unattributable
     return block
 
 

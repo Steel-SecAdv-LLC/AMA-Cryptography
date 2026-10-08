@@ -67,6 +67,40 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   record unattributable unless byte-identical to the attested backend
   (PIN `test_a_differing_linked_object_disowns_the_record`,
   mutation-earned).
+- **The mean cannot falsely refuse either** (review finding on the fix
+  above, Medium). `_variance` still reached the mean through
+  `_numeric.mean`, whose `math.fsum` raises "intermediate overflow" for
+  `[1e308, 1e308]` although the mean, 1e308, and the variance, exactly
+  zero, are representable — the 2026-10-06 pass had turned that leak
+  into a refusal, and the refusal was still false. The mean is now
+  summed from terms scaled by n (the mean of finite floats never
+  exceeds the largest of them, so the scaled sum cannot overflow), and
+  the former refusal branch is gone with the condition. PIN
+  `test_a_mean_of_representable_inputs_never_refuses`, mutation-earned:
+  restoring the `mean(v)` call fails exactly it with the leaked
+  OverflowError. Recorded while measuring this, per section 7, and not
+  remediated here: the pre-existing default helix path
+  (`AmaEquationEngine.converge`, pinned byte-identical on this branch)
+  leaks a raw `OverflowError` (errno 34) for `[1e308] * state_dim`
+  through its term math — Medium, non-cryptographic, outside this
+  finding's scope and this PR's diff; it needs its own pass.
+- **An unpinnable artifact disowns the commit** (review finding on the
+  provenance mechanism above, Medium). `_attach_native_artifact`'s
+  unpinned branches — a loader whose preload digest is not of the
+  mapped bytes, a missing attestation, any failure — recorded the
+  artifact as unrecorded but left `attributable: true` and the commit
+  standing, re-opening the stale-build hole on exactly the hosts that
+  cannot prove what ran. An unpinned artifact now clears `ama_commit`,
+  marks the block unattributable and says why, so the page refuses the
+  record. PIN `test_an_unpinnable_artifact_disowns_the_commit`,
+  mutation-earned: removing the demotion fails exactly it. The first
+  form of this round's provenance tests read the live loader's
+  attestation and failed on macOS (`Python 3.14 on macos-latest` on
+  `a3508b6` — the preload digest is not of the mapped bytes there, by
+  design); they now attest a synthetic pinned backend, so the pinned
+  path runs identically on every platform while the macOS loader shape
+  is asserted explicitly in the demotion test, and both mutations were
+  re-earned against the rewritten tests.
 - **A representable variance is computed, not refused** (review finding,
   Medium). `AvaDescent._variance` summed raw squared deviations, so
   `[1e154, -1e154]` overflowed the running sum and was refused although

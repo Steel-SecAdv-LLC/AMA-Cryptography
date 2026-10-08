@@ -373,12 +373,20 @@ class TestReviewHardening:
         with pytest.raises(ValueError, match="overflowed the finite"):
             AvaDescent().momentum_step([1.7e308], [1.7e308], [1.7e308], beta=0.0)
 
-    def test_fsum_mean_overflow_is_the_named_refusal(self) -> None:
-        """PIN (review finding): _numeric.mean sums with math.fsum, which
-        raises 'intermediate overflow' for [1e308, 1e308] before the
-        variance check could run; it is now the API's named ValueError."""
-        with pytest.raises(ValueError, match="variance overflowed"):
-            AvaDescent().variance_adapted_step([1e308, 1e308], [0.0, 0.0])
+    def test_a_mean_of_representable_inputs_never_refuses(self) -> None:
+        """PIN (review findings, 2026-10-06 and 2026-10-08): _numeric.mean
+        sums with math.fsum, which raises 'intermediate overflow' for
+        [1e308, 1e308] although the mean, 1e308, and the variance, exactly
+        zero, are both representable.  The 2026-10-06 pass turned that leak
+        into a refusal; this one removes the false refusal by summing the
+        mean from terms scaled by n, like the variance accumulation.
+        Mutation: restoring the `mean(v)` call fails exactly this test
+        with the leaked OverflowError it used to raise."""
+        d = AvaDescent(alpha=1e-10, equity_gain=1.0)
+        # Variance is exactly zero, so the step is undamped: the update is
+        # alpha * gain * gradient on top of the state, and it is finite.
+        out = d.variance_adapted_step([1e308, 1e308], [1.0, 1.0])
+        assert out.tolist() == [1e308, 1e308], out.tolist()
 
     def test_lyapunov_square_overflow_in_descend_is_the_named_refusal(self) -> None:
         """PIN (review finding): Vec.__pow__ raises past the float range
