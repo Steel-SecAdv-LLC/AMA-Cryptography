@@ -67,7 +67,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   executed-matches-source rule (INVARIANT-40) on the C plane. PIN
   `test_a_stale_or_unbound_harness_binary_is_disowned`,
   mutation-earned, both arms (absent and mismatched). The duplicated
-  history heading from the same review (Low) is deduplicated.
+  history heading from the same review (Low) is deduplicated. Two
+  follow-ups from the next review round, fixed in the same pass: byte
+  identity and source binding are recorded as separate facts, so a
+  stale harness attestation cannot make the record claim equal library
+  digests differ (`byte_identical_to_loaded_backend` now carries the
+  digest comparison alone, attribution still requires both;
+  mutation-pinned in the same test), and a provenance-test docstring
+  that still described the pre-synthetic build attribution is aligned
+  with what the test exercises.
 - **The provenance chain's last gaps closed** (four review findings on
   `f0582cf`, all Medium, each the same evidence rule one level deeper,
   every refusal mutation-pinned). The C harness's `loaded_library`

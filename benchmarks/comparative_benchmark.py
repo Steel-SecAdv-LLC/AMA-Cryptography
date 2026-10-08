@@ -1049,19 +1049,23 @@ def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
         ),
         "binary_matches_tree": harness_bound,
     }
-    pinned = (
-        harness_bound
-        and loaded is not None
+    # Byte identity and source binding are different facts and are
+    # recorded separately: a stale harness attestation must not make the
+    # record claim the library digests differ when they are equal (review
+    # finding on 5da5c6c).  Attribution requires BOTH.
+    digest_match = (
+        loaded is not None
         and isinstance(artifact, dict)
         and artifact.get("sha3_256") == loaded["sha3_256"]
     )
+    pinned = harness_bound and digest_match
     if loaded is not None:
         provenance["linked_library"] = {
             "file": Path(str(loaded["path"])).name,
             "path": str(loaded["path"]),
             "sha3_256": str(loaded["sha3_256"]),
             "recorded_by": str(loaded.get("method", "the harness")),
-            "byte_identical_to_loaded_backend": bool(pinned),
+            "byte_identical_to_loaded_backend": bool(digest_match),
         }
     else:
         provenance["linked_library"] = (
@@ -1086,7 +1090,7 @@ def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
                 "the harness recorded no loaded_library block, so the object "
                 "its process resolved cannot be tied to the attested backend"
             )
-        elif isinstance(artifact, dict) and artifact.get("sha3_256") != loaded["sha3_256"]:
+        elif not digest_match:
             reasons.append(
                 "the object the C harness process resolved is not pinned "
                 "byte-identical to the attested loaded backend, so neither the "

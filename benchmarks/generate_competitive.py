@@ -793,7 +793,8 @@ different host and said so here; that carve-out is gone because the condition is
 <pre>python benchmarks/benchmark_suite.py
 g++ -O2 -std=c++17 -DHAVE_OPENSSL -DHAVE_SODIUM -DHAVE_WOLFSSL -DHAVE_BOTAN \\
     -DHAVE_NETTLE -DHAVE_GCRYPT -DHAVE_MBEDTLS -I/usr/include/botan-2 -Iinclude \\
-    -DAMA_HARNESS_SOURCE_SHA3=&quot;\\&quot;$(python benchmarks/comparative_benchmark.py --harness-source-digest)\\&quot;&quot; \\
+    -DAMA_HARNESS_SOURCE_SHA3=&quot;\\&quot;$(python \\
+      benchmarks/comparative_benchmark.py --harness-source-digest)\\&quot;&quot; \\
     benchmarks/multi_library_bench.cpp -Lbuild/lib -lama_cryptography \\
     -lssl -lcrypto -lsodium -lwolfssl -lbotan-2 -lnettle -lhogweed -lgcrypt -lmbedcrypto \\
     -o multibench

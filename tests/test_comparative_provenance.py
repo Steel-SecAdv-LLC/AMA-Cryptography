@@ -164,11 +164,10 @@ class TestTheNativeArtifactIsPinned:
     def test_the_block_pins_the_loaded_backend_and_its_build(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """RANGE: with mapped-bytes evidence attested, the block carries
-        the digest and a build line (here "not recorded": no build tree
-        digest-matches the synthetic object, and attribution is by
-        digest-match, never by guess), and the commit attribution
-        stands."""
+        """RANGE: with mapped-bytes evidence attested and a digest-matched
+        build attribution (both synthetic, from _pinned_attestation — the
+        demotion rule requires the build too), the block carries the
+        digest and the build line, and the commit attribution stands."""
         from ama_cryptography.pqc_backends import native_sha3_256
 
         _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
@@ -283,6 +282,10 @@ class TestTheNativeArtifactIsPinned:
             assert block["attributable"] is False
             assert block["ama_commit"] == "unknown"
             assert any("harness binary" in r for r in block["unattributable_because"])
+            # Byte identity is a separate fact: the library digests ARE
+            # equal here, and a stale harness attestation must not make
+            # the record claim otherwise (review finding on 5da5c6c).
+            assert block["linked_library"]["byte_identical_to_loaded_backend"] is True
 
     def test_a_record_without_the_harness_block_is_disowned(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
