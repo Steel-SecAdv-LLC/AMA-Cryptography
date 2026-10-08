@@ -751,3 +751,61 @@ indistinguishable from uncommitted changes to a primitive), and a
 `Python bindings` row records which of the six Cython extensions were imported
 — a source checkout without them built and a wheel measure different code on
 the hash, MAC, KDF and signature rows, and nothing in the record said which.
+
+## 2026-10-08: the competitive record re-measured on the 5.0.0 tree, both planes on one host
+
+`benchmarks/multi_library_results.json` and `benchmarks/pqc_results.json`
+were still the 2026-07-29 measurement of the 3.4.0 tree (`66d2073`) — the
+record whose provenance block exists because a re-render once stamped
+"AMA 5.0.0" over it. 5.0.0 changed most of what those files time (the
+in-house Ed25519 backend with INVARIANT-51's per-signature derivation, the
+fixed-base secp256k1 comb, FIPS 204 §5.2 external ML-DSA, the SIMD Keccak
+work), so the competitive page described neither the shipped code nor any
+host it could be reproduced on. Both files are replaced by one pass on one
+host at one commit; the 2026-07-29 figures remain in git history and in the
+sections above.
+
+**Host.** Intel Xeon @ 2.10 GHz, 4-vCPU KVM guest, the canonical-host class
+of the 2026-09-24 section: `aes_ni pclmulqdq vaes vpclmulqdq avx2 avx512f
+sha_ni bmi2 adx` (measured clock 2.100 GHz). The 2026-07-29 host carried
+**no VAES, no VPCLMULQDQ and no SHA-NI**, and that record's own host note
+says rows from hosts with different feature sets are not directly
+comparable — so rank movements below are the tree and the host together,
+not a regression ledger. g++ 13.3.0, `-O2 -std=c++17`, all seven peers
+compiled in. Peer builds are the Ubuntu noble packages the generator pins
+(OpenSSL 3.0.13, libsodium 1.0.18, wolfSSL 5.6.6, Botan 2.19.3, Nettle 3.9,
+libgcrypt 1.10.3, mbedTLS 2.28.8) — the same version set as 2026-07-29.
+
+**Method.** The documented pipeline, verbatim from the page's methodology
+section: `multibench 65536` (the harness's own best-of-N per row) under
+`taskset -c 0`, then `pqc_comparative_bench.py` (median of 200, distinct
+messages for the rejection-sampled signer) under `taskset -c 0`, then
+`generate_competitive.py`. Measured at `6b43d05` with a clean tree;
+both provenance blocks name that commit and `attributable: true`, and the
+generator now refuses to render the two files under different commits.
+
+**AMA 5.0.0 at `6b43d05`, 57 native rows + 12 PQC rows.** Where AMA leads
+outright: SHA3-256 (1st of 6, 3.934 c/B, 6.3% ahead of libgcrypt),
+HMAC-SHA3-256 (1st of 4, by 0.07% — a photo finish), Ed25519 verify (1st
+of 6, 1.65x libsodium), secp256k1 ECDSA sign (1st of 3, 1.69x Botan, 3.6x
+OpenSSL) and verify (1st of 3, 11.8% ahead of Botan), ML-DSA-65 sign
+(3,956 vs 1,095 ops/s, 3.6x OpenSSL 4.0.3) and verify (11,821 vs 6,151,
+1.9x). Where it trails: AES-256-GCM 5th of 8 (OpenSSL's VAES+VPCLMULQDQ
+pipeline leads 10.3x; the constant-time default, INVARIANT-20, is the
+stated trade), ChaCha20-Poly1305 3rd of 7, Ed25519 sign 3rd of 6
+(libsodium 1.14x — the AMA signer re-derives A = [a]B every signature,
+INVARIANT-51; the peers read the cached half), X25519 3rd of 5 (within
+12% of OpenSSL), P-256 3rd of 4 (OpenSSL's `ecp_nistz256` assembly),
+ML-KEM-1024 encaps/decaps 1.9x/1.5x behind OpenSSL 4.0.3, and both PQC
+keygens behind at the Python plane (1.7x/3.3x) where the AMA rows alone
+carry the INVARIANT-41 pairwise consistency test — stated on the page,
+not netted out.
+
+**Two mechanisms hardened with the re-measure.** The PQC harness
+hardcoded "OpenSSL 4.0.1" into every peer row; it now labels rows from
+`openssl_version_text()` of the library it actually linked (this run:
+OpenSSL 4.0.3, via the cryptography 50.0.2 wheel) and records both in
+`provenance.peer`. And the page generator now derives the PQC peer's
+label and wheel version from the result file instead of pinned literals,
+and fails the render when either result file lacks the provenance that
+names them.

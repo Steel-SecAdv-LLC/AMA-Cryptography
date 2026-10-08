@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-07 |
+| Last Updated | 2026-10-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -33,6 +33,42 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### The competitive record re-measured on the 5.0.0 tree; INVARIANT-36 retitled to what it governs — 2026-10-08
+
+- **`benchmarks/multi_library_results.json`, `pqc_results.json` and
+  `competitive.html` are a single-host, single-commit measurement of the
+  5.0.0 tree** (`6b43d05`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  SHA-NI, the canonical-host class; method and full data in
+  `docs/BENCHMARK_HISTORY.md`). They replace the 2026-07-29 record of the
+  3.4.0 tree, measured on a host without those ISA extensions. AMA leads
+  outright on SHA3-256, HMAC-SHA3-256, Ed25519 verify (1.65x libsodium),
+  both secp256k1 ECDSA sides and ML-DSA-65 sign/verify (3.6x/1.9x OpenSSL
+  4.0.3); it trails where the page says and why (OpenSSL's VAES AES-GCM
+  pipeline 10.3x against the INVARIANT-20 constant-time default, Ed25519
+  sign 3rd of 6 behind peers that skip INVARIANT-51's per-signature
+  derivation, the known ML-KEM vectorisation-breadth gap, PQC keygens
+  carrying INVARIANT-41's pairwise test at the measured plane). The
+  page's NOTES prose is reconciled to the new ranks, which
+  `tests/test_competitive_page.py` enforces against the rendered table.
+- **The PQC harness and the page generator can no longer mislabel a
+  peer.** `pqc_comparative_bench.py` hardcoded "OpenSSL 4.0.1" into every
+  row — true of the wheel on the 2026-07-29 host, silently false against
+  any other; it now labels rows from `openssl_version_text()` of the
+  library it linked and records the `cryptography` wheel and bundled
+  OpenSSL in `provenance.peer`. `generate_competitive.py` reads the PQC
+  peer's label and wheel from the result file (refusing to render
+  without them) instead of carrying both as literals, and its
+  different-host carve-out for the PQC rows is gone because the
+  condition is: both files now come from one host and one commit, which
+  the generator already enforces.
+- **INVARIANT-36 retitled** (section 6.6): "AMA Is Not Measured Against
+  Another Implementation" was a sentence the invariant's own Statement
+  contradicts — `benchmarks/` exists precisely to measure AMA against
+  the implementations the Statement names, as its first recorded
+  exception. Now "No Other Implementation Is AMA's Correctness Oracle";
+  Statement, scope, gate and exceptions unchanged. AGENTS.md's index
+  line follows.
 
 ### Efficacy table re-measured under the paired comparison; globals() mutations reset the import baseline — 2026-10-07
 

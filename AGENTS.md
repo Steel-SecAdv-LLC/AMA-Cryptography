@@ -122,7 +122,7 @@ this repository. Before modifying an area, read the invariant governing it.
 33. Every Fuzz Harness Registered Everywhere
 34. Low-s Is a Property of the Sign/Verify Pair
 35. A Selector Never Resolves Weaker Than Asked
-36. AMA Is Not Measured Against Another Implementation
+36. No Other Implementation Is AMA's Correctness Oracle
 37. A Verification API Does Not Claim a Check It Does Not Perform
 38. Ed25519 Compressed Points Have a Canonical y
 39. A Failed POST Fails the Import and Inhibits Output

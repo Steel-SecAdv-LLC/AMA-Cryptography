@@ -2025,7 +2025,15 @@ derives its list from the modules rather than from a hand-written literal.
 
 ---
 
-## INVARIANT-36 — AMA Is Not Measured Against Another Implementation
+## INVARIANT-36 — No Other Implementation Is AMA's Correctness Oracle
+
+*Retitled 2026-10-08 per AGENTS.md §6.6. The previous title — "AMA Is Not
+Measured Against Another Implementation" — was a sentence this invariant's own
+Statement contradicts: `benchmarks/` exists precisely to measure AMA's
+throughput against the implementations the Statement names, as the first of
+the two exceptions recorded below. The Statement, scope, gate and exceptions
+are unchanged; what the rule has always governed is correctness ground truth
+and runtime invocation, and the title now says so.*
 
 **Statement.** No other cryptographic implementation's output may serve as an
 answer key for AMA's correctness, and no code under `ama_cryptography/`,
