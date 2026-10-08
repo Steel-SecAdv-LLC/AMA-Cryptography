@@ -751,3 +751,115 @@ indistinguishable from uncommitted changes to a primitive), and a
 `Python bindings` row records which of the six Cython extensions were imported
 — a source checkout without them built and a wheel measure different code on
 the hash, MAC, KDF and signature rows, and nothing in the record said which.
+
+## 2026-10-08: the competitive record re-measured on the 5.0.0 tree, both planes on one host
+
+`benchmarks/multi_library_results.json` and `benchmarks/pqc_results.json`
+were still the 2026-07-29 measurement of the 3.4.0 tree (`66d2073`) — the
+record whose provenance block exists because a re-render once stamped
+"AMA 5.0.0" over it. 5.0.0 changed most of what those files time (the
+in-house Ed25519 backend with INVARIANT-51's per-signature derivation, the
+fixed-base secp256k1 comb, FIPS 204 §5.2 external ML-DSA, the SIMD Keccak
+work), so the competitive page described neither the shipped code nor any
+host it could be reproduced on. Both files are replaced by one pass on one
+host at one commit; the 2026-07-29 figures remain in git history and in the
+sections above, and the two earlier same-day passes of this re-measure
+(`6b43d05`, `5b20def`) are in this branch's history.
+
+**Host.** Intel Xeon @ 2.10 GHz, 4-vCPU KVM guest, the canonical-host class
+of the 2026-09-24 section: `aes_ni pclmulqdq vaes vpclmulqdq avx2 avx512f
+sha_ni bmi2 adx` (measured clock 2.100 GHz). The 2026-07-29 host carried
+**no VAES, no VPCLMULQDQ and no SHA-NI**, and that record's own host note
+says rows from hosts with different feature sets are not directly
+comparable — so rank movements against that record are the tree and the
+host together, not a regression ledger. g++ 13.3.0, `-O2 -std=c++17`, all
+seven peers compiled in. Peer builds are the Ubuntu noble packages the
+generator pins (OpenSSL 3.0.13, libsodium 1.0.18, wolfSSL 5.6.6, Botan
+2.19.3, Nettle 3.9, libgcrypt 1.10.3, mbedTLS 2.28.8) — the same version
+set as 2026-07-29.
+
+**Method.** The documented pipeline, verbatim from the page's methodology
+section: `multibench 65536` (the harness's own best-of-N per row, compiled
+with `AMA_HARNESS_SOURCE_SHA3` so the binary attests the source it was
+built from) under `taskset -c 0`, provenance stamped by
+`comparative_benchmark.py --stamp-multibench`, then
+`pqc_comparative_bench.py` (median of 200, distinct messages for the
+rejection-sampled signer) under `taskset -c 0`, then
+`generate_competitive.py`. Measured at `c43c110` with every measured build
+path clean — the C harness source is itself a measured path and the
+binary's recorded source digest equals the tree's — and both provenance
+blocks `attributable: true` naming that commit; the one dirty path each
+block records is `benchmarks/multi_library_results.json`, the harness's
+own result file. Two passes taken in the minutes after a container
+restart of the measuring VM were discarded for a named structural cause,
+not for their rankings: each carried an HMAC-SHA3 row impossibly far from
+its own SHA3 row for the same implementation (57% of it in one pass, 132%
+of it in the other, against a construction that bounds the pair to within
+a few percent), with whole row-blocks shifted 30-50% mid-pass. The
+committed pass, taken after the host settled, has AMA's pair at 0.90.
+
+**AMA 5.0.0 at `c43c110`, 57 native rows + 12 PQC rows — read the close
+races at span granularity.** Single-pass rows on this shared-vCPU host
+carry per-row contention windows, so the six same-day passes (four before
+the VM restart, the committed one after, plus the two discarded for the
+cause above) are summarized as spans wherever the race is close. Leads on
+every settled pass: Ed25519 verify (1st of 6; 1.55x libsodium here),
+secp256k1 ECDSA sign (1st of 3; 1.21x Botan, 4.4x OpenSSL here), ML-DSA-65
+sign and verify (3.1x and 1.8x over OpenSSL 4.0.3 here). Races, stated as
+spans: SHA3-256 1st of 6 on this pass at 38% over libgcrypt (span across
+passes: 12.6% behind to 38% ahead); HMAC-SHA3-256 2nd of 4 here (1st on
+three of the five settled passes; this pass's leader artefact — OpenSSL's
+HMAC row outrunning its own SHA3 row — is a different-provider path
+inside OpenSSL); Ed25519 sign 3rd of 6 here, 1.22x behind libsodium (the
+AMA signer re-derives A = [a]B every signature, INVARIANT-51, where the
+peers read the cached half); secp256k1 ECDSA verify 3rd of 3 on this
+pass's contention draw, 1st on four of the five settled passes. Stable
+trails, same reasons on every pass: AES-256-GCM 5th of 8 (OpenSSL's
+VAES+VPCLMULQDQ pipeline 8.6x here; the constant-time default,
+INVARIANT-20, is the stated trade; AMA 1.74x ahead of Botan),
+ChaCha20-Poly1305 3rd of 7 (OpenSSL 3.2x), X25519 3rd of 5 (within 1.23x
+of OpenSSL), P-256 3rd of 4 (OpenSSL's `ecp_nistz256` assembly, 4.1x on
+signing), ML-KEM-1024 encaps/decaps 2.1x/1.7x behind, and both PQC
+keygens behind at the Python plane (ML-KEM 2.3x, ML-DSA 3.3x) where the
+AMA rows alone carry the INVARIANT-41 pairwise consistency test — stated
+on the page, not netted out.
+
+**The provenance mechanisms hardened with the re-measure.** The PQC harness
+hardcoded "OpenSSL 4.0.1" into every peer row; it now labels rows from
+`openssl_version_text()` of the library it actually linked (this run:
+OpenSSL 4.0.3, via the cryptography 50.0.2 wheel) and records both in
+`provenance.peer`. The page generator derives the PQC peer's label and
+wheel version from the result file instead of pinned literals, and fails
+the render when either result file lacks the provenance that names them.
+After a review finding on `b8471c4` — a commit names the sources, not
+the compiled object a stale build tree could supply — the provenance
+block pins the loaded backend by its mapped-bytes SHA3-256 with its
+digest-matched build configuration (the efficacy trailer's evidence
+rule), and an unpinnable artifact disowns the commit outright. And
+after review findings on `8a26498` and `f0582cf` — a stamp that hashes
+a caller-supplied path proves nothing about what the loader actually
+mapped, and a pathname alone is not a mapping, since a POSIX mapping
+survives rename/replacement — the C harness itself records
+`loaded_library`: `dladdr(ama_sha3_256)` names the module that provided
+the symbol its process called, the bytes are hashed from an open
+descriptor whose device and inode must equal what `/proc/self/maps`
+records for the mapping containing the symbol (the Python loader's
+mapped-bytes rule, applied to the C plane), and the stamper refuses the
+attribution unless that harness-recorded object is byte-identical to
+the attested backend; the committed record carries
+`byte_identical_to_loaded_backend: true` from that path. Three more
+closures from the `f0582cf` review: `multi_library_bench.cpp` is a
+measured build path (a dirty harness disowns the commit); a pinned
+artifact whose build configuration no tree digest-matches is demoted
+exactly like an unpinned artifact (a figure does not publish without
+its build flags, AGENTS.md section 8 item 7); and the efficacy table's
+regeneration fails closed on the same rule instead of writing
+'unrecorded' trailer lines. And the `0bc915a` review closed the chain's
+last link: the binary itself — a clean checkout can run a stale
+`multibench` built from an older revision — now attests the source it
+was compiled from (`AMA_HARNESS_SOURCE_SHA3`, injected by the documented
+compile line, emitted beside the results), and the stamper refuses the
+attribution unless that recorded digest equals the tree's
+`multi_library_bench.cpp`: the executed-matches-source rule
+(INVARIANT-40) on the C plane. Every refusal in the chain is
+mutation-pinned.

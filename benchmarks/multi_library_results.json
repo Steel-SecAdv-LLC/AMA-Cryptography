@@ -1,429 +1,458 @@
 {
-  "provenance": {
-    "ama_commit": "66d207396c3bb5645486f28ffa084dda0c12799f",
-    "ama_version": "3.4.0",
-    "measured_at": "2026-07-29T19:09:37-05:00",
-    "note": "The commit at which these measurements were taken, and the ama_cryptography __version__ declared by that commit. Added retrospectively, from `git log -1 -- benchmarks/multi_library_results.json` and `git show <commit>:ama_cryptography/__init__.py`, because the file carried no version at all \u2014 which is what let benchmarks/competitive.html be re-rendered at a later commit and stamped 'AMA 5.0.0' over data measured on the 3.4.0 tree. generate_competitive.py now reads the AMA version from HERE rather than from the working tree, so a re-render without a re-measurement cannot relabel the data."
-  },
-  "freq_hz": 2800765325.1,
-  "message_bytes": 65536,
-  "host": {
-    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
-    "note": "Feature bits are recorded because they decide which kernel each library selects; peer AES-GCM in particular moves ~4x with VAES+VPCLMULQDQ. Rows from hosts with different feature sets are not directly comparable.",
-    "aes_ni": 1,
-    "pclmulqdq": 1,
-    "vaes": 0,
-    "vpclmulqdq": 0,
-    "avx2": 1,
-    "avx512f": 1,
-    "sha_ni": 0,
-    "bmi2": 1,
-    "adx": 1
-  },
-  "libraries_compiled": [
-    "AMA",
-    "OpenSSL",
-    "libsodium",
-    "wolfSSL",
-    "Botan",
-    "Nettle",
-    "libgcrypt",
-    "mbedTLS"
+ "provenance": {
+  "ama_version": "5.0.0",
+  "ama_commit": "c43c1103611c8ade486eedf56db58b2a212536e9",
+  "attributable": true,
+  "tree_dirty": true,
+  "dirty_paths": [
+   "benchmarks/multi_library_results.json",
+   "benchmarks/pqc_results.json"
   ],
-  "results": [
-    {
-      "primitive": "SHA3-256",
-      "library": "AMA",
-      "us_per_op": 152.40121,
-      "ops_per_sec": 6561.63,
-      "mb_per_sec": 430.023,
-      "cycles_per_byte": 6.5131
-    },
-    {
-      "primitive": "SHA3-256",
-      "library": "OpenSSL",
-      "us_per_op": 173.59642,
-      "ops_per_sec": 5760.49,
-      "mb_per_sec": 377.519,
-      "cycles_per_byte": 7.4189
-    },
-    {
-      "primitive": "SHA3-256",
-      "library": "wolfSSL",
-      "us_per_op": 205.131445,
-      "ops_per_sec": 4874.92,
-      "mb_per_sec": 319.483,
-      "cycles_per_byte": 8.7666
-    },
-    {
-      "primitive": "SHA3-256",
-      "library": "Botan",
-      "us_per_op": 199.170785,
-      "ops_per_sec": 5020.82,
-      "mb_per_sec": 329.044,
-      "cycles_per_byte": 8.5118
-    },
-    {
-      "primitive": "SHA3-256",
-      "library": "Nettle",
-      "us_per_op": 220.635165,
-      "ops_per_sec": 4532.37,
-      "mb_per_sec": 297.033,
-      "cycles_per_byte": 9.4291
-    },
-    {
-      "primitive": "SHA3-256",
-      "library": "libgcrypt",
-      "us_per_op": 153.443575,
-      "ops_per_sec": 6517.05,
-      "mb_per_sec": 427.102,
-      "cycles_per_byte": 6.5576
-    },
-    {
-      "primitive": "HMAC-SHA3-256",
-      "library": "AMA",
-      "us_per_op": 151.74269,
-      "ops_per_sec": 6590.1,
-      "mb_per_sec": 431.889,
-      "cycles_per_byte": 6.4849
-    },
-    {
-      "primitive": "HMAC-SHA3-256",
-      "library": "OpenSSL",
-      "us_per_op": 176.74791,
-      "ops_per_sec": 5657.78,
-      "mb_per_sec": 370.788,
-      "cycles_per_byte": 7.5535
-    },
-    {
-      "primitive": "HMAC-SHA3-256",
-      "library": "Botan",
-      "us_per_op": 197.210945,
-      "ops_per_sec": 5070.71,
-      "mb_per_sec": 332.314,
-      "cycles_per_byte": 8.4281
-    },
-    {
-      "primitive": "HMAC-SHA3-256",
-      "library": "libgcrypt",
-      "us_per_op": 154.736875,
-      "ops_per_sec": 6462.58,
-      "mb_per_sec": 423.532,
-      "cycles_per_byte": 6.6129
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "AMA",
-      "us_per_op": 20.9893,
-      "ops_per_sec": 47643.32,
-      "mb_per_sec": 3122.353,
-      "cycles_per_byte": 0.897
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "OpenSSL",
-      "us_per_op": 13.36439,
-      "ops_per_sec": 74825.71,
-      "mb_per_sec": 4903.778,
-      "cycles_per_byte": 0.5711
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "libsodium",
-      "us_per_op": 35.734605,
-      "ops_per_sec": 27984.08,
-      "mb_per_sec": 1833.965,
-      "cycles_per_byte": 1.5272
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "wolfSSL",
-      "us_per_op": 528.99009,
-      "ops_per_sec": 1890.39,
-      "mb_per_sec": 123.889,
-      "cycles_per_byte": 22.6071
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "Botan",
-      "us_per_op": 123.952405,
-      "ops_per_sec": 8067.61,
-      "mb_per_sec": 528.719,
-      "cycles_per_byte": 5.2973
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "Nettle",
-      "us_per_op": 26.522275,
-      "ops_per_sec": 37704.16,
-      "mb_per_sec": 2470.98,
-      "cycles_per_byte": 1.1335
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "libgcrypt",
-      "us_per_op": 16.059115,
-      "ops_per_sec": 62269.93,
-      "mb_per_sec": 4080.922,
-      "cycles_per_byte": 0.6863
-    },
-    {
-      "primitive": "AES-256-GCM",
-      "library": "mbedTLS",
-      "us_per_op": 299.36805,
-      "ops_per_sec": 3340.37,
-      "mb_per_sec": 218.914,
-      "cycles_per_byte": 12.7939
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "AMA",
-      "us_per_op": 67.608485,
-      "ops_per_sec": 14791.04,
-      "mb_per_sec": 969.346,
-      "cycles_per_byte": 2.8893
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "OpenSSL",
-      "us_per_op": 28.59283,
-      "ops_per_sec": 34973.8,
-      "mb_per_sec": 2292.043,
-      "cycles_per_byte": 1.222
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "libsodium",
-      "us_per_op": 44.35847,
-      "ops_per_sec": 22543.61,
-      "mb_per_sec": 1477.418,
-      "cycles_per_byte": 1.8957
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "wolfSSL",
-      "us_per_op": 179.00677,
-      "ops_per_sec": 5586.38,
-      "mb_per_sec": 366.109,
-      "cycles_per_byte": 7.6501
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "Botan",
-      "us_per_op": 150.01097,
-      "ops_per_sec": 6666.18,
-      "mb_per_sec": 436.875,
-      "cycles_per_byte": 6.4109
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "Nettle",
-      "us_per_op": 150.489165,
-      "ops_per_sec": 6645.0,
-      "mb_per_sec": 435.487,
-      "cycles_per_byte": 6.4313
-    },
-    {
-      "primitive": "ChaCha20-Poly1305",
-      "library": "mbedTLS",
-      "us_per_op": 239.185855,
-      "ops_per_sec": 4180.85,
-      "mb_per_sec": 273.996,
-      "cycles_per_byte": 10.2219
-    },
-    {
-      "primitive": "Ascon-128 AEAD",
-      "library": "AMA",
-      "us_per_op": 181.78842,
-      "ops_per_sec": 5500.9,
-      "mb_per_sec": 360.507,
-      "cycles_per_byte": 7.769
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "AMA",
-      "us_per_op": 14.667333,
-      "ops_per_sec": 68178.72
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "AMA",
-      "us_per_op": 45.478373,
-      "ops_per_sec": 21988.47
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "OpenSSL",
-      "us_per_op": 44.083083,
-      "ops_per_sec": 22684.44
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "OpenSSL",
-      "us_per_op": 118.10025,
-      "ops_per_sec": 8467.38
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "libsodium",
-      "us_per_op": 20.31581,
-      "ops_per_sec": 49222.75
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "libsodium",
-      "us_per_op": 57.059483,
-      "ops_per_sec": 17525.57
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "wolfSSL",
-      "us_per_op": 21.32613,
-      "ops_per_sec": 46890.83
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "wolfSSL",
-      "us_per_op": 63.778033,
-      "ops_per_sec": 15679.38
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "Botan",
-      "us_per_op": 42.816423,
-      "ops_per_sec": 23355.52
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "Botan",
-      "us_per_op": 144.121943,
-      "ops_per_sec": 6938.57
-    },
-    {
-      "primitive": "Ed25519 sign",
-      "library": "Nettle",
-      "us_per_op": 28.698433,
-      "ops_per_sec": 34845.11
-    },
-    {
-      "primitive": "Ed25519 verify",
-      "library": "Nettle",
-      "us_per_op": 115.401177,
-      "ops_per_sec": 8665.42
-    },
-    {
-      "primitive": "X25519 scalar-mult",
-      "library": "AMA",
-      "us_per_op": 54.746267,
-      "ops_per_sec": 18266.09
-    },
-    {
-      "primitive": "X25519 scalar-mult",
-      "library": "OpenSSL",
-      "us_per_op": 37.421467,
-      "ops_per_sec": 26722.63
-    },
-    {
-      "primitive": "X25519 scalar-mult",
-      "library": "libsodium",
-      "us_per_op": 39.50157,
-      "ops_per_sec": 25315.45
-    },
-    {
-      "primitive": "X25519 scalar-mult",
-      "library": "wolfSSL",
-      "us_per_op": 57.4167,
-      "ops_per_sec": 17416.54
-    },
-    {
-      "primitive": "X25519 scalar-mult",
-      "library": "Nettle",
-      "us_per_op": 76.343207,
-      "ops_per_sec": 13098.74
-    },
-    {
-      "primitive": "P-256 ECDSA sign",
-      "library": "AMA",
-      "us_per_op": 138.06159,
-      "ops_per_sec": 7243.14
-    },
-    {
-      "primitive": "P-256 ECDSA verify",
-      "library": "AMA",
-      "us_per_op": 254.249763,
-      "ops_per_sec": 3933.14
-    },
-    {
-      "primitive": "P-256 ECDSA sign",
-      "library": "OpenSSL",
-      "us_per_op": 26.776857,
-      "ops_per_sec": 37345.68
-    },
-    {
-      "primitive": "P-256 ECDSA verify",
-      "library": "OpenSSL",
-      "us_per_op": 74.60614,
-      "ops_per_sec": 13403.72
-    },
-    {
-      "primitive": "P-256 ECDSA sign",
-      "library": "wolfSSL",
-      "us_per_op": 84.49468,
-      "ops_per_sec": 11835.06
-    },
-    {
-      "primitive": "P-256 ECDSA verify",
-      "library": "wolfSSL",
-      "us_per_op": 93.298043,
-      "ops_per_sec": 10718.34
-    },
-    {
-      "primitive": "P-256 ECDSA sign",
-      "library": "Botan",
-      "us_per_op": 181.34143,
-      "ops_per_sec": 5514.46
-    },
-    {
-      "primitive": "P-256 ECDSA verify",
-      "library": "Botan",
-      "us_per_op": 332.945163,
-      "ops_per_sec": 3003.5
-    },
-    {
-      "primitive": "secp256k1 ECDSA sign",
-      "library": "AMA",
-      "us_per_op": 113.553973,
-      "ops_per_sec": 8806.38
-    },
-    {
-      "primitive": "secp256k1 ECDSA verify",
-      "library": "AMA",
-      "us_per_op": 273.069017,
-      "ops_per_sec": 3662.08
-    },
-    {
-      "primitive": "secp256k1 ECDSA sign",
-      "library": "OpenSSL",
-      "us_per_op": 462.265573,
-      "ops_per_sec": 2163.26
-    },
-    {
-      "primitive": "secp256k1 ECDSA verify",
-      "library": "OpenSSL",
-      "us_per_op": 403.667633,
-      "ops_per_sec": 2477.29
-    },
-    {
-      "primitive": "secp256k1 ECDSA sign",
-      "library": "Botan",
-      "us_per_op": 201.214347,
-      "ops_per_sec": 4969.82
-    },
-    {
-      "primitive": "secp256k1 ECDSA verify",
-      "library": "Botan",
-      "us_per_op": 313.880187,
-      "ops_per_sec": 3185.93
-    }
-  ]
+  "measured_at": "2026-10-08T07:31:15.269480+00:00",
+  "note": "written by the harness before measuring",
+  "native_artifact": {
+   "file": "libama_cryptography.so",
+   "sha3_256": "76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a"
+  },
+  "native_build": "GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)",
+  "harness_source": {
+   "tree_sha3_256": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
+   "binary_recorded_sha3_256": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
+   "binary_matches_tree": true
+  },
+  "linked_library": {
+   "file": "libama_cryptography.so.5",
+   "path": "/home/user/AMA-Cryptography/build/lib/libama_cryptography.so.5",
+   "sha3_256": "76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a",
+   "recorded_by": "dladdr(ama_sha3_256); bytes hashed from an open fd whose dev:inode equals the live mapping's in /proc/self/maps; SHA3-256 computed by the resolved library itself",
+   "byte_identical_to_loaded_backend": true
+  }
+ },
+ "freq_hz": 2100445672.7,
+ "message_bytes": 65536,
+ "host": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "note": "Feature bits are recorded because they decide which kernel each library selects; peer AES-GCM in particular moves ~4x with VAES+VPCLMULQDQ. Rows from hosts with different feature sets are not directly comparable.",
+  "aes_ni": 1,
+  "pclmulqdq": 1,
+  "vaes": 1,
+  "vpclmulqdq": 1,
+  "avx2": 1,
+  "avx512f": 1,
+  "sha_ni": 1,
+  "bmi2": 1,
+  "adx": 1
+ },
+ "harness_source_sha3": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
+ "loaded_library": {
+  "path": "/home/user/AMA-Cryptography/build/lib/libama_cryptography.so.5",
+  "sha3_256": "76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a",
+  "method": "dladdr(ama_sha3_256); bytes hashed from an open fd whose dev:inode equals the live mapping's in /proc/self/maps; SHA3-256 computed by the resolved library itself"
+ },
+ "libraries_compiled": [
+  "AMA",
+  "OpenSSL",
+  "libsodium",
+  "wolfSSL",
+  "Botan",
+  "Nettle",
+  "libgcrypt",
+  "mbedTLS"
+ ],
+ "results": [
+  {
+   "primitive": "SHA3-256",
+   "library": "AMA",
+   "us_per_op": 116.021885,
+   "ops_per_sec": 8619.06,
+   "mb_per_sec": 564.859,
+   "cycles_per_byte": 3.7185
+  },
+  {
+   "primitive": "SHA3-256",
+   "library": "OpenSSL",
+   "us_per_op": 150.382545,
+   "ops_per_sec": 6649.71,
+   "mb_per_sec": 435.795,
+   "cycles_per_byte": 4.8198
+  },
+  {
+   "primitive": "SHA3-256",
+   "library": "wolfSSL",
+   "us_per_op": 182.32063,
+   "ops_per_sec": 5484.84,
+   "mb_per_sec": 359.455,
+   "cycles_per_byte": 5.8434
+  },
+  {
+   "primitive": "SHA3-256",
+   "library": "Botan",
+   "us_per_op": 162.273205,
+   "ops_per_sec": 6162.45,
+   "mb_per_sec": 403.862,
+   "cycles_per_byte": 5.2009
+  },
+  {
+   "primitive": "SHA3-256",
+   "library": "Nettle",
+   "us_per_op": 216.260135,
+   "ops_per_sec": 4624.06,
+   "mb_per_sec": 303.042,
+   "cycles_per_byte": 6.9312
+  },
+  {
+   "primitive": "SHA3-256",
+   "library": "libgcrypt",
+   "us_per_op": 159.86571,
+   "ops_per_sec": 6255.25,
+   "mb_per_sec": 409.944,
+   "cycles_per_byte": 5.1237
+  },
+  {
+   "primitive": "HMAC-SHA3-256",
+   "library": "AMA",
+   "us_per_op": 128.89843,
+   "ops_per_sec": 7758.05,
+   "mb_per_sec": 508.431,
+   "cycles_per_byte": 4.1312
+  },
+  {
+   "primitive": "HMAC-SHA3-256",
+   "library": "OpenSSL",
+   "us_per_op": 116.62492,
+   "ops_per_sec": 8574.5,
+   "mb_per_sec": 561.938,
+   "cycles_per_byte": 3.7379
+  },
+  {
+   "primitive": "HMAC-SHA3-256",
+   "library": "Botan",
+   "us_per_op": 232.09064,
+   "ops_per_sec": 4308.66,
+   "mb_per_sec": 282.372,
+   "cycles_per_byte": 7.4386
+  },
+  {
+   "primitive": "HMAC-SHA3-256",
+   "library": "libgcrypt",
+   "us_per_op": 217.504645,
+   "ops_per_sec": 4597.6,
+   "mb_per_sec": 301.309,
+   "cycles_per_byte": 6.9711
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "AMA",
+   "us_per_op": 63.164445,
+   "ops_per_sec": 15831.69,
+   "mb_per_sec": 1037.546,
+   "cycles_per_byte": 2.0244
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "OpenSSL",
+   "us_per_op": 7.38655,
+   "ops_per_sec": 135381.2,
+   "mb_per_sec": 8872.342,
+   "cycles_per_byte": 0.2367
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "libsodium",
+   "us_per_op": 39.01667,
+   "ops_per_sec": 25630.07,
+   "mb_per_sec": 1679.692,
+   "cycles_per_byte": 1.2505
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "wolfSSL",
+   "us_per_op": 550.6366,
+   "ops_per_sec": 1816.08,
+   "mb_per_sec": 119.019,
+   "cycles_per_byte": 17.648
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "Botan",
+   "us_per_op": 109.588245,
+   "ops_per_sec": 9125.07,
+   "mb_per_sec": 598.02,
+   "cycles_per_byte": 3.5123
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "Nettle",
+   "us_per_op": 21.20713,
+   "ops_per_sec": 47153.95,
+   "mb_per_sec": 3090.281,
+   "cycles_per_byte": 0.6797
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "libgcrypt",
+   "us_per_op": 11.500145,
+   "ops_per_sec": 86955.43,
+   "mb_per_sec": 5698.711,
+   "cycles_per_byte": 0.3686
+  },
+  {
+   "primitive": "AES-256-GCM",
+   "library": "mbedTLS",
+   "us_per_op": 275.0612,
+   "ops_per_sec": 3635.55,
+   "mb_per_sec": 238.26,
+   "cycles_per_byte": 8.8158
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "AMA",
+   "us_per_op": 65.252905,
+   "ops_per_sec": 15324.99,
+   "mb_per_sec": 1004.338,
+   "cycles_per_byte": 2.0914
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "OpenSSL",
+   "us_per_op": 20.356105,
+   "ops_per_sec": 49125.31,
+   "mb_per_sec": 3219.476,
+   "cycles_per_byte": 0.6524
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "libsodium",
+   "us_per_op": 44.461755,
+   "ops_per_sec": 22491.24,
+   "mb_per_sec": 1473.986,
+   "cycles_per_byte": 1.425
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "wolfSSL",
+   "us_per_op": 160.49734,
+   "ops_per_sec": 6230.63,
+   "mb_per_sec": 408.331,
+   "cycles_per_byte": 5.144
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "Botan",
+   "us_per_op": 129.13519,
+   "ops_per_sec": 7743.82,
+   "mb_per_sec": 507.499,
+   "cycles_per_byte": 4.1388
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "Nettle",
+   "us_per_op": 126.706115,
+   "ops_per_sec": 7892.28,
+   "mb_per_sec": 517.228,
+   "cycles_per_byte": 4.061
+  },
+  {
+   "primitive": "ChaCha20-Poly1305",
+   "library": "mbedTLS",
+   "us_per_op": 199.987085,
+   "ops_per_sec": 5000.32,
+   "mb_per_sec": 327.701,
+   "cycles_per_byte": 6.4096
+  },
+  {
+   "primitive": "Ascon-128 AEAD",
+   "library": "AMA",
+   "us_per_op": 158.99683,
+   "ops_per_sec": 6289.43,
+   "mb_per_sec": 412.184,
+   "cycles_per_byte": 5.0959
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "AMA",
+   "us_per_op": 20.25396,
+   "ops_per_sec": 49373.06
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "AMA",
+   "us_per_op": 29.521483,
+   "ops_per_sec": 33873.64
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "OpenSSL",
+   "us_per_op": 41.0121,
+   "ops_per_sec": 24383.05
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "OpenSSL",
+   "us_per_op": 107.872303,
+   "ops_per_sec": 9270.22
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "libsodium",
+   "us_per_op": 16.56632,
+   "ops_per_sec": 60363.44
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "libsodium",
+   "us_per_op": 45.69634,
+   "ops_per_sec": 21883.59
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "wolfSSL",
+   "us_per_op": 17.69765,
+   "ops_per_sec": 56504.68
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "wolfSSL",
+   "us_per_op": 91.621347,
+   "ops_per_sec": 10914.49
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "Botan",
+   "us_per_op": 60.910823,
+   "ops_per_sec": 16417.44
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "Botan",
+   "us_per_op": 148.254707,
+   "ops_per_sec": 6745.15
+  },
+  {
+   "primitive": "Ed25519 sign",
+   "library": "Nettle",
+   "us_per_op": 25.155403,
+   "ops_per_sec": 39752.89
+  },
+  {
+   "primitive": "Ed25519 verify",
+   "library": "Nettle",
+   "us_per_op": 92.489313,
+   "ops_per_sec": 10812.06
+  },
+  {
+   "primitive": "X25519 scalar-mult",
+   "library": "AMA",
+   "us_per_op": 43.486223,
+   "ops_per_sec": 22995.79
+  },
+  {
+   "primitive": "X25519 scalar-mult",
+   "library": "OpenSSL",
+   "us_per_op": 35.391053,
+   "ops_per_sec": 28255.73
+  },
+  {
+   "primitive": "X25519 scalar-mult",
+   "library": "libsodium",
+   "us_per_op": 39.4228,
+   "ops_per_sec": 25366.03
+  },
+  {
+   "primitive": "X25519 scalar-mult",
+   "library": "wolfSSL",
+   "us_per_op": 51.037863,
+   "ops_per_sec": 19593.3
+  },
+  {
+   "primitive": "X25519 scalar-mult",
+   "library": "Nettle",
+   "us_per_op": 59.767893,
+   "ops_per_sec": 16731.39
+  },
+  {
+   "primitive": "P-256 ECDSA sign",
+   "library": "AMA",
+   "us_per_op": 128.128617,
+   "ops_per_sec": 7804.66
+  },
+  {
+   "primitive": "P-256 ECDSA verify",
+   "library": "AMA",
+   "us_per_op": 268.344197,
+   "ops_per_sec": 3726.56
+  },
+  {
+   "primitive": "P-256 ECDSA sign",
+   "library": "OpenSSL",
+   "us_per_op": 30.878523,
+   "ops_per_sec": 32384.97
+  },
+  {
+   "primitive": "P-256 ECDSA verify",
+   "library": "OpenSSL",
+   "us_per_op": 92.27393,
+   "ops_per_sec": 10837.3
+  },
+  {
+   "primitive": "P-256 ECDSA sign",
+   "library": "wolfSSL",
+   "us_per_op": 74.084343,
+   "ops_per_sec": 13498.13
+  },
+  {
+   "primitive": "P-256 ECDSA verify",
+   "library": "wolfSSL",
+   "us_per_op": 82.720503,
+   "ops_per_sec": 12088.9
+  },
+  {
+   "primitive": "P-256 ECDSA sign",
+   "library": "Botan",
+   "us_per_op": 143.642273,
+   "ops_per_sec": 6961.74
+  },
+  {
+   "primitive": "P-256 ECDSA verify",
+   "library": "Botan",
+   "us_per_op": 447.474643,
+   "ops_per_sec": 2234.76
+  },
+  {
+   "primitive": "secp256k1 ECDSA sign",
+   "library": "AMA",
+   "us_per_op": 125.113737,
+   "ops_per_sec": 7992.73
+  },
+  {
+   "primitive": "secp256k1 ECDSA verify",
+   "library": "AMA",
+   "us_per_op": 313.808333,
+   "ops_per_sec": 3186.66
+  },
+  {
+   "primitive": "secp256k1 ECDSA sign",
+   "library": "OpenSSL",
+   "us_per_op": 547.184883,
+   "ops_per_sec": 1827.54
+  },
+  {
+   "primitive": "secp256k1 ECDSA verify",
+   "library": "OpenSSL",
+   "us_per_op": 300.87905,
+   "ops_per_sec": 3323.59
+  },
+  {
+   "primitive": "secp256k1 ECDSA sign",
+   "library": "Botan",
+   "us_per_op": 151.657277,
+   "ops_per_sec": 6593.81
+  },
+  {
+   "primitive": "secp256k1 ECDSA verify",
+   "library": "Botan",
+   "us_per_op": 253.500553,
+   "ops_per_sec": 3944.76
+  }
+ ]
 }

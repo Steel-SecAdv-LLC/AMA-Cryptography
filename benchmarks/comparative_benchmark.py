@@ -818,6 +818,11 @@ _MEASURED_BUILD_PATHS = (
     "pyproject.toml",
     "benchmarks/comparative_benchmark.py",
     "benchmarks/pqc_comparative_bench.py",
+    # The C harness is measuring code too: an uncommitted edit to it can
+    # produce different rows, and the loaded-library digest proves only
+    # which AMA object ran, not which harness measured it (review finding
+    # on f0582cf).
+    "benchmarks/multi_library_bench.cpp",
 )
 
 
@@ -910,7 +915,193 @@ def _measurement_provenance() -> "Dict[str, Any]":
     }
     if not attributable:
         block["unattributable_because"] = reasons
+    _attach_native_artifact(block)
+    # A record whose executed artifact cannot be pinned is not published
+    # under a commit: the sources' cleanliness says nothing about which
+    # compiled object actually ran.  The first form of
+    # _attach_native_artifact recorded the artifact as unrecorded but left
+    # the commit attribution standing, which re-opened, on loaders where
+    # the preload digest is not of the mapped bytes (and on any attestation
+    # failure), the same stale-build hole the field exists to close
+    # (review finding on a3508b6).
+    artifact_unpinned = not isinstance(block.get("native_artifact"), dict)
+    build = str(block.get("native_build", ""))
+    # benchmark_runner.BUILD_CONFIGURATION_NOT_RECORDED is "not recorded";
+    # _attach_native_artifact's own refusals say "unrecorded".  Either way
+    # the record has no build flags.
+    build_unrecorded = build.startswith("unrecorded") or build.startswith("not recorded")
+    if artifact_unpinned or build_unrecorded:
+        # AGENTS.md section 8 item 7: a published figure carries its build
+        # flags.  A pinned artifact whose build no tree digest-matches is
+        # as unpublishable as an unpinned artifact (review finding on
+        # f0582cf: the not-recorded build line previously rode through
+        # under attributable: true).
+        block["attributable"] = False
+        block["ama_commit"] = "unknown"
+        unattributable = list(block.get("unattributable_because", []))
+        if artifact_unpinned:
+            unattributable.append(
+                "the executed native artifact could not be pinned: "
+                + str(block.get("native_artifact"))
+            )
+        else:
+            unattributable.append(
+                "the pinned artifact's build configuration is not recorded "
+                "(no build tree digest-matches the measured object), and a "
+                "figure does not publish without its build flags: " + build
+            )
+        block["unattributable_because"] = unattributable
     return block
+
+
+def _attach_native_artifact(block: "Dict[str, Any]") -> None:
+    """Pin the native object these timings executed, and its build.
+
+    A commit names the sources; it cannot name the compiled object a stale
+    build tree supplied, so a record carrying only ``ama_commit`` could
+    publish an old library's timings under a fresh commit (review finding
+    on b8471c4).  The loaded backend is pinned by its mapped-bytes SHA3-256
+    from the module attestation, and the build configuration is attributed
+    only by digest-matching — the same evidence rule as the efficacy
+    table's trailer (``r3_efficacy_eval._provenance_lines``).
+    """
+    unpinned = "unrecorded (no pinned artifact to attribute a build tree to)"
+    try:
+        from ama_cryptography._self_test import module_attestation
+
+        from benchmarks import benchmark_runner
+
+        nb = module_attestation().get("native_backend") or {}
+        name = Path(str(nb.get("path") or "")).name
+        digest = str(nb.get("preload_digest_hex") or "")
+        if name and digest and nb.get("preload_digest_is_of_mapped_bytes"):
+            block["native_artifact"] = {"file": name, "sha3_256": digest}
+            block["native_build"] = benchmark_runner._native_build_configuration()
+        elif name and digest:
+            block["native_artifact"] = (
+                "unrecorded (preload digest is not of the mapped bytes on this "
+                "loader; the measured object cannot be pinned)"
+            )
+            block["native_build"] = unpinned
+        else:
+            block["native_artifact"] = (
+                "unrecorded (no native-backend attestation in the measuring process)"
+            )
+            block["native_build"] = unpinned
+    except Exception as exc:  # pragma: no cover - provenance must never raise
+        block["native_artifact"] = f"unrecorded ({type(exc).__name__}: {exc})"
+        block["native_build"] = unpinned
+
+
+def harness_source_digest() -> str:
+    """SHA3-256 of the C harness source, by the package's own kernel.
+
+    The documented compile line injects this as AMA_HARNESS_SOURCE_SHA3 so
+    the binary carries the digest of the source it was compiled from, and
+    the stamper requires the binary's recorded digest to equal the tree's
+    file — the executed-matches-source rule (INVARIANT-40) on the C plane
+    (review finding on 0bc915a: a clean checkout can still run a stale
+    multibench built from an older revision, and the loaded-library digest
+    proves only the AMA object, not the harness).
+    """
+    from ama_cryptography.pqc_backends import native_sha3_256
+
+    source = Path(__file__).resolve().parent / "multi_library_bench.cpp"
+    return native_sha3_256(source.read_bytes()).hex()
+
+
+def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
+    """Stamp the C harness's result file with this checkout's provenance.
+
+    ``multi_library_bench.cpp`` writes its rows with no provenance, and
+    ``generate_competitive.py`` refuses to render a record whose measuring
+    build is unknown.  This computes the same block the Python-plane
+    harnesses record and pins the object the C PROCESS ITSELF reports
+    having resolved: the harness records ``loaded_library`` from
+    ``dladdr(ama_sha3_256)`` — the module that provided the symbol it
+    called — digested by that library's own SHA3.  The first form of this
+    function hashed a caller-supplied path instead, which the dynamic
+    loader may never have mapped (LD_LIBRARY_PATH, RPATH or ldconfig can
+    resolve another same-named object; review finding on 8a26498).  A
+    record without the harness's own ``loaded_library``, or whose loaded
+    object is not byte-identical to the attested backend, is marked
+    unattributable — fail closed, never a guess (review finding on
+    b8471c4).
+    """
+    provenance = _measurement_provenance()
+    data = json.loads(results_json.read_text(encoding="utf-8"))
+    raw_loaded = data.get("loaded_library")
+    loaded: Optional[Dict[str, Any]] = raw_loaded if isinstance(raw_loaded, dict) else None
+    if loaded is not None and not (
+        isinstance(loaded.get("path"), str)
+        and isinstance(loaded.get("sha3_256"), str)
+        and len(str(loaded.get("sha3_256"))) == 64
+    ):
+        loaded = None
+    artifact = provenance.get("native_artifact")
+    expected_harness = harness_source_digest()
+    recorded_harness = data.get("harness_source_sha3")
+    harness_bound = isinstance(recorded_harness, str) and recorded_harness == expected_harness
+    provenance["harness_source"] = {
+        "tree_sha3_256": expected_harness,
+        "binary_recorded_sha3_256": (
+            recorded_harness if isinstance(recorded_harness, str) else "absent"
+        ),
+        "binary_matches_tree": harness_bound,
+    }
+    # Byte identity and source binding are different facts and are
+    # recorded separately: a stale harness attestation must not make the
+    # record claim the library digests differ when they are equal (review
+    # finding on 5da5c6c).  Attribution requires BOTH.
+    digest_match = (
+        loaded is not None
+        and isinstance(artifact, dict)
+        and artifact.get("sha3_256") == loaded["sha3_256"]
+    )
+    pinned = harness_bound and digest_match
+    if loaded is not None:
+        provenance["linked_library"] = {
+            "file": Path(str(loaded["path"])).name,
+            "path": str(loaded["path"]),
+            "sha3_256": str(loaded["sha3_256"]),
+            "recorded_by": str(loaded.get("method", "the harness")),
+            "byte_identical_to_loaded_backend": bool(digest_match),
+        }
+    else:
+        provenance["linked_library"] = (
+            "unrecorded (the harness wrote no loaded_library block, so the "
+            "object its process resolved cannot be named)"
+        )
+    if not pinned:
+        provenance["attributable"] = False
+        provenance["ama_commit"] = "unknown"
+        reasons = list(provenance.get("unattributable_because", []))
+        if not harness_bound:
+            reasons.append(
+                "the harness binary does not attest the tree's source: its "
+                "recorded harness_source_sha3 is "
+                + (recorded_harness if isinstance(recorded_harness, str) else "absent")
+                + ", the tree's multi_library_bench.cpp digests to "
+                + expected_harness
+                + " — a stale or unbound binary cannot be attributed to this commit"
+            )
+        if loaded is None:
+            reasons.append(
+                "the harness recorded no loaded_library block, so the object "
+                "its process resolved cannot be tied to the attested backend"
+            )
+        elif not digest_match:
+            reasons.append(
+                "the object the C harness process resolved is not pinned "
+                "byte-identical to the attested loaded backend, so neither the "
+                "commit nor the build configuration is evidence of what it ran"
+            )
+        provenance["unattributable_because"] = reasons
+    data.pop("provenance", None)
+    merged: Dict[str, Any] = {"provenance": provenance}
+    merged.update(data)
+    results_json.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
+    return provenance
 
 
 def main() -> None:
@@ -970,4 +1161,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--harness-source-digest":
+        print(harness_source_digest())
+    elif len(sys.argv) > 1 and sys.argv[1] == "--stamp-multibench":
+        _repo = Path(__file__).resolve().parent.parent
+        _results = (
+            Path(sys.argv[2])
+            if len(sys.argv) > 2
+            else _repo / "benchmarks" / "multi_library_results.json"
+        )
+        print(json.dumps(stamp_c_harness_provenance(_results), indent=1))
+    else:
+        main()

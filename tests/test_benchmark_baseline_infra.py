@@ -702,7 +702,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         after: dict[str, Any],
     ) -> Any:
         """Stub ``_run_git`` so the guard reads synthetic before/after files."""
-        import subprocess
 
         import benchmarks.check_baseline_justification as guard
 
@@ -770,7 +769,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         evidence still names the old commit, and floored code changed since
         it.
         """
-        import subprocess
 
         import benchmarks.check_baseline_justification as guard
 
@@ -816,7 +814,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
     @pytest.mark.requires_git_history
     def test_the_current_tree_satisfies_the_rule(self) -> None:
         """This branch must not itself be extending a window silently."""
-        import subprocess
 
         import benchmarks.check_baseline_justification as guard
 
@@ -840,7 +837,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         tree, so this one fails while the edit is still local.  In CI the working
         tree is clean and the two tests are the same assertion.
         """
-        import subprocess
 
         import benchmarks.check_baseline_justification as guard
 
@@ -885,7 +881,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         ``test_the_current_tree_satisfies_the_rule`` a pass that checked
         nothing, and its skip branch for the missing ref dead code.
         """
-        import subprocess
 
         import benchmarks.check_baseline_justification as guard
 

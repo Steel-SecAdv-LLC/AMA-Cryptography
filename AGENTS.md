@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 95 C test suites, 272 Python test modules |
+| `tests/c/`, `tests/` | 95 C test suites, 274 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -122,7 +122,7 @@ this repository. Before modifying an area, read the invariant governing it.
 33. Every Fuzz Harness Registered Everywhere
 34. Low-s Is a Property of the Sign/Verify Pair
 35. A Selector Never Resolves Weaker Than Asked
-36. AMA Is Not Measured Against Another Implementation
+36. No Other Implementation Is AMA's Correctness Oracle
 37. A Verification API Does Not Claim a Check It Does Not Perform
 38. Ed25519 Compressed Points Have a Canonical y
 39. A Failed POST Fails the Import and Inhibits Output

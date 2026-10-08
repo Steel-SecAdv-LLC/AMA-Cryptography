@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-04 |
+| Last Updated | 2026-10-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,9 +19,9 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-10-04
+## [5.0.0] - 2026-10-08
 
-> **Released 2026-10-04.** Until 2026-09-24 this heading carried the date
+> **Released 2026-10-08.** Until 2026-09-24 this heading carried the date
 > 2026-09-10, on which no release was cut; dating it is part of cutting the
 > release, and `tools/check_release_state.py` refuses the tag while the
 > shipped documents still call the version unreleased. What follows is the
@@ -33,6 +33,1012 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### The competitive record re-measured on the 5.0.0 tree; INVARIANT-36 retitled to what it governs — 2026-10-08
+
+- **`benchmarks/multi_library_results.json`, `pqc_results.json` and
+  `competitive.html` are a single-host, single-commit measurement of the
+  5.0.0 tree** (`c43c110`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  SHA-NI, the canonical-host class; method, the same-day passes' spans,
+  and the two passes discarded for a named structural cause in
+  `docs/BENCHMARK_HISTORY.md`). They replace the 2026-07-29 record of
+  the 3.4.0 tree, measured on a host without those ISA extensions.
+  Close races are stated at span granularity because single-pass rows
+  on this host carry per-row contention windows: leads on every settled
+  pass — Ed25519 verify (1.55x libsodium here), secp256k1 ECDSA sign
+  (1.21x Botan, 4.4x OpenSSL), ML-DSA-65 sign/verify (3.1x/1.8x OpenSSL
+  4.0.3); races — SHA3-256 1st of 6 here at 38% over libgcrypt (span:
+  12.6% behind to 38% ahead), HMAC-SHA3-256 and secp256k1 verify 2nd/3rd
+  on this draw but 1st on most settled passes, Ed25519 sign 3rd behind
+  peers that skip INVARIANT-51's per-signature derivation; stable
+  trails with named reasons — AES-GCM 5th of 8 under the 8.6x VAES
+  pipeline against INVARIANT-20's constant-time default, ML-KEM
+  2.1x/1.7x, PQC keygens carrying INVARIANT-41's pairwise test at the
+  measured plane. NOTES prose reconciled to the committed ranks,
+  enforced by `tests/test_competitive_page.py`.
+- **The harness binary attests the source it was compiled from**
+  (review finding on `0bc915a`, Medium — the chain's last link): a
+  clean checkout can still run a stale `multibench` built from an older
+  revision, and the loaded-library digest proves only the AMA object.
+  The documented compile line injects `AMA_HARNESS_SOURCE_SHA3` (the
+  file's SHA3-256 by the package's own kernel), the binary emits it
+  beside its results, and the stamper refuses attribution unless the
+  recorded digest equals the tree's `multi_library_bench.cpp` — the
+  executed-matches-source rule (INVARIANT-40) on the C plane. PIN
+  `test_a_stale_or_unbound_harness_binary_is_disowned`,
+  mutation-earned, both arms (absent and mismatched). The duplicated
+  history heading from the same review (Low) is deduplicated. Two
+  follow-ups from the next review round, fixed in the same pass: byte
+  identity and source binding are recorded as separate facts, so a
+  stale harness attestation cannot make the record claim equal library
+  digests differ (`byte_identical_to_loaded_backend` now carries the
+  digest comparison alone, attribution still requires both;
+  mutation-pinned in the same test), and a provenance-test docstring
+  that still described the pre-synthetic build attribution is aligned
+  with what the test exercises.
+- **The provenance chain's last gaps closed** (four review findings on
+  `f0582cf`, all Medium, each the same evidence rule one level deeper,
+  every refusal mutation-pinned). The C harness's `loaded_library`
+  evidence is tied to the live mapping, not a pathname: a POSIX mapping
+  survives rename/replacement, so the bytes are hashed from an open
+  descriptor whose device and inode must equal what `/proc/self/maps`
+  records for the mapping containing `ama_sha3_256` — the Python
+  loader's mapped-bytes rule applied to the C plane.
+  `multi_library_bench.cpp` is a measured build path (PIN
+  `test_a_dirty_c_harness_disowns_the_commit`: a dirty harness produced
+  different rows under a clean HEAD). A pinned artifact whose build
+  configuration no tree digest-matches is demoted like an unpinned one
+  (PIN `test_an_unrecorded_build_configuration_disowns_the_commit`: a
+  figure does not publish without its build flags, section 8 item 7).
+  And the efficacy table's regeneration fails closed on the same rule
+  instead of writing 'unrecorded' trailer lines (PINs
+  `test_an_unpublishable_trailer_refuses_the_regeneration` and
+  `test_the_write_path_itself_refuses_an_unpublishable_trailer`).
+- **The C harness attests the object its own process resolved** (review
+  finding on `8a26498`, Medium): a stamp that hashes a caller-supplied
+  path proves nothing about what the dynamic loader mapped —
+  LD_LIBRARY_PATH, RPATH or ldconfig can resolve another same-named
+  object. `multi_library_bench.cpp` now records `loaded_library` from
+  `dladdr(ama_sha3_256)` — the module that provided the symbol it
+  called, digested by that library's own SHA3 — and
+  `stamp_c_harness_provenance` consumes only that record, disowning any
+  result without it or whose loaded object is not byte-identical to the
+  attested backend. PINs
+  `test_a_differing_loaded_object_disowns_the_record` and
+  `test_a_record_without_the_harness_block_is_disowned`,
+  mutation-earned.
+- **Zero-step momentum keeps its documented contract** (review finding
+  on `8a26498`, Medium). The Jury stability bound is an operational
+  property of `descend`'s iteration (its fixed beta of 0.9), but it was
+  validated ahead of the `max_steps=0` path, so a constructible
+  operator raised where the docstring promises the initial state and an
+  empty history. The bound now binds only when a step will run. PIN
+  `test_zero_step_momentum_keeps_its_documented_contract`,
+  mutation-earned.
+- **The release date rolled 2026-10-07 → 2026-10-08 across the five
+  release-state documents** (review finding on `8a26498`, Low — its
+  tag-absence half is the documented convention: dating the documents
+  precedes the tag and the release gate fail-closes until they agree;
+  its staleness half was correct under the last-merge-before-the-tag
+  rule, the same rule as the 10-06 → 10-07 roll). `check_release_state`
+  and `check_version_consistency` both exit 0 after the roll.
+- **The record cannot be mislabelled or misattributed.** Three closures,
+  two of them review findings on this entry's own first push:
+  `pqc_comparative_bench.py` hardcoded "OpenSSL 4.0.1" into every row —
+  it now labels rows from `openssl_version_text()` of the library it
+  linked and records the `cryptography` wheel and bundled OpenSSL in
+  `provenance.peer`; `generate_competitive.py` reads that label and wheel
+  from the result file (refusing to render without them) instead of
+  carrying both as literals; and the provenance block now pins the
+  compiled object, not just the commit — the loaded backend's
+  mapped-bytes SHA3-256 with its digest-matched build configuration (the
+  efficacy trailer's evidence rule), plus `stamp_c_harness_provenance`,
+  which digests the shared object the C harness linked and marks the
+  record unattributable unless byte-identical to the attested backend
+  (PIN `test_a_differing_linked_object_disowns_the_record`,
+  mutation-earned).
+- **The mean cannot falsely refuse either** (review finding on the fix
+  above, Medium). `_variance` still reached the mean through
+  `_numeric.mean`, whose `math.fsum` raises "intermediate overflow" for
+  `[1e308, 1e308]` although the mean, 1e308, and the variance, exactly
+  zero, are representable — the 2026-10-06 pass had turned that leak
+  into a refusal, and the refusal was still false. The mean is now
+  summed from terms scaled by n (the mean of finite floats never
+  exceeds the largest of them, so the scaled sum cannot overflow), and
+  the former refusal branch is gone with the condition. PIN
+  `test_a_mean_of_representable_inputs_never_refuses`, mutation-earned:
+  restoring the `mean(v)` call fails exactly it with the leaked
+  OverflowError. Recorded while measuring this, per section 7, and not
+  remediated here: the pre-existing default helix path
+  (`AmaEquationEngine.converge`, pinned byte-identical on this branch)
+  leaks a raw `OverflowError` (errno 34) for `[1e308] * state_dim`
+  through its term math — Medium, non-cryptographic, outside this
+  finding's scope and this PR's diff; it needs its own pass.
+- **An unpinnable artifact disowns the commit** (review finding on the
+  provenance mechanism above, Medium). `_attach_native_artifact`'s
+  unpinned branches — a loader whose preload digest is not of the
+  mapped bytes, a missing attestation, any failure — recorded the
+  artifact as unrecorded but left `attributable: true` and the commit
+  standing, re-opening the stale-build hole on exactly the hosts that
+  cannot prove what ran. An unpinned artifact now clears `ama_commit`,
+  marks the block unattributable and says why, so the page refuses the
+  record. PIN `test_an_unpinnable_artifact_disowns_the_commit`,
+  mutation-earned: removing the demotion fails exactly it. The first
+  form of this round's provenance tests read the live loader's
+  attestation and failed on macOS (`Python 3.14 on macos-latest` on
+  `a3508b6` — the preload digest is not of the mapped bytes there, by
+  design); they now attest a synthetic pinned backend, so the pinned
+  path runs identically on every platform while the macOS loader shape
+  is asserted explicitly in the demotion test, and both mutations were
+  re-earned against the rewritten tests. The second CI round on
+  `8a26498` caught the same live-loader dependence in the two
+  PRE-EXISTING attribution tests, whose `attributable: true` the new
+  demotion correctly breaks off-Linux; they now pin the synthetic
+  backend too, and the whole module passes under simulated
+  non-mapped-bytes loader semantics (measured: all 14 with the live
+  attestation forced unpinned).
+- **A representable variance is computed, not refused** (review finding,
+  Medium). `AvaDescent._variance` summed raw squared deviations, so
+  `[1e154, -1e154]` overflowed the running sum and was refused although
+  its variance, 1e308, is a representable float. The deviation is now
+  divided by n before the multiply, so the named refusal fires only for
+  a genuinely non-representable variance. PIN
+  `test_a_representable_variance_is_computed_not_refused`,
+  mutation-earned; the `[1e200, -1e200]` refusal pin (variance 1e400)
+  holds on both sides of the mutation.
+- **INVARIANT-36 retitled** (section 6.6): "AMA Is Not Measured Against
+  Another Implementation" was a sentence the invariant's own Statement
+  contradicts — `benchmarks/` exists precisely to measure AMA against
+  the implementations the Statement names, as its first recorded
+  exception. Now "No Other Implementation Is AMA's Correctness Oracle";
+  Statement, scope, gate and exceptions unchanged. AGENTS.md's index
+  line follows.
+
+### Efficacy table re-measured under the paired comparison; globals() mutations reset the import baseline — 2026-10-07
+
+- **Direct `globals()`/`vars()` mutations reset the import-gate baseline
+  like `sys.modules` mutations.** Medium: `globals()['os'] = 1` rebinds
+  the name with no Name node, so the restore import after it was flagged
+  and its deletion measured as AttributeError.  The namespace-mapping
+  detector now covers `sys.modules`, bare `globals()` and bare `vars()`
+  uniformly (subscript store/delete and mutating method calls; an alias
+  of any of them stays outside the lexical boundary, and a read mutates
+  nothing — the read contrast holds the flag).  PIN
+  `test_a_globals_mutation_makes_the_restore_import_load_bearing`
+  (mutation-earned: disabling the globals branch fails exactly it).
+
+- **`benchmarks/r3_efficacy.tsv` and the README's efficacy prose are the
+  clean-head measurement at `acd7359`, the first under `paired_rates`.**
+  With both detectors scoring identical injected traces the head-to-head
+  columns tightened to near-parity where the unpaired draws had shown
+  spread: point-10x 97% vs 96% at 1.1%/1.2% FPR, bursts 36%/40% at 2x
+  and 49%/48% at 3x, point-1.5x 16% vs 56% (still the z-score's
+  territory), the +10% step by 3R after 37 samples with the baseline not
+  at all, and +5% inside this trace's noise floor for both (median
+  0.290 ms, MAD 7.2% of it — the host moved again between runs).  The PR
+  description's efficacy sentences updated to this final measurement.
+
+### Copilot round on `3e15d6e`: the efficacy comparison is paired — 2026-10-07
+
+- **Both detectors score identical injected traces.** Medium: the point
+  and burst loops put the detector outermost around a shared RNG, so 3R
+  consumed one set of injection placements and the baseline the next —
+  with five repeats and the documented trace sensitivity, the
+  head-to-head columns compared different draws.  `paired_rates` now
+  injects exactly once per (family, parameter, repeat) and every
+  detector scores that trace; the step family was already paired (its
+  injection is deterministic) and is hoisted so the pairing is
+  structural there too.  PIN
+  `test_detectors_score_identical_injected_traces` (counts injections
+  and compares the traces each detector received; the detector-outer
+  mutant doubles the count and fails both assertions).  The table and
+  the coupled README prose are re-measured from this commit's clean
+  head in the follow-up push, and the PR description's efficacy
+  sentences update to that final measurement with it.
+
+### Copilot round on `34b2004`: globally-mutated names are volatile to the import gate — 2026-10-07
+
+- **A name some function declares `global` and binds or deletes is never
+  flagged and never trusted as continuously the module.** Medium:
+  `global os; del os` in a called helper invalidates the top-level
+  import with no module-scope statement to reset on, and the gate
+  demanded deleting the restore import — measured as NameError.
+  `_globally_mutated_names` collects the declared-and-bound set, and
+  both the same-list scan and the cross-scope comparison skip it (any
+  call between two imports can mutate such a name, so even a verbatim
+  repeat may be the restore).  A read-only `global` mutates nothing and
+  stays flagged.  PIN `test_a_global_deletion_makes_the_name_volatile`
+  (mutation-earned; read-only contrast holds the flag).  The same
+  review's three release-history findings (v5.0.0 dated before its tag)
+  are the release PR's documented convention — the maintainer tags
+  immediately after merging this PR, and the date-roll procedure covers
+  slip — answered on the threads without a tree change.
+
+### Efficacy table re-measured from the clean head under the recalibrated bars — 2026-10-07
+
+- **`benchmarks/r3_efficacy.tsv` and the README's efficacy prose are the
+  clean-head measurement at `34b2004`** — the first run of the detector
+  under the Nyquist-correct split-line bars, per the table↔prose
+  coupling rule.  The trace itself moved with the host between same-day
+  runs (median 0.105 ms → 0.501 ms, the cpuinfo model 2.30 → 2.10 GHz,
+  MAD at 5.2% of the median — the noisy end of the measured range), so
+  rates shifted throughout: point-10x 98% vs baseline 100% at 1.0%/1.0%
+  FPR, point-1.5x 10% vs 46%, bursts 52%/52% at 2x and 65%/46% at 3x,
+  +10% step after 20 vs 28 samples, +5% after 118 vs 28 (the baseline's
+  "not at all" at +5% belonged to the quieter morning trace).  The
+  committed row stays the clean-head run, not the best one, and the
+  prose now states the measured same-day span (point-1.5x 10%–63%)
+  rather than one trace's figures as stable facts.
+
+### Copilot round on `37dfda4`: the split-line null calibrated to the real spectrum, sys.modules mutations reset the import baseline, Docker apt retries — 2026-10-07
+
+- **The split-line bars are calibrated to the spectrum detect_resonance
+  actually produces.** High (a declared rate the component missed): the
+  real FFT scan KEEPS the Nyquist ordinate, whose null is chi-square(1),
+  while the bars were derived from all-exponential draws — measured
+  2.288% clean flags against the 1% budget at the smallest window
+  (8 samples, m = 4; 100,000 Gaussian streams through the production
+  pipeline), decaying to ~1.0% by m = 64, with each size class's
+  no-padding member the worst case (m = 8: 1.18–1.85%).  The derivation
+  now draws the exact no-padding law (m − 1 Exp(1) + one chi-square(1)
+  at unit mean) and the quantile runs on 40,000 trials — at 4,000 the
+  estimator's own noise still measured 1.42% at m = 4 under the
+  corrected law.  Table regenerated through the coupled procedure
+  (113 s, all twelve sizes); end-to-end re-measured: 1.03% at m = 4,
+  0.76–1.09% in the m = 8 class, 0.89% at the n = 100 production size.
+  Capability re-measured on the deterministic seeds: two-tone 23/40 vs
+  Fisher's 14/40, clean streams 1/150 (supersedes the pre-ship 56%/34%,
+  square-wave 80%/76% and clean 1.17% figures, per §6.6).  Worst-size
+  runtime derivation for non-default configurations now measures 56.3 s
+  (was 5.2 s at 4,000 trials); only such configurations ever pay it.
+  PIN `test_the_smallest_window_clean_rate_stays_on_budget`
+  (mutation-earned: the superseded m = 4 bar fails its ceiling at
+  218/10,000 vs 96) with the table↔procedure coupling test killing the
+  all-exponential derivation mutant.  The efficacy table is re-measured
+  from the clean head of this commit in the follow-up push, per the
+  table↔prose coupling rule.
+
+- **`sys.modules` mutations reset the import-gate baseline.** Medium: a
+  direct subscript store or delete, or a mutating method call, re-routes
+  what a later import binds without rebinding any name — runtime-proved:
+  the re-import after `sys.modules[k] = replacement` binds the
+  replacement, and deleting it leaves the original.  Recognized
+  mutations reset the whole module-scope baseline and exempt the
+  mutating function's own imports ("*", like the wildcard reset — total
+  and value-blind, the direction that never demands a deletion); an
+  ALIAS of sys.modules stays outside the gate's lexical boundary.  The
+  shared binding ladder moved to `_capture_bound_names` for both scope
+  walks.  PIN
+  `test_a_sys_modules_mutation_makes_the_restore_import_load_bearing`
+  (mutation-earned; mutation-free contrast holds the flag).
+
+- **The munlock-failure test is deterministic, and the shared-page
+  refcount is pinned.** One macOS lane failed
+  `test_munlock_native_failure` DID NOT RAISE while three sibling lanes
+  passed the same commit (run 37672010249): `secure_munlock` reaches the
+  backend only for pages no other registered lock still covers, and with
+  live locks left by earlier tests the 32-byte buffer can land on a
+  refcount-2 page — both outcomes reproduced deterministically by
+  seeding the registry.  The product behavior is by design (releasing a
+  shared page would drop the kernel lock for every buffer on it); the
+  test now runs against a hermetic empty registry, and the semantics the
+  flake exposed are pinned in
+  `test_a_shared_page_is_decremented_not_munlocked` (mutation-earned:
+  removing the refcount gate fails exactly it).
+
+- **Docker apt installs retry like the workflows'.** The OSS-Fuzz lane
+  died twice on 2026-10-07 (runs 37665893658 and 37672010498) fetching
+  archive.ubuntu.com inside the image build — identical on the §8
+  re-run, the stalled-mirror class the workflows' `apt-install.sh`
+  already retries.  All four apt blocks (oss-fuzz, clusterfuzzlite, both
+  docker/Dockerfile stages) now retry three times with a pause and fail
+  closed on exhaustion.
+
+### Copilot round on `d49410a`: a wildcard import invalidates every tracked binding; the ratio helper's empty path measured working — 2026-10-07
+
+- **`from plugin import *` resets the whole module-scope baseline.**
+  Medium: the reset tracked only the literal `"*"`, so
+  `import os; from plugin import *; import os` flagged the restore
+  import although the wildcard may have rebound `os` — a demanded
+  deletion that can break (measured pre-fix on the direct and the
+  compound-statement shapes).  A `"*"` among a statement's rebound names
+  now clears every tracked binding, total and value-blind — the
+  direction that never demands a deletion.  PIN
+  `test_a_wildcard_import_invalidates_every_tracked_binding`
+  (mutation-earned; the wildcard-free contrast holds the flag).
+
+- **The empty-input claim on `_top_ordinates_ratio` is true — measured,
+  not argued.** Medium finding, measured false: `_mean` returns 0.0 on
+  an empty sequence, so the guard runs before any division and the
+  helper scores empty and all-zero spectra 0.0.  RANGE
+  `test_the_ratio_helper_scores_empty_and_zero_mean_spectra_zero`
+  exercises the domain so the measurement stays on record.
+
+### Copilot round on `456d87f`: the maybe-rebinding exemption is the gate's stated coverage boundary — 2026-10-07
+
+- **A module-scope rebinding inside a compound statement forces the
+  exemption, and the boundary is now stated and pinned.** Medium finding
+  (the reset "hides" a repeat behind `if False: os = 1`), resolved by
+  evidence: the gate does not evaluate conditions, and in every world
+  where the maybe-rebinding runs, the deletion a flag would demand
+  breaks — measured as AttributeError with the condition true.  The
+  proposed definite-only reset, applied as a mutant per §6.2, flags that
+  live shape and fails the new pin AND the guarded-rebinding pin.  The
+  cost is exactly the shapes whose rebinding is statically dead, which
+  remain the CodeQL CI lane's to report: the gate blocks the
+  safely-deletable members of the class, and the docstring now says so.
+  PIN `test_a_maybe_rebinding_at_module_scope_forces_the_exemption`.
+
+### Copilot round on `f278d73`: the Siegel attribution corrected everywhere, provenance wording held to the measured facts, the conditional-import question answered by measurement — 2026-10-07
+
+- **The split-line statistic is no longer attributed to Siegel.** Low,
+  §6.6 (and INVARIANT-53): Siegel's periodicity statistic sums every
+  positive normalized-ordinate excess above a cutoff; the shipped channel
+  sums exactly the top MULTILINE_ORDINATES ordinates against an
+  empirically calibrated null bar — kin in motivation (splits Fisher's
+  single max dilutes), not his statistic.  Corrected in the class
+  docstring, the detect_resonance comment, `_top_ordinates_ratio`,
+  MONITORING.md step 6, the calibration-test docstring, and the
+  2026-10-06 CHANGELOG entry (amended in place per §6.6).
+
+- **README efficacy prose claims only the measured host facts.** Low:
+  "cloud container" and "shared, unpinned container" upgraded the
+  provenance trailer's evidence (virtualized, 4-vCPU, tenancy
+  unrecorded); the prose now uses the trailer's wording.
+
+- **A conditionally executed nested import stays flagged — measured, and
+  now pinned.** Medium finding, resolved by evidence: on the review's
+  shape (`if flag: import os` under a stable module import, with a
+  handled UnboundLocalError), deletion preserves every completing path
+  and changes only the raising path, which becomes the very module
+  binding the key matched — a strict repair of an unbound read.
+  Exempting the shape would let an always-taken branch hide the class
+  CodeQL still reports, failing the gate's purpose (§10).  PIN
+  `test_a_conditional_import_stays_flagged_and_deletion_repairs_the_unbound_path`;
+  the proposed exemption, applied as a mutant, fails it and the
+  sibling-imports pin.
+
+### Copilot round on `1a19307`: integral window bounds, and nested imports rebind too — 2026-10-07
+
+- **`ResonanceTimingMonitor` requires integral `window_size` and
+  `max_history`.** Medium: a positive non-integer passed the magnitude
+  check and failed later and darker — `window_size=1.5` constructed and
+  the FIRST record raised TypeError inside `EWMAStats`' `deque(maxlen=...)`,
+  and NaN defeats every comparison and reached the resonance slice (both
+  measured).  The boundary now rejects non-`int` values; `bool` passes as
+  the degenerate but well-defined window it is.  PIN: the degenerate-window
+  test's new 1.5/NaN cases fail with the `isinstance` check reverted
+  (mutation-earned).
+
+- **The reset walker records imports nested in compound statements.**
+  Medium: `if flag: import pathlib as os` rebinds `os` without a Name
+  node, so `_statement_bound_names` missed it, the baseline kept `os`
+  continuously-module, and the gate demanded deleting a function's
+  restore import — measured as AttributeError on the review's shape.
+  Nested Import/ImportFrom bindings now reset, value-blind on purpose
+  (a same-value guarded re-import widens the reset, the direction that
+  never demands a deletion).  PIN
+  `test_a_guarded_rebinding_import_makes_the_restore_import_load_bearing`
+  (mutation-earned; the guard-free contrast holds the flag).
+
+### Copilot round on `18fb593`: the module-scope baseline carries execution order — 2026-10-07
+
+- **A nested import is a repeat only of a top-level binding stable since
+  before its container.** Medium: the cross-scope comparison used the
+  module's final binding set, order-blind, so a local import whose
+  top-level twin executes only after the function is called was flagged
+  — measured as NameError on
+  `def f(): import os ...; value = f(); import os`.
+  `_scan_direct_imports` now returns each binding with the line since
+  which it is continuously the module (a reset drops it, a restore
+  re-enters at the restore's line, a same-value repeat keeps the
+  original line), and the gate flags a nested import only when that
+  point precedes the import's top-level container statement — sound for
+  every call site, since a function body runs only during a top-level
+  statement after its container.  Function scopes need no ordering: a
+  binding anywhere in one makes the name local throughout.  PIN
+  `test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead`
+  (mutation-earned twice: the order-blind comparison and the
+  clock-restarting same-value repeat each fail exactly this test; early
+  and rebound contrasts hold the flag and the continuity rule).
+
+### Copilot round on `ec58d6c`: definition children that execute in the enclosing scope are walked — 2026-10-07
+
+- **The import gate's scope walks traverse decorators, defaults and
+  annotations.** Medium: those children of a def, class or lambda execute
+  in the ENCLOSING scope at definition time, and both walks skipped them
+  with the definition's body — so `def f(x=(os := 1))` rebound `os`
+  invisibly, and the gate flagged the load-bearing restore import at
+  module scope (missed reset in `_statement_bound_names`) and inside a
+  function (missed own-scope exemption in `_function_bound_names`),
+  measured pre-fix as a demanded deletion that leaves `os == 1` and
+  raises AttributeError.  Both walkers now traverse
+  `_definition_enclosing_children` before stopping at the body; under
+  `from __future__ import annotations` a stringized annotation's walrus
+  over-collects only toward wider resets and exemptions, the direction
+  that never demands a deletion.  PIN
+  `test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing`
+  (mutation-earned per walker: reverting either traversal independently
+  fails exactly this test; walrus-free contrasts hold the flags).
+
+### Review round on `752247b`: degenerate windows refused at construction, the provenance generator pinned, the import gate's fixpoint proven safe — 2026-10-07
+
+- **`ResonanceTimingMonitor` refuses `window_size < 1` and
+  `max_history < 1`.** Medium: Python slices treat `[-0:]` as the whole
+  sequence, so a `window_size=0` monitor bypassed the
+  `_MAX_RESONANCE_SAMPLES` cap — measured at 18,000 scanned samples
+  against the 16,384 bar (negative sizes slice from a positive offset,
+  the same bypass).  Both now raise `ValueError` at construction, the
+  way the constructor already refuses degenerate `max_operations`.  PIN
+  `test_a_degenerate_window_size_is_refused_at_construction`
+  (mutation-earned: with the validation removed, exactly this test
+  fails).
+
+- **The efficacy provenance generator has direct tests.** Medium: the
+  prose↔table coupling tests never exercised `_provenance_lines`, so a
+  regression could publish a misleading commit/artifact/build record
+  while they stayed green.  Two PINs, each mutation-earned: the commit
+  field's clean / dirty-worktree / gitless states (removing the dirty
+  marker fails exactly
+  `test_provenance_records_clean_dirty_and_gitless_states`), and the
+  mapped-digest gate on the artifact and build lines, including that an
+  unpinned artifact never reaches build-tree attribution (removing the
+  `preload_digest_is_of_mapped_bytes` condition fails exactly
+  `test_provenance_pins_the_artifact_only_for_mapped_digests`).
+
+- **The import gate needs no dominance analysis; the property is now
+  pinned.** Measured against the review's exclusive-branch example: the
+  gate flags both same-value sibling imports, still flags the
+  half-deleted intermediate (the state that raises `UnboundLocalError`
+  on the emptied branch), and only certifies the full deletion, which
+  resolves every use to the module binding — behavior-preserving.  The
+  one single-deletion shape that would go green while breaking a branch
+  (a same-name, different-value sibling) is exactly what the pairwise
+  own-scope exemption already removes from the report.  PIN
+  `test_sibling_same_value_imports_are_never_green_half_deleted`:
+  the proposed value-blind exemption, applied as a mutant, fails this
+  test and six existing pins.
+
+- **The lock test reaches its module through the class it imports.** Low
+  (CodeQL #755, `py/import-and-import-from`): the concurrency test added a
+  function-level `import ama_cryptography.monitoring as ...` beside the
+  file's top-level `from ama_cryptography.monitoring import ...`.  The
+  module object to patch is now `sys.modules[ResonanceTimingMonitor.__module__]`
+  — the module the class actually lives in — and the second import style is
+  gone.  Behavioral: the test's assertions are unchanged and still pass.
+
+### Copilot round on `2b3546a`: one j-normalization across the split-line surface, the derivation serialized, the binding walk comprehension-scope-aware — 2026-10-07
+
+- **`detect_resonance` normalizes `MULTILINE_ORDINATES` the way its
+  threshold does.** Medium: `_multiline_threshold` clamps the configured j
+  to at least 1 while the statistic path used the raw value, so an
+  override of 0 reported a zero ratio against a top-1 bar and a negative
+  one invoked negative-slice semantics.  One `max(1, ...)` now feeds the
+  statistic, the threshold and the reported ordinate count.  PIN
+  `test_a_degenerate_ordinates_override_is_normalized` (mutation-earned —
+  the first mutation run measured the guard unpinned, per §6.2, and this
+  test was added until the mutant failed exactly here).
+- **Concurrent first derivations run the simulation once.** Medium:
+  unsynchronized misses of the class-level cache let simultaneous first
+  reports for an overridden configuration each pay the full measured-null
+  simulation (documented at 5.2 s for the capped worst size).
+  `_MULTILINE_DERIVE_LOCK` serializes the derivation with a double-check,
+  so the loser reuses the winner's result.  PIN
+  `test_concurrent_first_derivations_run_the_simulation_once` — two
+  barrier-released threads at an off-table size construct exactly one
+  seeded RNG; the lock and double-check removed, the count reads 2 and
+  fails exactly there.
+- **The binding walk is comprehension-scope-aware.** Medium, a §6.6
+  correction of this round's own earlier justification: comprehension
+  targets live in the comprehension's scope since Python 3, so collecting
+  them as function bindings exempted a genuinely redundant nested import
+  (`[os for os in ()]` beside a re-import of `os` — measured: deleting the
+  import changes nothing) — a false-negative path in a CI-blocking gate,
+  not "the safe direction" the first comment called it.  Generator targets
+  are now skipped while a walrus inside the comprehension (which binds the
+  containing scope, PEP 572) is still collected; both directions pinned in
+  the shadowing test, the reverted walk failing exactly there.
+- **Documented latency figures reconciled; one plural corrected.** Low:
+  the trial-count comment claimed the derivation stays "well under a
+  second" unconditionally, contradicting the measured 5.2 s worst-size
+  cost (and the 8.65 s pre-cap figure the table comment records); it now
+  states the measured scale and that only non-default configurations reach
+  the derivation at all.  The README's step row reads "after 1 sample",
+  and the coupling test's expected-string helper pluralizes with it.
+
+### Copilot round on `4cb3c59`: imports rebind too, and the derivation cost for an overridden configuration is a stated contract — 2026-10-07
+
+- **The import gate missed that imports themselves rebind.** High, the
+  final Copilot review's banner finding (posted after `4cb3c59` was
+  pushed, so no session had seen it): `import os; import pathlib as os;
+  import os` flagged the third line, while deleting it leaves `os` bound
+  to `pathlib` and breaks `os.sep` (measured: AttributeError), and an
+  intervening `from pathlib import Path as os` had the same problem —
+  the rebinding reset covered every binding construct EXCEPT the gate's
+  own subject.  `_scan_direct_imports` now resets a tracked key when a
+  later import binds the same name to a DIFFERENT value, and treats
+  from-import aliases as rebindings; value equality keeps the true
+  redundancies flagged (`import os.path` between two `import os` rebinds
+  `os` to the same module, so the repeat stays a duplicate — measured:
+  deletion changes nothing).  The own-scope exemption is now answered
+  pairwise over `(bound name, bound value)` via `_import_bound_pairs`,
+  so `import pathlib as os` beside a nested plain `import os` exempts it
+  while `import os as _os` twice stays flagged — a first name-level form
+  of this fix broke exactly that repeated-identical-alias pin and was
+  replaced.  PIN
+  `test_an_import_rebinding_makes_the_restore_import_load_bearing`
+  (mutation-earned both ways: the reset dropped fails its top-level
+  cases, the pairwise exemption disabled fails its function-scope cases,
+  each exactly there; both premises executed in the test).  The tree
+  sweep's verdict is unchanged.
+- **The one-time null-bar derivation for an overridden resonance
+  configuration is a stated cost contract, not a removed path.** The
+  same review observed that a subclass overriding
+  `RESONANCE_FALSE_ALARM_RATE`, `MULTILINE_ORDINATES` or
+  `_MULTILINE_NULL_TRIALS` still reaches the synchronous measured-null
+  derivation from `get_security_report` (at the capped worst size,
+  m = 8,192: measured 5.2 s once, microseconds from the cache after).
+  Measured and kept, with the contract documented at
+  `_multiline_threshold` and `detect_resonance`: the default
+  configuration never pays it (the window cap keeps every public
+  spectrum size on the pinned table), the override space is continuous
+  so no table can precompute it, and serving the default table to an
+  overridden configuration was precisely the defect the configuration
+  gate closed — the review's suggested remedies would reintroduce it or
+  refuse a supported override.  An operator who cannot afford
+  first-report latency warms the cache at startup; the path is the
+  correct bar's irreducible cost, not an oversight.
+
+### Copilot round on `08617a4`: mapping-rest captures are bindings, one working directory in the example sequences — 2026-10-07
+
+- **Both binding collectors in the import gate missed
+  `MatchMapping.rest`.** Medium: a `case {**os}:` capture rebinds `os`,
+  but `rest` is a plain string attribute rather than a `Name`/`MatchAs`
+  node, so neither the same-list reset nor the function-scope shadowing
+  set saw it — a restore import after the capture, or a nested import
+  under an enclosing capture, would have been flagged though deleting
+  either changes behavior.  Both collectors now read it; the two pinned
+  tests each gained the mapping-rest form, and removing either branch
+  fails exactly its claiming test (mutation-verified both ways).
+- **The example usage sequences run from one working directory.** Low ×3:
+  `pip install -e .` needs the repository root while
+  `python <script>.py` resolved only from `examples/python/`.  Each
+  usage block now states the root as the working directory and invokes
+  the script by its repository-relative path, so the documented sequence
+  executes as written on a fresh checkout.
+
+### Copilot round on `caef81c`: one Jury expression on both momentum paths, the pinned table gated on its full measured configuration — 2026-10-07
+
+- **`momentum_step` and `descend(mode="momentum")` evaluate the one
+  stability expression.** Medium: the loop-entry check pre-evaluated the
+  Jury bound at beta = 0.9 as `alpha * 0.1 >= 3.8`, which is not the
+  expression `momentum_step` computes — `1.0 - 0.9` is not exactly `0.1`,
+  so `alpha = 38.0, equity_gain = 0.01` (a valid construction) was
+  accepted by the operator and refused by the loop (measured).  Both
+  paths now call one `_momentum_unstable(alpha, beta)`.  PIN
+  `test_momentum_stability_agrees_between_operator_and_loop`
+  (mutation-earned: the pre-evaluated form restored fails exactly its
+  boundary acceptance; one step past the bound both paths still refuse).
+- **The pinned split-line table answers only its full measured
+  configuration.** Medium, the completion of the previous round's j-gate:
+  the table's bars were measured at the 1% rate with 4,000 trials, and a
+  subclass overriding `RESONANCE_FALSE_ALARM_RATE` (which the Fisher
+  channel and the reported `false_alarm_rate` honor) or
+  `_MULTILINE_NULL_TRIALS` was still served the 1% table.
+  `_MULTILINE_TABLE_CONFIG` records the measured configuration as a
+  historical fact of the table; any other live configuration derives its
+  bar, and the cache identity is `(m, j, alpha, trials)` so entries
+  cannot be served across configurations.  PIN
+  `test_the_table_answers_only_its_measured_configuration`
+  (mutation-earned: the j-only gate fails exactly it; a 5% subclass
+  measures a strictly lower bar).  A comment claiming the two-ordinate
+  statistic "doubles" two-tone detection is corrected to the measured
+  figures (34% → 56%; 14/40 → 22/40) per §6.6.
+
+### Copilot round on `42cc5f0`: module-scope rebinding exempts, the null simulation follows its configured statistic, the efficacy table re-measured on a clean head — 2026-10-07
+
+- **The import gate exempts a nested re-import whose module-scope binding
+  was rebound.** High, the module-scope twin of the enclosing-shadowing
+  case: after `import os` a top-level `os = 1` leaves the global holding
+  the int, so the nested re-import is what hands the function the module
+  back (measured: deleting it raises AttributeError), and a later
+  top-level re-import restores the binding rather than repeating it.
+  `_scan_direct_imports` now resets a binding when an intervening
+  non-import statement rebinds the name — which covers both the same-list
+  and the cross-scope shape, since `top_seen` is that scan's result.  A
+  separate filter over `top_seen` was built first and REMOVED per §6.3:
+  its mutation test survived because the reset is the load-bearing guard.
+  PIN `test_a_module_scope_rebinding_makes_the_import_load_bearing`
+  (mutation-earned on the reset; both flagged controls included).  The
+  prior round's CodeQL alert #754 (an import used only inside a string
+  annotation) is closed by using the runtime-subscripted form.
+- **The split-line null simulation derives its statistic from
+  `MULTILINE_ORDINATES`.** Medium: the simulation hard-coded the top two
+  while `_top_ordinates_ratio` read the class variable, so a subclass
+  configuring j != 2 would have moved the statistic without moving its
+  threshold.  The simulation now retains the top j, the cache is keyed
+  `(m, j)`, and the pinned table — measured for the shipped j = 2 — is
+  bypassed for any other configuration.  For j = 2 the arithmetic is
+  byte-identical to the form it replaces, which the table↔procedure
+  coupling test proves byte-exactly.  PIN
+  `test_the_threshold_follows_the_configured_ordinates` (mutation-earned:
+  the pinned-regardless-of-j form fails exactly it).  The
+  deterministic-and-cached test now uses an off-table size — its earlier
+  form used pinned m = 64 and passed with the cache broken (review
+  finding), the cache-exercise corrected per §6.6.
+- **The efficacy table re-measured from a clean head under the final
+  generator.** Medium: the committed trailer was a hybrid — completed
+  fields over the superseded generator's host line, with
+  `commit=...+dirty-worktree` naming no reproducible source.  With this
+  round's code committed first, the regeneration runs on a clean head:
+  `commit=` is exact, the host line is the measured-facts form, and the
+  README rolls with the table under the coupling pins.
+
+### Copilot round on `c4c872d`: the import gate learns lexical shadowing, the provenance generator records only what it can establish — 2026-10-07
+
+- **The import-hygiene gate flagged a load-bearing nested import when an
+  enclosing function shadows the name.** High, a CI-blocking gate that
+  would force a behavior-changing deletion (measured on the review's
+  shape: module-level `import os`, an enclosing `os = 1`, an inner
+  `import os` — the gate flagged the inner import while deleting it makes
+  `os.sep` hit the enclosing int, AttributeError).  Binding equality
+  against the top level is now joined by a lexical-scope check: a nested
+  import is exempt when a strictly-enclosing function scope binds its
+  name (parameter, assignment, any binding construct), or its own scope
+  binds it by a non-import construct (which makes the name function-local
+  throughout, so the module import was never what the use sites saw).
+  Import-created bindings do not exempt their own scope — a genuine
+  same-scope re-import stays flagged — and class bodies exempt nothing,
+  because nested functions skip class scope in name resolution (both
+  pinned).  PIN `test_a_shadowed_nested_import_is_load_bearing`
+  (mutation-earned: the exemption dropped fails exactly it), with the
+  measured premise executed in the test; the tree sweep's verdict is
+  unchanged (no tracked file carries the shape).
+- **The efficacy provenance generator records only facts it can
+  establish.** Three gaps, found in review, each fixed at the mechanism:
+  the run identifier now carries `+dirty-worktree` when the tree differs
+  from `HEAD` (the native digest covers neither the detector's Python nor
+  the evaluation script, so a dirty run could publish different rows
+  under the same `commit=`); the host line states the measured facts —
+  CPU model, visible cores, this process's actual affinity mask, the
+  hypervisor CPUID bit — and says tenancy is unrecorded, instead of
+  hard-coding "shared cloud container, not pinned"; and the artifact and
+  build lines are gated on `preload_digest_is_of_mapped_bytes`, the same
+  rule `_self_test` applies, so on loaders where the preload digest is
+  not of the mapped object nothing is claimed about the executed bytes.
+  The committed trailer's `commit=` is completed to
+  `07ea1d56f3d9+dirty-worktree` per the new convention: the 06:06Z run's
+  worktree held the (later-committed) trailer function itself and the
+  engine/example edits of that round, none of which the rows read — the
+  detector (`monitoring.py`) and the backends matched `HEAD` exactly,
+  and the evaluation helpers were unchanged.
+
+### Copilot round on `26639a2`: efficacy provenance made fail-closed by digest match, the contamination guarantee qualified at its degenerate branch — 2026-10-07
+
+- **The efficacy trailer's build line is attributed only after matching
+  the measured artifact to the tree that built it.** Medium: the first
+  provenance mechanism read `build/CMakeCache.txt` unconditionally and
+  allowlisted three keys, so a stale or unrelated local build tree would
+  have been published as the measured library's flags.
+  `r3_efficacy_eval.py` now reuses
+  `benchmark_runner._native_build_configuration` — the artifact is the
+  loaded backend from the module attestation, pinned by its mapped
+  SHA3-256 preload digest, and a `CMakeCache.txt` is attributed only when
+  a tree's copy of the library digest-matches the measured object,
+  yielding the complete configure line (compiler, `CMAKE_C_FLAGS`, every
+  `AMA_*` option) or an explicit "not recorded: why".  The committed
+  06:06Z measurement's trailer was completed, not re-invented: the
+  measuring artifact is byte-identical to the current library — its
+  SHA-256 was recomputed and matches the `sha256=` value the superseded
+  trailer (commit `26639a2`) recorded for that run; the SHA-256 names the
+  bytes, the trailer now pins them by the attestation's SHA3-256 preload
+  digest — so the SHA3-256 and the digest-matched configuration are the
+  same run's facts; its rows, run id, commit and host stand unchanged.  A regeneration executed while
+  validating the mechanism landed on a degraded trace (median 0.52 ms —
+  5x the committed run — with a clean false-alarm rate of 1.8-2.4%
+  against the 1% budget, i.e. the "benign" trace itself carried load
+  shifts) and is recorded here, not committed: it measured the shared
+  container's load, and the README's variance caveat, rather than the
+  detector.
+- **The contamination guarantee is qualified at its own degenerate
+  branch.** Low: `_calibrated_score_threshold`'s docstring stated the
+  contamination cap unconditionally while the `guard_base == 0` branch
+  (a quantized or strongly bimodal bulk putting >= guard_tail of the
+  window at exactly 0) deliberately returns the raw quantile uncapped —
+  on such a window the raw quantile can still be captured by anomalies at
+  the budget rate.  The docstring and MONITORING.md now state the cap as
+  a property of the positive-guard path.
+
+### Copilot round on `07ea1d5`: ints outside float range refused everywhere, `converge`'s tolerance contract method-independent, efficacy provenance recorded and re-measured, example install instructions corrected — 2026-10-07
+
+- **An int too large to convert to float escaped every documented
+  `ValueError` refusal in the math layer (`double_helix_engine.py`).**
+  Medium: `math.isfinite(10**1000)` and `float(10**1000)` raise
+  `OverflowError` instead of answering, so the constructor's finiteness
+  check, `descend`'s tolerance check, `catalan_step`'s forcing scalar,
+  `select_alpha`'s variance, and the `asvec` coercion of every vector
+  argument (state, gradient, velocity — engine and operators alike) leaked
+  `OverflowError` through contracts that document `ValueError` (measured on
+  all nine paths before fixing). A module-level `_isfinite_number` answers
+  `False` where `math.isfinite` raises, and every coercion boundary maps
+  the conversion overflow to its documented refusal. PIN
+  `test_an_int_outside_float_range_is_refused_not_leaked` — three mutants
+  (bare `math.isfinite` restored at the constructor, the `converge`
+  pre-dispatch check dropped, a coercion unwrapped) each fail exactly the
+  claiming test.
+- **`converge`'s tolerance validated method-dependently.** Medium: the
+  `descent` branch refused NaN/inf inside `AvaDescent.descend` while the
+  default helix walk interpreted them (NaN never stops, inf stops after
+  one step; both measured), so one documented contract meant two things.
+  Finiteness is now validated before dispatch, for both methods. PIN
+  `test_converge_tolerance_contract_is_method_independent`.
+- **The efficacy table's provenance now satisfies §8 item 7, by
+  mechanism.** `r3_efficacy_eval.py` records the run identifier, commit,
+  Python version, host CPU model and count, the exact native artifact by
+  content digest (this round's form hashed the file with SHA-256; the
+  shipped form, superseded the same day — see the `26639a2` round above —
+  pins it by the module attestation's SHA3-256 preload digest), and the
+  build flags from `CMakeCache.txt` in the table's trailer on every
+  regeneration. The committed 2026-10-06 figures carried
+  host, date, seed, n, median and MAD but no build flags, artifact or run
+  id, and those cannot be reconstructed for an artifact that no longer
+  exists — so the table was re-measured 2026-10-07 under the new trailer
+  (median 0.104 ms, MAD 0.002 ms; the qualitative story is unchanged:
+  points at 10x 100%/100% with 3R at the lower FPR, bursts at 2x 100% vs
+  54%, +5% steps caught by 3R alone) and the README rolled with it under
+  the existing table↔prose pins. One honest movement: on this trace the
+  baseline catches a +10% step after 2 samples (3R after 19), where the
+  10-06 trace showed it missing the step entirely — stated as measured.
+- **Three shipped examples told a fresh checkout to install only the
+  example's framework and called the native build "optional".** Low:
+  under INVARIANT-7 there is no fallback path, so on an unbuilt checkout
+  each example fails at import. `basic_usage.py`, `flask_integration.py`
+  (via the `[examples]` extra) and `fastapi_integration.py` now install
+  the project first and say why the build is required.
+
+### Review round on the 10-06 head: the resonance analysis window capped onto the pinned table, Windows CI steps fail at the first failed command, the release date rolled — 2026-10-07
+
+- **`detect_resonance` is capped at `_MAX_RESONANCE_SAMPLES` (= 2 × the
+  largest pinned spectrum size, 16,384), so every null bar it can ask for
+  is in the pinned table for ANY constructor `window_size`.** Medium, a
+  review finding on the split-line channel below: a
+  `ResonanceTimingMonitor(window_size=20000, max_history=20000)` is
+  accepted and produced m = 16,384 — off the twelve-entry pinned table —
+  so the first report ran the measured-null simulation synchronously
+  (65.5 million draws, 15.1 s in the review container) plus a 32,768-point
+  pure-Python FFT. The cap is derived from the table (`2 * max(...)`), so
+  the two cannot drift; the runtime simulation path remains for direct
+  `_multiline_threshold` callers (the table↔procedure coupling test
+  re-derives through it) and is now unreachable from the public pipeline.
+  PIN `test_an_oversized_window_stays_on_the_pinned_table`
+  (mutation-earned: the cap removed fails exactly that test).
+- **Four Windows CI steps ran multi-command `run:` blocks under the
+  default `pwsh`, where a non-final failed command does not fail the
+  step.** Medium, measured on job 112595010110 (windows-latest/3.14): a
+  transient PyPI resolution failure aborted `pip install -e ".[dev,...]"`
+  mid-step, the trailing `clang-format` install succeeded, the step
+  passed — and the job went red only when the INVARIANT-1
+  vendor-isolation gate found no compiled objects, attributing an install
+  failure to vendor isolation. The dependency-install and Windows-build
+  steps of `ci.yml` and `ci-build-test.yml` now pin `shell: bash`
+  (`-e -o pipefail`, the semantics every Linux/macOS step already has).
+  The ruff resolution failure itself was infrastructure by the §8
+  standard: the same constraint resolved on every other lane of the same
+  run, and on re-run.
+- **The release date rolled 2026-10-06 → 2026-10-07 across the five
+  release-state documents and the relocation constants**, by the
+  last-merge-before-the-tag rule (the 10-06 head was still unmerged when
+  10-07 arrived). Two stale clauses in the pre-emptive-review-round entry
+  below are corrected in place per §6.6, marked with this date: the
+  import gate's intermediate unaliased-only form (shipped: keyed on the
+  `(module, asname)` binding) and `oss-fuzz/build.sh`'s intermediate
+  `read -ra` split (shipped: `read -rd ''`).
+
+### CodeQL's repeated-import Notes closed tree-wide, and the class gated — 2026-10-05/06
+
+- **Pre-merge vet: CodeQL #753 satisfied by restructure, output-side
+  overflow refused on every public operator, two more OverflowError leak
+  paths converted to the named refusal, the null derivation made one-pass,
+  and the gate's module contract restated (2026-10-06).** CodeQL read the
+  representability refusal (``1.0 - gain >= 1.0``) as always-false — true
+  in real arithmetic, false in floats, and the mutation-pinned test drives
+  the branch — so per §5 the condition is restated as the decidable
+  constant comparison ``gain < sys.float_info.epsilon`` with identical
+  protective semantics (a shade conservative: gains progressing at most
+  eps per step are refused as indistinguishable from stuck). Input
+  finiteness does not survive the arithmetic: ``step([1e308], [1e308])``
+  overflowed to inf from validated operands, so every public operator now
+  validates its RESULT through one shared helper; ``_numeric.mean``'s
+  fsum raised "intermediate overflow" for ``[1e308, 1e308]`` ahead of the
+  variance refusal, and ``Vec.__pow__`` raised past the range (1e200²)
+  instead of yielding inf, bypassing descend's guard — both now feed the
+  API's named ValueError. Each fix is mutation-pinned. The split-line
+  null derivation tracks total and top-two in one pass per trial instead
+  of 4,000 full sorts (at the largest advertised window, 8,192-element
+  sorts dominated the one-time cost; the seeded draws are unchanged, so
+  the bars remain byte-reproducible). The import gate's module docstring
+  now states the final binding-keyed scope, its two documented supersets
+  and its two measured exemptions, matching the checker and its tests.
+
+- **Confirmation review round: four runtime defects at the floating-point
+  extremes and a calibration cache-key bug, each fixed and
+  mutation-pinned; six records aligned (2026-10-06).** The defects, all
+  from review of the preceding pushes: `AvaDescent`'s constructor
+  validated operand positivity but not the REPRESENTABLE contraction
+  factor (`alpha = equity_gain = 1e-308` underflows the product to 0, and
+  any product below ~1.1e-16 rounds `1 - gain` back to exactly 1 — every
+  step a no-op "converging" wherever it started); the variance helper
+  raised an incidental `OverflowError` for `[1e200, -1e200]` ahead of
+  every defined refusal (squares now multiply to inf and a named
+  ValueError refuses); `catalan_step` multiplied `alpha` into the gradient
+  before the equity gain, overflowing for a huge alpha whose
+  constructor-approved product was fine (the scalar coefficient now
+  combines first); and `_calibrated_score_threshold`'s cache held only
+  `(sample_total, threshold)`, so a second call under a different
+  caller-supplied `alarm_budget` inside the recompute interval was served
+  the first budget's bar (the budget joins the cache key, as the ratio
+  threshold's cache already did, and the test that papered over it with a
+  manual eviction now exercises the key). Records corrected per §6.6: the
+  original import-gate entry above now states the final binding-keyed
+  policy and its two documented supersets; the gate's same-list scan is
+  documented as a deliberate superset of the upstream module-scope
+  requirement; `wiki/Security-Model.md`'s support matrix rolls with the
+  authoritative `SECURITY.md`; `detect_resonance`'s Returns documentation
+  carries the four split-line fields; and the two remaining "always"
+  claims for `history[-1]` are qualified for `max_steps=0`.
+- **3R resonance gains a split-line channel, adopted from Mercury Agent's
+  3R and re-derived to this repository's evidence standard (2026-10-06).**
+  `detect_resonance`'s Fisher g-test judges the single largest periodogram
+  ordinate, so periodic energy split across two comparable spectral lines
+  — two interleaved periodic processes, or a fundamental with a strong
+  harmonic — can sit below the bar at both lines. Mercury Agent's 3R
+  Resonance engine scores harmonic-comb energy; the first adoption kept
+  that shape (mean power over every candidate fundamental's comb, null bar
+  measured per spectrum size) and **measured worse than Fisher on every
+  family tried** — a symmetric square wave has no even harmonics, so the
+  comb mean averaged dead bins (36.7% vs 76.7% at the strongest amplitude)
+  — and was replaced rather than tuned, recorded here per §6.6. The
+  shipped statistic is the sum of the top two ordinates over the spectrum
+  mean, judged against a seeded, byte-reproducible measured null cached
+  per spectrum size (this sentence originally called it "Siegel's
+  generalisation"; corrected per §6.6 on 2026-10-07 — Siegel's statistic
+  sums every positive excess above a cutoff, and the shipped one is an
+  empirically calibrated top-two sum, kin only in motivation). Measured at
+  m = 64 through the real pipeline: two-tone detection 22/40 where Fisher
+  reads 14/40, single-line square wave 80% vs 76% (the third harmonic is
+  the margin), clean rate 1.17% against the channel's own 1% budget.
+  `adaptive_posture._score_resonance` scores the new channel's excess
+  against its reported bar by the same construction-consistency rule as
+  the existing ratio. Four tests; the mechanism PIN
+  (`test_the_channel_sums_exactly_two_ordinates`) was earned by mutation
+  after the first candidate pin — the two-tone detection comparison — was
+  measured NOT to kill the j = 1 mutant (the measured null bar for a
+  single ordinate lands at 8.32, below Fisher's conservative analytic
+  8.76, so that comparison's margin was bar softness, not the second
+  ordinate; the test now claims capability and the contract test claims
+  the mechanism).
+
+- **Fine-tooth review round over the whole pull request (2026-10-06).** A
+  maximum-depth review of every change on this head surfaced nine findings;
+  all nine are closed at source. The one that mattered most, per §6.6: the
+  `a2ba1d8` commit message claimed black clean on its touched files while
+  `tests/test_ava_descent.py` was never formatted — of the two files an
+  earlier check flagged, only the engine was reformatted and the clean
+  result mis-attributed — so the pushed head went red on the Lint and
+  Format lane (which also skipped CI's mypy step). That claim is withdrawn;
+  the file is formatted and the full `black --check .` now gates every
+  subsequent push of this branch. The contamination guard acquired two
+  hardenings with their own measured tests: a degenerate-scale branch (a
+  quantized bulk putting >= 95% of robust scores at exactly 0 would have
+  capped the threshold at 4x0 and collapsed the bar to the sigma floor —
+  the raw quantile now governs there, mutation-pinned after the test's
+  first version was itself measured constraining nothing and tightened),
+  and a guard-rank clamp at the median (an uncapped `5 * budget` crosses
+  1.0 for caller-supplied budgets above 0.2 and would have capped against
+  the window MINIMUM). The import-hygiene gate now scans every statement
+  list, not only function and class bodies (a same-block pair inside
+  `try`/`if` was invisible), and parses `git ls-files` with `splitlines()`.
+  The release date rolled 2026-10-05 → 2026-10-06 across the five
+  release-state documents and the relocation constants, by this entry's own
+  last-merge-before-the-tag rule. `AvaDescent.descend` validates its
+  vectors once at entry instead of re-running the O(n) coercion-and-scan
+  inside every loop iteration (public operator methods keep their
+  validating contracts). `oss-fuzz/build.sh`'s argv split handles
+  multi-line FLAGS (`read -rd ''`; a plain `read -ra` stops at the first
+  newline and was measured dropping every flag after it — 1 argv where the
+  old unquoted expansion produced 3), and the contamination PIN now reads
+  the monitor's operational threshold cache rather than re-deriving a
+  threshold under a literal budget.
+
+- **3R point-recall loss root-caused and fixed at source: the calibrated
+  threshold could be captured by the anomalies it was calibrating against
+  (2026-10-06, same pull request).** `benchmarks/r3_efficacy.tsv` recorded
+  the shipped detector flagging isolated 10x outliers 82% of the time
+  against the trivial z-score baseline's 100%, and the README read it as
+  "for isolated outliers a z-score does better." Measured mechanism, on a
+  synthetic trace shaped exactly like the canonical host's (median
+  0.1236 ms, MAD 0.0028): anomalies injected on 1% of samples against the
+  1% alarm budget place ~1% of the score history at their own score level,
+  so the `(1 - budget)` order statistic lands inside the anomaly cluster —
+  the calibrated threshold climbed 2.7 → 49.0 toward the anomaly score
+  level of ~60 within 4,000 samples, and asymptotic recall tends to ~50%.
+  The comment defending the design ("a quantile over the trailing window is
+  robust to the alarm fraction itself") is measured false at contamination
+  rates near the budget and is corrected in place per §6.6. Fix:
+  `_calibrated_score_threshold` now caps the tail quantile at 4x a
+  contamination-immune lower order statistic (the `(1 - max(5b, 0.05))`
+  rank, unreachable by contamination below ~4%); clean heavy tails pass
+  untouched because every measured clean trace's quantile growth across
+  those ranks stays below ~2.5 (the repository's own Ed25519 evidence:
+  ~628 at a 1% budget, ~1073 at 0.1%), and no decision feeds back into the
+  estimate, so the tightening ratchet that motivated ingest-everything
+  cannot arise. Re-measured with the guard (deterministic probe): recall
+  1.000 at x1.5/x3/x10 including a 12,000-sample saturated run, threshold
+  stable at 8.4 vs the unguarded 49-and-climbing; all five
+  `detector_baseline_eval.py --gate` lanes pass with unchanged figures
+  (clean-FAR 0.0078, spike-ranking 0.987). The efficacy table was
+  re-measured end to end on real ML-DSA-65 sign timings (this host named in
+  the README note): isolated 10x outliers 100% (baseline 100%) at 0.2% FPR
+  (baseline 0.8%), x3 99.5%, bursts at 2x 99% (baseline 52%), steps at +5%
+  detected in 20 samples (baseline: never). Honestly retained: 1.5-2x
+  isolated outliers remain the z-score's territory — the guard caps
+  sensitivity at a multiple of the clean bulk, and buying that band back
+  would spend false-alarm budget the heavy-tail evidence says real hosts
+  cannot afford. The guard is mutation-pinned
+  (`tests/test_timing_detector_calibration.py`: the unguarded mutant fails
+  exactly the new test), README and `MONITORING.md` restate the measured
+  rule, and the README↔table pins hold.
+
+- **`AvaDescent` — the math layer's convergent descent mode (same date,
+  same pull request).** The AvaEquation operator family (Andrew E. A.,
+  2026) was ported whole onto `_numeric` in a sandbox and all seventeen
+  operators measured against the exact objective `lyapunov_function`
+  computes (8-dimension quadratic, true gradient, 2,000-step budget, fitted
+  decay rates matching closed-form contraction to three decimals). Four
+  classes emerged: convergent-and-unbiased (fitted decay up to 2.96 — the
+  equations module documents `LAMBDA_DECAY = 0.18`), biased-by-design (the
+  additive equity factor settles the state exactly `1.15` per component
+  short of its target), trapped-at-origin (the purely multiplicative
+  variants fix zero), and numerically unsafe (the `exp(alpha*|g|)` feedback
+  overflows within three steps from distance ~3). The shipping
+  `AmaEquationEngine` under its default GA weights was confirmed
+  non-convergent (its own docstring says so; now measured: V rises and the
+  instability rollback fires by step ~6), and neither the family's variance
+  damping (gain ~0.93 at these amplitudes, 0/5 seeds) nor a step-gain sweep
+  down to 0.01 (still 0/5 — the drift is outward at every amplitude)
+  repairs it, so the convergent structure ships alongside, not as a patch.
+  `double_helix_engine.AvaDescent` (a package export) carries exactly the
+  measured-good operators — multiplicative-equity descent, variance-adapted
+  step size, momentum, the Catalan rescale, the adaptive step-size table —
+  and enforces the two structural rules the measurement fixed: the equity
+  factor only ever enters multiplicatively, and `alpha * equity_gain` is
+  bounded below 2.0 (the contraction limit on the unit-curvature
+  quadratic). Non-cryptographic, like the rest of the module.
+  `tests/test_ava_descent.py`: 23 tests; per §6.4, three PINs earned by
+  mutation (the additive-equity form, the equity gain dropped, the
+  contraction bound deleted — each mutant fails exactly its named tests),
+  the refusal tests RANGE.
+- **The descent mode wired into the engine's public convergence API (same
+  date, same pull request).** `AmaEquationEngine.converge` gains
+  `method="descent"`: the same signature and return contract, delegating to
+  `AvaDescent` toward the engine's own `target_state` — the call measured
+  reaching it on every run where the default helix walk reaches it on 0 of
+  5 seeds. The default (`method="helix"`) is byte-identical to before,
+  pinned by a same-seed comparison test; the delegation is pinned by
+  mutation (removing it fails exactly the reaching test); an unknown method
+  is refused. Three more tests, 26 in the module. One wiring candidate was
+  measured and **rejected**, recorded per §6.6: replacing the fixed 0.9/0.1
+  EMA gain in `adaptive_posture._score_lyapunov_stability`'s baseline
+  tracker with the family's variance-adapted gain moved detection mass by
+  −1% and false-positive mass by −6% on deterministic
+  noisy-stable→attack scenarios (first alarm identical in all three) — the
+  50-sample window already smooths V past the point where the variance
+  correction matters, so the scorer keeps its fixed gain rather than
+  carrying a decorative dependency.
+
+- **Pre-emptive review round, before the bots (same date).** Three measured additions. First, the new gate's own adversarial review found it covered one of CodeQL's three shapes: two plain top-level imports (the rule's canonical example) and a same-scope duplicate both evaded it, and an ALIASED top-level import wrongly counted as the earlier binding — a latent false positive whose "fix" would delete a load-bearing local import (measured: NameError). `duplicate_plain_imports` now flags all three shapes, with guarded (`try`/`if`) module-level imports never counted as the earlier binding; six unit pins plus the tree assertion, and three mutants (a planted top-level pair, a planted same-scope pair, the aliased guard dropped) each fail exactly their tests — the third also fails the tree assertion, which is the measurement that the tree really contains the load-bearing aliased pattern the guard protects. (This round's form counted only unaliased imports on both sides; the later review rounds replaced that with the shipped keying on the `(module, asname)` binding, under which a verbatim repeated alias is also a duplicate — corrected here per §6.6, 2026-10-07.) Second, `oss-fuzz/build.sh` and `tools/run_dudect.sh` — the two tracked scripts no shellcheck lane reads — carried six findings; the four `$CC $CFLAGS` word-splits are OSS-Fuzz's own contract and are now explicit argv arrays (split-equivalence probed; the exact rewritten compile and link lines executed against a real fuzz target and the probe binary runs; the script's full run is validated by the ClusterFuzzLite lane, since this container lacks OSS-Fuzz's `/src` layout and `fuzzer-no-link` runtime), and the two command-substitution quotings are behavior-identical. (This round split with `read -ra`, which stops at the first newline and was later measured dropping every flag after it; the shipped form is `read -rd ''` — see the fine-tooth round above; corrected here per §6.6, 2026-10-07.) Both scripts are shellcheck-clean at style level. Third, three example docstrings instructed `pip install cryptography` — the third-party PyCA package — though nothing in the examples imports it (measured: `basic_usage.py` runs to completion with that import blocked); a library whose first invariant is zero external crypto dependencies does not tell its consumers to install one. The hints now name only what each example uses. Also executed this round, all clean: bandit and semgrep with their severity gates, the secret scan (1,623 files), full-scope `mypy --strict` (416 modules) with the scope gate, ctest 155/155, and a five-class note-level detector sweep (unused/redefined, constant-condition, import-shadowing, bare-except, mutable defaults) over the package and tools: zero findings.
+
+- **A module imported twice, 26 sites (`ama_cryptography/monitoring.py`, `crypto_api.py`, `legacy_compat.py`, 11 test modules, the Wycheproof runner).** Low; CodeQL filed `py/repeated-import` as Notes #750/#751 against `monitoring.py`'s two function-local `import importlib` re-imports, and a tree-wide AST sweep by the same rule found 24 more of the class — each a plain, unaliased `import X` whose module the file already imports at top level, each a pure redundancy, each deleted. Seven aliased locals (`import os as _os`) bind a different name than the plain top-level imports beside them and were examined and left (the final gate keys on bindings, so a VERBATIM repeated alias is in scope — see the review rounds below); local `from X import name` is frequently deliberate late binding and is out of scope. Because Note-severity CodeQL does not block CI, the class is now gated: `tests/test_import_hygiene.py` scans every tracked `.py` and refuses the class — in its final form keyed by the `(module, asname)` binding, with two documented deliberate supersets (verbatim dotted repeats and same-list repeats inside one function or block, which the upstream query's module-scope requirement leaves out) — pinned by a planted duplicate (replanting `monitoring.py`'s own removed import fails it) and a negative control for the aliased and `from` forms. The release date moved to 2026-10-05 across the five release-state documents and the relocation suite's constants when this entry was filed, and rolled once more to 2026-10-06 when the same pull request grew the 10-06 review round — the merge before the tag carries the date of its last validated push, per this entry's own rule.
 
 ### Re-investigation of the branch against `main` and the #394 ledger; the SLH-DSA keygens stop minting an interim secret-key copy — 2026-10-03
 
@@ -8723,7 +9729,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.0.0 | 2026-10-04 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
+| 5.0.0 | 2026-10-08 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×11 — see `[5.0.0]` |
 | 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |

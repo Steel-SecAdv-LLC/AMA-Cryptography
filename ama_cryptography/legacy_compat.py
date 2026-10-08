@@ -179,7 +179,6 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     allowing tests to monkeypatch it.
     """
     _enforce_invariant7_lc()
-    import sys
 
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
@@ -196,7 +195,6 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
 def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """Sign message with CRYSTALS-Dilithium (ML-DSA-65)."""
     _enforce_invariant7_lc()
-    import sys
 
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
@@ -213,7 +211,6 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
 def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """Verify CRYSTALS-Dilithium signature."""
     _enforce_invariant7_lc()
-    import sys
 
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
@@ -1049,7 +1046,6 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity (LC-005)
         Use :func:`ama_cryptography.crypto_api.create_crypto_package` instead.
     """
     _enforce_invariant7_lc()
-    import warnings
 
     warnings.warn(
         "legacy_compat.create_crypto_package is deprecated. "

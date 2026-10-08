@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""PQC head-to-head: AMA vs OpenSSL 4.0.1 (via `cryptography` 49.0.0).
+"""PQC head-to-head: AMA vs the OpenSSL bundled by the `cryptography` wheel.
 
 Only implementation pair on this host that both expose ML-KEM-1024 and
 ML-DSA-65. Both sides are driven from Python, so both pay comparable call
 overhead -- AMA through ctypes, OpenSSL through cryptography's Rust binding.
 That is not free for either, and it is stated rather than netted out.
+
+The peer label is read from the linked library at run time
+(``openssl_version_text()``), never written as a literal: an earlier
+revision hardcoded "OpenSSL 4.0.1" into every row, which was true of the
+wheel installed on the 2026-07-29 measurement host and would silently
+mislabel a run against any other wheel. The provenance block records the
+``cryptography`` version beside it for the same reason.
 
 ML-DSA signing is rejection-sampled: its cost depends on the message, so it
 is measured over N distinct random messages, never one fixed message.
@@ -20,8 +27,8 @@ import time
 from collections.abc import Callable
 from typing import Any, Dict, List
 
-# ML-DSA and ML-KEM reached `cryptography` in 46.0; this file is written
-# against 49.0.0 (OpenSSL 4.0.1).  Loaded through importlib rather than
+# ML-DSA and ML-KEM reached `cryptography` in 46.0; this file requires that
+# floor.  Loaded through importlib rather than
 # `from ... import mldsa, mlkem` so an older install fails HERE, naming the
 # requirement, instead of raising a bare ImportError from a submodule that
 # older versions simply do not have.
@@ -38,6 +45,9 @@ except ImportError as exc:  # pragma: no cover - environment guard
         f"[{exc}]"
     ) from exc
 
+import cryptography
+from cryptography.hazmat.backends.openssl import backend as _openssl_backend
+
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
     dilithium_sign,
@@ -46,6 +56,12 @@ from ama_cryptography.pqc_backends import (
     kyber_encapsulate,
     kyber_decapsulate,
 )
+
+#: The peer's row label, from the library actually linked -- e.g.
+#: "OpenSSL 4.0.2" out of "OpenSSL 4.0.2 25 Aug 2026".  Two tokens, so a
+#: build that reports a different vendor string is labelled as itself
+#: rather than as OpenSSL-something-it-is-not.
+OPENSSL_LABEL = " ".join(_openssl_backend.openssl_version_text().split()[:2])
 
 ROUNDS = 200
 MSGS = [os.urandom(64) for _ in range(ROUNDS)]
@@ -80,6 +96,13 @@ def main() -> None:
     # benchmarks/, is the tracked pqc_results.json, so the tree it inspected
     # was the one this run had just modified.
     provenance = _harness_provenance()
+    # The peer's identity, recorded beside AMA's: the wheel version and the
+    # full version string of the OpenSSL it bundles, which is the library
+    # every peer row below actually exercised.
+    provenance["peer"] = {
+        "cryptography": cryptography.__version__,
+        "openssl": _openssl_backend.openssl_version_text(),
+    }
 
     # ── ML-DSA-65 ──
     akp = generate_dilithium_keypair()
@@ -97,11 +120,11 @@ def main() -> None:
     opub.verify(osig, MSGS[0])
 
     bench("ML-DSA-65 keygen", "AMA", lambda i=0: generate_dilithium_keypair())
-    bench("ML-DSA-65 keygen", "OpenSSL 4.0.1", lambda i=0: mldsa.MLDSA65PrivateKey.generate())
+    bench("ML-DSA-65 keygen", OPENSSL_LABEL, lambda i=0: mldsa.MLDSA65PrivateKey.generate())
     bench("ML-DSA-65 sign", "AMA", lambda i=0: dilithium_sign(MSGS[i % ROUNDS], ask))
-    bench("ML-DSA-65 sign", "OpenSSL 4.0.1", lambda i=0: okey.sign(MSGS[i % ROUNDS]))
+    bench("ML-DSA-65 sign", OPENSSL_LABEL, lambda i=0: okey.sign(MSGS[i % ROUNDS]))
     bench("ML-DSA-65 verify", "AMA", lambda i=0: dilithium_verify(MSGS[0], asig, apk))
-    bench("ML-DSA-65 verify", "OpenSSL 4.0.1", lambda i=0: opub.verify(osig, MSGS[0]))
+    bench("ML-DSA-65 verify", OPENSSL_LABEL, lambda i=0: opub.verify(osig, MSGS[0]))
 
     # ── ML-KEM-1024 ──
     kkp = generate_kyber_keypair()
@@ -118,11 +141,11 @@ def main() -> None:
         raise RuntimeError("OpenSSL ML-KEM-1024 round-trip failed; refusing to benchmark")
 
     bench("ML-KEM-1024 keygen", "AMA", lambda i=0: generate_kyber_keypair())
-    bench("ML-KEM-1024 keygen", "OpenSSL 4.0.1", lambda i=0: mlkem.MLKEM1024PrivateKey.generate())
+    bench("ML-KEM-1024 keygen", OPENSSL_LABEL, lambda i=0: mlkem.MLKEM1024PrivateKey.generate())
     bench("ML-KEM-1024 encaps", "AMA", lambda i=0: kyber_encapsulate(kpk))
-    bench("ML-KEM-1024 encaps", "OpenSSL 4.0.1", lambda i=0: mpub.encapsulate())
+    bench("ML-KEM-1024 encaps", OPENSSL_LABEL, lambda i=0: mpub.encapsulate())
     bench("ML-KEM-1024 decaps", "AMA", lambda i=0: kyber_decapsulate(kct, ksk))
-    bench("ML-KEM-1024 decaps", "OpenSSL 4.0.1", lambda i=0: mkey.decapsulate(mct))
+    bench("ML-KEM-1024 decaps", OPENSSL_LABEL, lambda i=0: mkey.decapsulate(mct))
 
     out = "pqc_results.json"
     payload = json.dumps({"provenance": provenance, "rounds": ROUNDS, "results": rows}, indent=2)

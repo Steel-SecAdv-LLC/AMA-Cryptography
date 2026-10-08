@@ -373,7 +373,6 @@ _ECDSA_HASHES: dict[str, str] = {
 
 
 def drive_ecdsa_verify(c: Case) -> tuple[bool, str]:
-    import hashlib
 
     curve = c.group["publicKey"]["curve"]
     field = _ECDSA_CURVES.get(curve)

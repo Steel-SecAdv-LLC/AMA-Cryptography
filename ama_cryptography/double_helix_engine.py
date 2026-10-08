@@ -41,6 +41,7 @@ AI Co-Architects:
 
 import logging
 import math
+import sys
 from typing import Dict, List, Optional, Tuple
 
 from ama_cryptography._numeric import (
@@ -85,6 +86,21 @@ logger = logging.getLogger(__name__)
 
 __version__ = "5.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
+
+
+def _isfinite_number(value: float) -> bool:
+    """``math.isfinite`` over ``int | float`` without the ``OverflowError``
+    leak: ``math.isfinite(10**1000)`` raises ``OverflowError`` instead of
+    answering, so an int too large to convert to float escaped the defined
+    ``ValueError`` refusals of every validator that called ``math.isfinite``
+    on a caller-supplied scalar (review finding, 2026-10-07).  A finite int
+    outside float range is outside these operators' float domain, so it
+    reads as non-finite and is refused by the same branch.
+    """
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 class AmaEquationEngine:
@@ -256,6 +272,14 @@ class AmaEquationEngine:
             vec = asvec(state, copy=False)
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"{argument}: {exc}") from None
+        except OverflowError:
+            # float(10**1000) inside the conversion raises OverflowError,
+            # which escaped this boundary's documented TypeError/ValueError
+            # contract (review finding, 2026-10-07; same class as
+            # _isfinite_number at module level).
+            raise ValueError(
+                f"{argument}: state holds an int outside float range (reads as non-finite)"
+            ) from None
         if len(vec) != self.state_dim:
             raise ValueError(
                 f"{argument}: state has {len(vec)} elements but this engine "
@@ -579,6 +603,7 @@ class AmaEquationEngine:
         initial_state: object = None,
         max_steps: int = 100,
         tolerance: float = 1e-4,
+        method: str = "helix",
     ) -> Tuple[Vec, List[float]]:
         """
         Iteratively converge to stable state with Lyapunov monitoring.
@@ -592,6 +617,19 @@ class AmaEquationEngine:
             max_steps: Maximum iteration steps.  Must be >= 0; 0 returns the
                 initial state with an empty history.
             tolerance: Convergence threshold for state change.  Must be >= 0.
+            method: ``"helix"`` (default) walks the Double-Helix exploration
+                step exactly as every release before 5.0.0 did, stopping
+                conditions below included.  ``"descent"`` instead runs
+                :class:`AvaDescent`'s multiplicative-equity descent toward
+                ``self.target_state`` — the mode whose convergence is
+                measured rather than hoped for (2026-10-05 sandbox: with the
+                default GA weights the helix walk reached its target on 0 of
+                5 seeds, while descent reaches it on every run, fitted
+                Lyapunov decay 2.43 at the default gains).  The return
+                contract is unchanged in both: ``history[t]`` is
+                ``V(state_t)`` of a retained step, and ``history[-1]`` is
+                ``V(final_state)`` whenever any step ran (``max_steps=0``
+                returns an empty history in both methods).
 
         Returns:
             ``(final_state, convergence_history)``.
@@ -604,8 +642,9 @@ class AmaEquationEngine:
             ``final_state.tolist()``.
 
             ``convergence_history`` is the list of Lyapunov values, one per
-            *retained* step, so ``convergence_history[-1]`` is always
-            ``V(final_state)``.
+            *retained* step, so ``convergence_history[-1]`` is
+            ``V(final_state)`` whenever at least one step ran
+            (``max_steps=0`` returns an empty history).
 
         Stopping conditions, in the order they are tested each step:
 
@@ -625,7 +664,9 @@ class AmaEquationEngine:
             TypeError: ``initial_state`` is not array-like, or holds
                 non-numbers.
             ValueError: ``initial_state`` is not 1-D, its length is not
-                ``state_dim``, or ``max_steps`` / ``tolerance`` is negative.
+                ``state_dim``, ``max_steps`` is negative, or ``tolerance``
+                is negative or non-finite (NaN and inf are refused for both
+                methods, not interpreted).
 
         Example:
             >>> engine = AmaEquationEngine(state_dim=8, random_seed=42)
@@ -656,15 +697,27 @@ class AmaEquationEngine:
            saturated at ``±10·φ³`` reported as converged — should pass
            ``max_steps`` explicitly and read the history.
         """
+        if method not in ("helix", "descent"):
+            raise ValueError(f"unknown method: {method!r} (expected 'helix' or 'descent')")
         if max_steps < 0:
             raise ValueError(f"max_steps must be >= 0, got {max_steps}")
-        if tolerance < 0:
-            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+        if not _isfinite_number(tolerance) or tolerance < 0:
+            # Shared by both methods, validated BEFORE dispatch: descent's
+            # own validator refused NaN/inf while the helix walk interpreted
+            # them (NaN never stops, inf stops after the first step), making
+            # the one documented contract method-dependent (review finding,
+            # 2026-10-07).
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance}")
 
         if initial_state is None:
             state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
         else:
             state = self._coerce_state(initial_state, "converge(initial_state=...)").copy()
+
+        if method == "descent":
+            return AvaDescent().descend(
+                self.target_state, state, max_steps=max_steps, tolerance=tolerance
+            )
 
         history: List[float] = []
         V_previous: Optional[float] = None
@@ -713,6 +766,402 @@ class AmaEquationEngine:
             if norm(state - state_prev) < tolerance:
                 break
 
+        return state, history
+
+
+class AvaDescent:
+    """Ava descent mode: convergent gradient evolution for the math layer.
+
+    **IMPORTANT: NON-CRYPTOGRAPHIC CLASS.** Like the rest of this module it
+    is an analytical utility and provides no security guarantee.
+
+    Derived from the AvaEquation operator family (Andrew E. A., Steel
+    Security Advisors LLC, 2026). Of that family's seventeen operators this
+    class carries exactly the ones a sandboxed measurement (2026-10-05,
+    ``_numeric`` port, 8-dimension quadratic objective under
+    ``lyapunov_function``, 2,000-step budget, fitted decay rate matching
+    closed-form contraction to three decimals) showed convergent and
+    unbiased: multiplicative-equity descent (fitted decay 2.43 at the
+    default gains), variance-adapted step size, momentum, the Catalan
+    rescale, and the adaptive step-size selection table. The same
+    measurement fixed two structural rules this class enforces rather than
+    documents:
+
+    * The equity factor enters **multiplicatively** — a gain on the
+      gradient. The additive form (``gradient + equity``) settles at the
+      target offset by exactly the equity factor in every component
+      (measured offset ``1.15 * sqrt(dim)``), so no method here offers it.
+    * No exponential step amplification. The family's
+      ``exp(alpha * |gradient|)`` feedback overflowed within three steps
+      from distance ~3 and is excluded.
+
+    The constructor bounds ``alpha * equity_gain`` below 2.0: on the
+    unit-curvature quadratic the per-step error factor is
+    ``|1 - alpha*equity_gain|``, so the product reaching 2 is where descent
+    stops contracting.
+    """
+
+    #: Equity factor as a convergence gain (the family's constant).
+    EQUITY_GAIN = 1.15
+    #: Catalan's constant G, the family's rescale coefficient.
+    CATALAN_CONSTANT = 0.915965594177219
+    #: Survivor-first amplification weight used by the Catalan rescale.
+    A20_WEIGHT = 0.40
+    #: The family's named step-size modes.
+    ALPHA_MODES: Dict[str, float] = {
+        "golden_ratio": 0.618,
+        "high_reliability": 0.1,
+        "balanced": 0.382,
+        "aggressive": 0.786,
+    }
+
+    def __init__(self, alpha: float = 0.618, equity_gain: float = EQUITY_GAIN) -> None:
+        for name, value in (("alpha", alpha), ("equity_gain", equity_gain)):
+            if not isinstance(value, (int, float)) or not _isfinite_number(value) or value <= 0:
+                raise ValueError(f"{name} must be a finite positive number, got {value!r}")
+        gain = alpha * equity_gain
+        if gain >= 2.0:
+            raise ValueError(
+                f"alpha * equity_gain must stay below 2.0 for contraction; "
+                f"got {alpha} * {equity_gain} = {gain}"
+            )
+        if gain < sys.float_info.epsilon:
+            # Source-operand positivity does not survive floating point:
+            # alpha = equity_gain = 1e-308 underflows the product to 0, and
+            # any product below about eps/2 rounds 1 - gain back to exactly
+            # 1, so every step is a no-op that "converges" wherever it
+            # started (review finding, 2026-10-06).  The bar is one ulp of
+            # 1.0 — a shade conservative (gains in (eps/2, eps) progress,
+            # at most eps per step, which is indistinguishable from stuck)
+            # and stated as a plain constant comparison because the exact
+            # rounds-to-one test (``1.0 - gain >= 1.0``) is unprovable in
+            # real arithmetic and CodeQL alert #753 read it as always
+            # false; the mutation-pinned test drives both refused
+            # constructions either way.
+            raise ValueError(
+                f"alpha * equity_gain = {gain} is below floating-point "
+                f"resolution (< {sys.float_info.epsilon}): descent cannot progress"
+            )
+        self.alpha = float(alpha)
+        self.equity_gain = float(equity_gain)
+
+    # -- validation --------------------------------------------------------
+    @staticmethod
+    def _coerce_pair(state: object, gradient: object, where: str) -> Tuple[Vec, Vec]:
+        try:
+            s = asvec(state)
+            g = asvec(gradient)
+        except OverflowError:
+            # float(10**1000) inside the conversion raises before the
+            # finiteness scan below can refuse it; same ValueError contract
+            # (review finding, 2026-10-07).
+            raise ValueError(
+                f"{where}: a component is an int outside float range (reads as non-finite)"
+            ) from None
+        if len(s) == 0:
+            raise ValueError(f"{where}: state is empty — descent over zero components is undefined")
+        if len(s) != len(g):
+            raise ValueError(f"{where}: state has {len(s)} components, gradient {len(g)}")
+        for label, vec in (("state", s), ("gradient", g)):
+            if any(not math.isfinite(x) for x in vec.tolist()):
+                raise ValueError(f"{where}: {label} holds a non-finite component")
+        return s, g
+
+    @staticmethod
+    def _require_finite_result(vec: Vec, where: str) -> Vec:
+        """Refuse a non-finite operator RESULT with the API's named error.
+
+        Input finiteness does not survive floating-point arithmetic: with
+        the default gains, ``step([1e308], [1e308])`` overflows to inf from
+        finite, validated operands (review finding, 2026-10-06).  Every
+        public operator passes its result through here, so the finite
+        contract fails as a ValueError rather than publishing inf or nan.
+        """
+        if any(not math.isfinite(x) for x in vec.tolist()):
+            raise ValueError(f"{where}: the result overflowed the finite float range")
+        return vec
+
+    @staticmethod
+    def _variance(v: Vec) -> float:
+        # The mean is summed from terms scaled by n, not through
+        # _numeric.mean: math.fsum raises "intermediate overflow" on the
+        # unscaled sum for finite inputs like [1e308, 1e308] whose mean,
+        # 1e308, and variance, exactly zero, are both representable
+        # (review findings, 2026-10-06 and 2026-10-08 — the first turned
+        # the leak into a refusal, the second removed the false refusal).
+        # The mean of finite floats never exceeds the largest of them, so
+        # the scaled sum cannot overflow and no refusal is needed here;
+        # a genuinely non-representable VARIANCE is still refused below.
+        n = len(v)
+        m = math.fsum(x / n for x in v.tolist())
+        # d * d, not d ** 2: Python's float power RAISES OverflowError past
+        # the range while multiplication yields inf, and inf is what the
+        # finiteness refusal below can see (review finding, 2026-10-06:
+        # [1e200, -1e200] leaked an incidental OverflowError ahead of every
+        # defined refusal in the class).
+        #
+        # (d / n) * d, not d * d summed and divided at the end: the raw
+        # square overflows for |d| > ~1.34e154 even when the final variance
+        # is a representable float, so [1e154, -1e154] was refused while its
+        # variance, 1e308, is representable (review finding, 2026-10-08).
+        # Dividing the deviation first keeps every term finite unless its
+        # contribution to the variance itself is not, so the refusal below
+        # fires only for a genuinely non-representable variance.
+        var = 0.0
+        for x in v.tolist():
+            d = x - m
+            var += (d / n) * d
+        if not math.isfinite(var):
+            raise ValueError(
+                "variance overflowed the float range; variance-adapted "
+                "descent is undefined for inputs of this magnitude"
+            )
+        return var
+
+    # -- the measured-convergent operators ---------------------------------
+    def step(self, state: object, gradient: object) -> Vec:
+        """One multiplicative-equity descent step:
+        ``state + alpha * equity_gain * gradient``."""
+        s, g = self._coerce_pair(state, gradient, "step")
+        return self._require_finite_result(self._step_core(s, g), "step")
+
+    def _step_core(self, s: Vec, g: Vec) -> Vec:
+        return s + self.alpha * self.equity_gain * g
+
+    def variance_adapted_step(self, state: object, gradient: object) -> Vec:
+        """Descent step damped by state variance:
+        effective step size ``alpha * equity_gain / (1 + Var(state))``."""
+        s, g = self._coerce_pair(state, gradient, "variance_adapted_step")
+        return self._require_finite_result(
+            self._variance_adapted_core(s, g), "variance_adapted_step"
+        )
+
+    def _variance_adapted_core(self, s: Vec, g: Vec) -> Vec:
+        effective = self.alpha * self.equity_gain / (1.0 + self._variance(s))
+        return s + effective * g
+
+    def momentum_step(
+        self, state: object, gradient: object, velocity: object, beta: float = 0.9
+    ) -> Tuple[Vec, Vec]:
+        """Heavy-ball step; returns ``(next_state, next_velocity)`` with
+        ``next_velocity = beta * velocity + (1 - beta) * gradient``."""
+        if not 0.0 <= beta < 1.0:
+            raise ValueError(f"beta must be in [0, 1), got {beta}")
+        if self._momentum_unstable(self.alpha, beta):
+            # The constructor bounds alpha * equity_gain, but momentum
+            # applies alpha WITHOUT the equity gain, so a large alpha paired
+            # with a small gain passes construction and diverges here
+            # (review finding, 2026-10-06: alpha=100, equity_gain=0.01,
+            # beta=0.9 walks 0 -> 10 -> -71 on the unit quadratic).  The
+            # EMA-momentum system matrix [[1 - a(1-b), ab], [-(1-b), b]] has
+            # both eigenvalues inside the unit circle iff a(1-b) < 2(1+b)
+            # (Jury conditions; determinant b < 1 and p(1) = a(1-b) > 0 hold
+            # already), so that bound is enforced, not documented.
+            raise ValueError(
+                f"alpha * (1 - beta) must stay below 2 * (1 + beta) for "
+                f"momentum stability; got {self.alpha} * {1.0 - beta:g} = "
+                f"{self.alpha * (1.0 - beta):g} vs {2.0 * (1.0 + beta):g}"
+            )
+        s, g = self._coerce_pair(state, gradient, "momentum_step")
+        try:
+            v = asvec(velocity)
+        except OverflowError:
+            raise ValueError(
+                "momentum_step: velocity holds an int outside float range (reads as non-finite)"
+            ) from None
+        if len(v) != len(s):
+            raise ValueError(f"momentum_step: velocity has {len(v)} components, state {len(s)}")
+        if any(not math.isfinite(x) for x in v.tolist()):
+            raise ValueError("momentum_step: velocity holds a non-finite component")
+        nxt, velocity_next = self._momentum_core(s, g, v, beta)
+        return (
+            self._require_finite_result(nxt, "momentum_step"),
+            self._require_finite_result(velocity_next, "momentum_step velocity"),
+        )
+
+    @staticmethod
+    def _momentum_unstable(alpha: float, beta: float) -> bool:
+        """The Jury stability bound ``alpha * (1 - beta) >= 2 * (1 + beta)``
+        in ONE expression, so the per-call check (``momentum_step``) and the
+        loop-entry check (``descend(mode="momentum")``, beta fixed at 0.9)
+        cannot disagree at the float boundary (review finding, 2026-10-07:
+        the loop's pre-evaluated ``0.1``/``3.8`` form refused
+        ``alpha=38, equity_gain=0.01`` while ``momentum_step`` accepted it,
+        because ``1.0 - 0.9`` is not exactly ``0.1``)."""
+        return alpha * (1.0 - beta) >= 2.0 * (1.0 + beta)
+
+    def _momentum_core(self, s: Vec, g: Vec, v: Vec, beta: float) -> Tuple[Vec, Vec]:
+        velocity_next = beta * v + (1.0 - beta) * g
+        return s + self.alpha * velocity_next, velocity_next
+
+    def catalan_step(self, state: object, gradient: object, omni_scalar: float = 0.0) -> Vec:
+        """The family's Catalan rescale, kept verbatim:
+        ``state + alpha * (G*gradient + omni) * sqrt(2) * equity_gain * A20``.
+
+        At the default ``omni_scalar=0.0`` — the only value ``descend``
+        uses — the step is unbiased.  A nonzero ``omni_scalar`` is the
+        family's explicit FORCING input, not a convergence aid: it offsets
+        the fixed point by exactly ``omni_scalar / CATALAN_CONSTANT`` in
+        every component (measured; pinned by the omni-offset test), so a
+        caller supplies it to steer the trajectory, knowing the settle
+        point moves.
+        """
+        if not _isfinite_number(omni_scalar):
+            raise ValueError(f"omni_scalar must be finite, got {omni_scalar}")
+        s, g = self._coerce_pair(state, gradient, "catalan_step")
+        return self._require_finite_result(self._catalan_core(s, g, omni_scalar), "catalan_step")
+
+    def _catalan_core(self, s: Vec, g: Vec, omni_scalar: float) -> Vec:
+        # The scalar gains multiply FIRST: alpha * equity_gain is bounded
+        # below 2 by the constructor, so the combined coefficient is always
+        # representable, while alpha-times-gradient first overflowed for a
+        # huge alpha paired with a tiny equity gain whose product was fine
+        # (review finding, 2026-10-06).
+        coefficient = self.alpha * self.equity_gain * math.sqrt(2.0) * self.A20_WEIGHT
+        catalan_gradient = g * self.CATALAN_CONSTANT
+        return s + (catalan_gradient + omni_scalar) * coefficient
+
+    def select_alpha(self, gradient: object, variance: float, ethical_score: float) -> float:
+        """The family's adaptive step-size table (Phase-3 selection).
+
+        Returns one of ``high_reliability``, ``balanced`` or
+        ``golden_ratio``.  ``ALPHA_MODES`` also names ``aggressive`` — a
+        constructor mode (``AvaDescent(alpha=AvaDescent.ALPHA_MODES
+        ["aggressive"])``), deliberately never a selector outcome: the
+        source family's table is the same, and an adaptive path that can
+        ESCALATE the step size under uncertain measurements would invert
+        the table's fail-toward-reliability direction.
+        """
+        if not 0.0 <= ethical_score <= 1.0:
+            raise ValueError(f"ethical_score must be in [0, 1], got {ethical_score}")
+        if not _isfinite_number(variance) or variance < 0.0:
+            # NaN fails every comparison, so without this check it would
+            # fall through to the most aggressive row of the table.
+            raise ValueError(f"variance must be finite and >= 0, got {variance}")
+        try:
+            g = asvec(gradient)
+        except OverflowError:
+            raise ValueError(
+                "select_alpha: gradient holds an int outside float range (reads as non-finite)"
+            ) from None
+        if any(not math.isfinite(x) for x in g.tolist()):
+            raise ValueError("select_alpha: gradient holds a non-finite component")
+        if ethical_score < 0.93:
+            return self.ALPHA_MODES["high_reliability"]
+        if variance > 0.5:
+            return self.ALPHA_MODES["balanced"]
+        if norm(g) > 1.0:
+            return self.ALPHA_MODES["balanced"]
+        return self.ALPHA_MODES["golden_ratio"]
+
+    # -- end-to-end descent -------------------------------------------------
+    def descend(
+        self,
+        target: object,
+        initial_state: object,
+        max_steps: int = 100,
+        tolerance: float = 1e-10,
+        mode: str = "equity",
+    ) -> Tuple[Vec, List[float]]:
+        """Iterate toward ``target`` from ``initial_state`` and return
+        ``(final_state, lyapunov_history)``, ``history[t]`` being
+        ``V(state_t) = ||state_t - target||^2`` after step ``t`` —
+        so ``history[-1]`` is ``V(final_state)`` whenever at least one step
+        ran; ``max_steps=0`` returns the initial state with an empty
+        history.
+
+        ``mode`` selects the operator: ``"equity"`` (default),
+        ``"variance"``, ``"momentum"``, ``"catalan"`` or ``"adaptive"``
+        (plain descent with ``select_alpha`` choosing the step size).
+        """
+        if mode not in ("equity", "variance", "momentum", "catalan", "adaptive"):
+            raise ValueError(f"unknown mode: {mode!r}")
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if mode == "momentum" and max_steps > 0 and self._momentum_unstable(self.alpha, 0.9):
+            # The loop iterates on the raw momentum core with beta = 0.9, so
+            # the stability bound alpha * (1 - beta) < 2 * (1 + beta) —
+            # enforced per-call in momentum_step — is enforced here once at
+            # entry with the loop's fixed beta, through the SAME expression
+            # momentum_step evaluates (a pre-evaluated 0.1/3.8 form refused
+            # configurations momentum_step accepts; review finding,
+            # 2026-10-07).  It is an operational bound of the iteration, so
+            # it binds only when a step will run: max_steps=0 keeps its
+            # documented contract — the initial state and an empty history —
+            # whatever the operator's alpha (review finding, 2026-10-08).
+            raise ValueError(
+                f"alpha {self.alpha} exceeds the momentum stability bound "
+                f"alpha * (1 - beta) < 2 * (1 + beta) at the loop's beta of 0.9"
+            )
+        if not _isfinite_number(tolerance) or tolerance < 0:
+            # tolerance=inf stops after the first move whatever the error;
+            # tolerance=nan never stops: both are refused, not interpreted.
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance}")
+        state, tgt = self._coerce_pair(initial_state, target, "descend")
+        state = state.copy()
+        velocity = zeros(len(state))
+        history: List[float] = []
+        # The loop calls the operators' raw cores: both vectors were
+        # validated by the entry coercion above, the gradient is a difference
+        # of finite vectors on a contracting trajectory, and re-running the
+        # O(n) copy-and-scan validation on every one of up to max_steps
+        # iterations re-proves what the first pass established (review
+        # finding, 2026-10-06).  The public operator methods keep their
+        # validating contracts for external callers.
+        for _ in range(max_steps):
+            gradient = tgt - state
+            if mode == "equity":
+                nxt = self._step_core(state, gradient)
+            elif mode == "variance":
+                nxt = self._variance_adapted_core(state, gradient)
+            elif mode == "momentum":
+                nxt, velocity = self._momentum_core(state, gradient, velocity, 0.9)
+            elif mode == "catalan":
+                nxt = self._catalan_core(state, gradient, 0.0)
+            else:
+                alpha = self.select_alpha(gradient, self._variance(state), ethical_score=1.0)
+                nxt = state + alpha * gradient
+            moved = norm(nxt - state)
+            state = nxt
+            try:
+                value = lyapunov_function(state, tgt)
+            except OverflowError:
+                # Vec.__pow__ raises past the float range (1e200 ** 2)
+                # instead of yielding inf, which would bypass the refusal
+                # below (review finding, 2026-10-06).
+                value = math.inf
+            if not math.isfinite(value):
+                # Finite operands are not closed under floating-point
+                # arithmetic: descend([1e308], [-1e308]) passes entry
+                # validation and overflows on the first gradient (review
+                # finding, 2026-10-06).  The Lyapunov value is already
+                # computed every step and squares propagate any inf or nan
+                # component into it, so this single O(1) comparison refuses
+                # the overflow instead of publishing a non-finite state the
+                # class contract forbids.
+                raise ValueError(
+                    "descend overflowed: the state left the finite range "
+                    "(operands near the float maximum overflow on subtraction)"
+                )
+            if moved == 0.0 and value > 0.0:
+                # An exactly zero move with target error remaining is
+                # STAGNATION, not convergence: the update rounded away below
+                # the state's resolution (variance mode from [1e150, -1e150]
+                # computes a variance near 1e300, an effective step below
+                # the state's ulp, and nxt == state — review finding,
+                # 2026-10-06), and a deterministic map that moved nothing
+                # this step moves nothing ever after.  True convergence
+                # under any positive tolerance stops on a small-but-nonzero
+                # move; an exact zero move with V == 0 is an exact hit and
+                # breaks below.
+                raise ValueError(
+                    "descend stagnated: the update rounds away below the "
+                    "state's floating-point resolution while the target "
+                    "error remains"
+                )
+            history.append(value)
+            if moved < tolerance:
+                break
         return state, history
 
 

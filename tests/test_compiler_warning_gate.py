@@ -352,7 +352,6 @@ class TestClangFormatConfigLoads:
 
     def test_clang_format_actually_parses_it(self) -> None:
         import shutil
-        import subprocess
 
         clang_format = shutil.which("clang-format")
         if clang_format is None:

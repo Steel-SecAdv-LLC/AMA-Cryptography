@@ -712,7 +712,7 @@ del _post_exc, _post_trace
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
-from .double_helix_engine import AmaEquationEngine
+from .double_helix_engine import AmaEquationEngine, AvaDescent
 from .equations import (
     CODE_NAMES,
     CODES_INDIVIDUAL,
@@ -962,6 +962,7 @@ __all__ = [
     "initialize_ethical_matrix",
     "verify_mathematical_foundations",
     "AmaEquationEngine",
+    "AvaDescent",
     # Key interoperability formats (ama_cryptography.key_formats), lazily
     # loaded — see _KEY_FORMAT_EXPORTS.
     "ALGORITHMS",

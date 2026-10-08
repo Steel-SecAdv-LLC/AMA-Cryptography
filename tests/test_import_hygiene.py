@@ -1,0 +1,1153 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""No import binding is created twice where the second is dead code.
+
+CodeQL filed its ``py/repeated-import`` Note twice against
+``ama_cryptography/monitoring.py`` (alerts #750/#751, 2026-10-05): ``import
+importlib`` at module top and again inside two methods.  A sweep by the same
+rule found 26 such sites across the tree; every one was a pure redundancy and
+was deleted.  CodeQL's Note severity does not block CI, so without this test
+the class could accumulate again unseen.
+
+The gate's final scope (hardened across the review rounds, each refinement
+mutation-pinned): comparisons are keyed on the ``(module, asname)`` BINDING
+an import creates, the way the upstream query compares statements — so a
+verbatim repeated alias (``import os as _os`` twice) is in scope, while a
+plain local ``import os`` beside an aliased top-level import creates a
+different binding and is load-bearing (measured: deleting it raises
+NameError).  Two documented deliberate supersets go beyond the upstream
+query: verbatim repeated dotted imports, and same-list repeats inside one
+function or block (the upstream rule requires the original import to be
+module-scoped).  Two measured exemptions: a module-level import guarded by
+``try``/``if`` is a deliberate late-binding seam (this tree carries the
+pattern at ``crypto_api.py``'s ``import fcntl`` and CodeQL has never filed
+against it), and a class-suite import binds a class attribute that deleting
+the statement would remove.
+"""
+
+from __future__ import annotations
+
+import ast
+import os
+import types
+from pathlib import Path
+from typing import Callable, cast
+
+import pytest
+
+from tools._repo import tracked_names
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def duplicate_plain_imports(source: str) -> list[tuple[int, str]]:
+    """``(lineno, module)`` for each re-import in CodeQL's class.
+
+    Keyed by the BINDING an import creates — the ``(module, asname)`` pair —
+    which is how ``py/repeated-import`` itself compares statements (review
+    finding, 2026-10-06; the first form of this gate skipped aliased imports
+    on both sides, which exempted a verbatim repeated ``import os as _os``
+    CodeQL reports).  Three shapes: a statement repeating a binding directly
+    at module top level; a nested ``import`` repeating a binding the top
+    level already creates; and a repeat among the direct statements of any
+    one block (function, class, ``try``, ``if``, loop and ``with`` suites
+    alike) — the last a deliberate superset of the upstream query, whose
+    ``py/repeated-import`` requires the ORIGINAL import to be
+    module-scoped, while a verbatim same-list repeat inside one function
+    or block is equally dead code and is refused here on the same terms
+    as the dotted superset below.  Keying by binding preserves the load-bearing exemption by
+    construction: ``import os as _os`` binds ``_os``, so a local plain
+    ``import os`` beside it creates a different binding and is never
+    flagged — measured, deleting it raises NameError.  Two deliberate edges:
+    a module-level import guarded by ``try``/``if`` is conditional, never
+    counted as the earlier binding; and an ``import`` in a CLASS suite binds
+    a class attribute, not a scope-visible name, so it is exempt from the
+    cross-scope shape (deleting it would delete the attribute) while
+    same-suite repeats inside one class body still count.  Verbatim repeats
+    of a dotted ``import a.b`` are refused too — a deliberate superset of
+    CodeQL's ``is_simple_import`` scope, safe because only the identical
+    ``(module, asname)`` pair matches (``import a.b`` beside ``import a.c``
+    binds ``a`` twice but imports different submodules, and never matches).
+    Same-value siblings in exclusive branches need no dominance analysis:
+    both are flagged, the half-deleted intermediate (which would raise
+    UnboundLocalError on the emptied branch) is still flagged, so the only
+    state this gate certifies is the behavior-preserving full deletion —
+    measured, and pinned by the never-green-half-deleted test (review
+    finding, 2026-10-07).  The single-deletion shape that WOULD break a
+    branch while going green — a same-name, different-value sibling — is
+    exactly what the pairwise own-scope exemption removes from the report.
+    A conditionally executed nested import stays flagged on the same
+    reasoning (review finding, 2026-10-07): the only paths its deletion
+    changes are the ones that raise UnboundLocalError on the name today,
+    each repaired into the module binding the key matched — measured and
+    pinned — while exempting the shape would let an always-taken branch
+    hide the class CodeQL still reports.
+
+    The converse direction states this gate's coverage boundary (review
+    finding, 2026-10-07): a MODULE-SCOPE rebinding inside a compound
+    statement may or may not execute, and this gate does not evaluate
+    conditions, so the key stops counting as continuously module and the
+    later nested import is exempt — forced, because in every world where
+    the rebinding runs, the deletion a flag demands breaks (measured:
+    AttributeError).  The cost is only shapes whose rebinding is
+    statically dead (``if False: os = 1``), which remain the CodeQL
+    scan's to report: this gate blocks the SAFELY-DELETABLE members of
+    the class, and the repository's CodeQL CI lane stays the independent
+    reporter of the rest.
+    """
+    tree = ast.parse(source)
+    top_ids = set(map(id, tree.body))
+    found: set[tuple[int, str]] = set()
+    # A name some function declares ``global`` and binds or deletes is
+    # volatile: any call can mutate it, so it is never flagged anywhere
+    # and never trusted as continuously the module (review finding,
+    # 2026-10-07; measured as NameError on ``global os; del os`` in a
+    # called helper under a top-level import).
+    volatile = _globally_mutated_names(tree)
+    top_seen = _scan_direct_imports(tree.body, found, volatile)
+    class_scoped = _class_suite_import_ids(tree)
+    shadowed = _shadowed_nested_import_bindings(tree)
+    # Module scope executes in statement order, so the baseline must carry
+    # WHEN each binding became continuously the module: a nested import
+    # compared against a top-level import that executes only after the
+    # function is already called is load-bearing, not a repeat (review
+    # finding, 2026-10-07; measured as NameError on
+    # ``def f(): import os ...; value = f(); import os``).  A function
+    # body runs only during a top-level statement AFTER its container, so
+    # requiring the binding stable since BEFORE the container statement is
+    # sound for every call site.  Function scopes need no such ordering:
+    # a binding anywhere in one makes the name local throughout.
+    container_lineno: dict[int, int] = {}
+    for top_stmt in tree.body:
+        for sub in ast.walk(top_stmt):
+            container_lineno[id(sub)] = top_stmt.lineno
+    # No separate module-rebinding filter is needed here: a module-scope
+    # non-import rebinding (``import os`` then ``os = 1`` at top level)
+    # makes the nested re-import load-bearing (review finding, 2026-10-07;
+    # measured as AttributeError on the review's shape), and the same-list
+    # reset inside _scan_direct_imports already drops the binding from the
+    # returned ``top_seen`` — measured per section 6.3: an additional filter
+    # over top_seen survived its own mutation test because this reset is the
+    # load-bearing guard, so the property is pinned on the reset instead.
+    for walked in ast.walk(tree):
+        # Same-list repeats are flagged in EVERY statement list the module
+        # holds — function, class, try, if, loop and with bodies alike: a
+        # pair inside one ``try`` body is as much a repeat as a pair at top
+        # level, and scanning only function/class bodies left that corner of
+        # the class open (found in review, 2026-10-06).  Scanning each list
+        # independently keeps the guarded-import semantics: a ``try``-guarded
+        # module-level import still never joins ``top_seen``, so a later
+        # retry of it is still not counted.
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(walked, field, None)
+            if isinstance(block, list) and block is not tree.body:
+                _scan_direct_imports(block, found, volatile)
+        if id(walked) in top_ids or not isinstance(walked, ast.Import):
+            continue
+        if id(walked) in class_scoped:
+            continue
+        for alias in walked.names:
+            bound = alias.asname or alias.name.split(".")[0]
+            if (id(walked), bound) in shadowed:
+                # Third measured exemption (review finding, 2026-10-07):
+                # binding equality against the top level does not prove a
+                # nested import redundant when a STRICTLY ENCLOSING function
+                # scope binds the same name — deleting the import would make
+                # the name resolve to that enclosing binding, not the module
+                # (measured: with a module-level ``import os``, an outer
+                # ``os = 1`` and an inner ``import os``, deleting the inner
+                # import raises AttributeError on ``os.sep``).  Class bodies
+                # between the scopes do not exempt: Python's name resolution
+                # skips class scope from nested functions, so the module
+                # binding is what deletion exposes there.
+                continue
+            if bound in volatile:
+                continue
+            bound_since = top_seen.get((alias.name, alias.asname))
+            if bound_since is not None and bound_since < container_lineno[id(walked)]:
+                found.add((walked.lineno, alias.name))
+    return sorted(found)
+
+
+def _scan_direct_imports(
+    body: list[ast.stmt],
+    found: set[tuple[int, str]],
+    volatile: frozenset[str] | set[str] = frozenset(),
+) -> dict[tuple[str, str | None], int]:
+    """Flag repeats among one statement list's import bindings; return the
+    ``(module, asname)`` pairs the list binds, each mapped to the line
+    since which that binding is CONTINUOUSLY the module — a reset drops
+    the pair, a restore re-enters it at the restore's line, and a
+    same-value repeat keeps the original line, so the caller's ordering
+    comparison (review finding, 2026-10-07) sees when the module binding
+    last became reliable, not merely that it exists at the end.
+
+    An intervening statement that rebinds a name resets it: after
+    ``import os; os = 1`` a second ``import os`` in the same list restores
+    the module binding, so deleting it would leave the rebound value —
+    load-bearing, not dead (the same rule the cross-scope shape applies at
+    module scope; review finding, 2026-10-07).  Imports rebind too (review
+    finding, 2026-10-07, second round): ``import pathlib as os`` and
+    ``from pathlib import Path as os`` each rebind ``os``, so a later
+    ``import os`` restores the module and is exempt.  An import resets a
+    key only when it binds the same name to a DIFFERENT value —
+    ``import os.path`` between two ``import os`` rebinds ``os`` to the
+    same module object, so the repeat stays flagged (measured: deleting it
+    changes nothing).  A plain alias binds its root module, an ``as``
+    alias binds the full dotted module, and a from-import never binds a
+    module this gate tracks, so it always resets.  The rebinding walk over
+    a compound statement over-collects from its nested suites, which are
+    scanned separately — over-collection only widens the reset, the safe
+    direction.
+    """
+
+    def bound_name(key: tuple[str, str | None]) -> str:
+        return key[1] or key[0].split(".")[0]
+
+    def bound_value(key: tuple[str, str | None]) -> str:
+        return key[0] if key[1] else key[0].split(".")[0]
+
+    seen: dict[tuple[str, str | None], int] = {}
+    for stmt in body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                key = (alias.name, alias.asname)
+                if bound_name(key) in volatile:
+                    # A globally-mutated name is never flagged and never
+                    # trusted: any call between two imports of it can
+                    # delete or rebind it, so the repeat may be the
+                    # restore (review finding, 2026-10-07).
+                    continue
+                if key in seen:
+                    found.add((stmt.lineno, alias.name))
+                seen = {
+                    k: since
+                    for k, since in seen.items()
+                    if bound_name(k) != bound_name(key) or bound_value(k) == bound_value(key)
+                }
+                # A surviving same-value repeat keeps its original line:
+                # the binding never stopped being the module.
+                seen.setdefault(key, stmt.lineno)
+            continue
+        if isinstance(stmt, ast.ImportFrom):
+            rebound = {alias.asname or alias.name for alias in stmt.names}
+        else:
+            rebound = _statement_bound_names(stmt)
+        if "*" in rebound:
+            # A wildcard import can rebind ANY exported name, so every
+            # tracked binding stops counting as continuously the module
+            # and a later plain import is the restore, not a repeat
+            # (review finding, 2026-10-07; measured pre-fix: the restore
+            # after ``from plugin import *`` was flagged).  Total and
+            # value-blind on purpose — the direction that never demands
+            # a deletion.  ``*`` reaches here from a direct wildcard and,
+            # through _statement_bound_names, from one inside a
+            # module-scope compound statement.
+            seen = {}
+        elif rebound:
+            seen = {key: since for key, since in seen.items() if bound_name(key) not in rebound}
+    return seen
+
+
+def _definition_enclosing_children(node: ast.AST) -> list[ast.AST]:
+    """The children of a def, class or lambda that EXECUTE in the ENCLOSING
+    scope at definition time: decorators, parameter defaults, annotations,
+    and class bases and keywords.  A walrus inside one binds where the
+    statement stands, so the scope walks that stop at the definition's body
+    must still traverse these — skipping them with the body let
+    ``def f(x=(os := 1))`` rebind ``os`` invisibly and the gate then
+    demanded deletion of the load-bearing restore import, measured as
+    ``AttributeError`` on ``os.sep`` (review finding, 2026-10-07).  Under
+    ``from __future__ import annotations`` an annotation is never evaluated;
+    walking it anyway over-collects only toward wider resets and
+    exemptions — the direction that never demands a deletion.
+    """
+    out: list[ast.AST] = []
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        args = node.args
+        out.extend(args.defaults)
+        out.extend(d for d in args.kw_defaults if d is not None)
+        params = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+        params += [a for a in (args.vararg, args.kwarg) if a is not None]
+        out.extend(a.annotation for a in params if a.annotation is not None)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        out.extend(node.decorator_list)
+        if node.returns is not None:
+            out.append(node.returns)
+    elif isinstance(node, ast.ClassDef):
+        out.extend(node.decorator_list)
+        out.extend(node.bases)
+        out.extend(keyword.value for keyword in node.keywords)
+    return out
+
+
+def _globally_mutated_names(tree: ast.Module) -> set[str]:
+    """Names some function declares ``global`` AND binds or deletes.
+
+    Such a name can stop being the module at ANY call site — ``global os;
+    del os`` in a helper invalidates the top-level import with no
+    module-scope statement to reset on (review finding, 2026-10-07;
+    measured as NameError on the restore import's deletion).  The gate
+    therefore treats these names as volatile: never continuously the
+    module, never flagged — conservative in the direction that never
+    demands a deletion.  A ``global`` that only reads mutates nothing and
+    is not collected.
+    """
+    out: set[str] = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            declared: set[str] = set()
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Global):
+                    declared.update(node.names)
+            if declared:
+                out |= declared & _function_bound_names(fn)
+    return out
+
+
+def _is_namespace_mapping(expr: ast.AST) -> bool:
+    """True for a literal ``sys.modules``, bare ``globals()`` or bare
+    ``vars()`` expression — the module-namespace mappings whose direct
+    mutation re-routes or rebinds what the surrounding imports mean.
+
+    An alias of any of them (``m = sys.modules; m[k] = v``,
+    ``g = globals(); g[k] = v``) is not statically attributable — the
+    boundary every lexical rule in this gate draws.
+    """
+    if (
+        isinstance(expr, ast.Attribute)
+        and expr.attr == "modules"
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id == "sys"
+    ):
+        return True
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id in {"globals", "vars"}
+        and not expr.args
+        and not expr.keywords
+    )
+
+
+def _mutates_module_namespace(node: ast.AST) -> bool:
+    """True where ``node`` directly mutates a module-namespace mapping: a
+    subscript store or delete, or a mutating method call, on
+    ``sys.modules`` (re-routes what a LATER import binds; review finding,
+    2026-10-07 — the re-import binds the replacement) or on a bare
+    ``globals()``/``vars()`` (rebinds the name itself without any Name
+    node; review finding, 2026-10-07 — ``globals()['os'] = 1`` left the
+    restore import flagged and its deletion raised AttributeError).
+    Total on purpose, like the wildcard reset: the safe direction.
+    """
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        return _is_namespace_mapping(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        mutators = {"pop", "update", "clear", "setdefault", "popitem"}
+        return node.func.attr in mutators and _is_namespace_mapping(node.func.value)
+    return False
+
+
+def _capture_bound_names(node: ast.AST, out: set[str], include_imports: bool) -> None:
+    """One node's bindings, shared by both scope walks: name stores and
+    deletes, exception-handler and match captures (``MatchMapping.rest``
+    is a plain string attribute, not a Name node — review finding,
+    2026-10-07), import bindings when asked, and the ``"*"`` total-reset
+    marker for a direct module-namespace mutation — ``sys.modules``
+    re-routes what a later import binds, ``globals()``/``vars()``
+    rebinds the name itself, both without any Name node (review
+    findings, 2026-10-07; ``"*"`` is honored by the reset and the exempt
+    check, never collected as a real name).  Nested imports count here because
+    an import inside a compound statement rebinds too — ``if flag:
+    import pathlib as os`` leaves ``os`` possibly not the module, so the
+    later restore import is load-bearing (review finding, 2026-10-07;
+    measured as AttributeError); value-blind on purpose, the safe
+    direction.
+    """
+    if _mutates_module_namespace(node):
+        out.add("*")
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        out.add(node.id)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        out.add(node.name)
+    elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+        out.add(node.name)
+    elif isinstance(node, ast.MatchMapping) and node.rest:
+        out.add(node.rest)
+    elif isinstance(node, ast.Import) and include_imports:
+        for alias in node.names:
+            out.add(alias.asname or alias.name.split(".")[0])
+    elif isinstance(node, ast.ImportFrom) and include_imports:
+        for alias in node.names:
+            out.add(alias.asname or alias.name)
+
+
+def _statement_bound_names(stmt: ast.stmt) -> set[str]:
+    """Names a non-import statement can rebind, for the reset above.
+
+    ``Name`` stores and deletes, exception-handler and match captures, and
+    nested def/class statement names; the walk stops at nested function and
+    class BODIES for the statement's own suites the caller scans separately
+    — but still traverses the definition children that execute here
+    (:func:`_definition_enclosing_children`) — while a compound statement's
+    directly nested suites are still walked: deliberate over-collection,
+    documented at the call site.
+    """
+    out: set[str] = set()
+    stack: list[ast.AST] = [stmt]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(node.name)
+            stack.extend(_definition_enclosing_children(node))
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.extend(_definition_enclosing_children(node))
+            continue
+        _capture_bound_names(node, out, include_imports=True)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _function_bound_names(fn: ast.AST, include_imports: bool = True) -> set[str]:
+    """Names a function's OWN scope binds: parameters plus body bindings.
+
+    The walk stops at nested function and class bodies — their internal
+    bindings live in their own scopes — while the nested statement's NAME
+    itself binds here.  Comprehension TARGETS are excluded: since Python 3
+    a comprehension is its own scope, so ``[os for os in ()]`` binds
+    nothing in the containing function, and collecting it exempted a
+    genuinely redundant nested import — a false-negative path in a
+    CI-blocking gate (review finding, 2026-10-07; the first form of this
+    walk over-collected them as "the safe direction").  A walrus inside a
+    comprehension binds in the CONTAINING scope (PEP 572) and is still
+    collected, because only the generator targets are skipped.  A walrus
+    inside a nested definition's decorators, defaults or annotations
+    evaluates in THIS scope and is collected through
+    :func:`_definition_enclosing_children` — the first form of this walk
+    skipped them with the body, calling the miss "a flag standing for a
+    human to judge", but the gate is CI-blocking, so the standing flag
+    demanded a behavior-changing deletion (review finding, 2026-10-07,
+    measured as AttributeError on the restore import's deletion).
+    ``include_imports=False`` drops the bindings import statements create,
+    for the own-scope question below: whether an import exempts its own
+    scope is value-dependent, so it is answered pairwise by
+    :func:`_import_bound_pairs`, not by this name set.
+    """
+    out: set[str] = set()
+    args = getattr(fn, "args", None)
+    if args is not None:
+        params = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+        params += [a for a in (args.vararg, args.kwarg) if a is not None]
+        out.update(a.arg for a in params)
+    body = getattr(fn, "body", [])
+    # A Lambda's body is a single expression, not a statement list.
+    stack: list[ast.AST] = list(body) if isinstance(body, list) else [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(node.name)
+            stack.extend(_definition_enclosing_children(node))
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.extend(_definition_enclosing_children(node))
+            continue
+        _capture_bound_names(node, out, include_imports=include_imports)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            # Walk the comprehension's expressions (a walrus there binds in
+            # THIS scope) but never its generator targets, which bind only
+            # inside the comprehension's own scope.
+            generators = {id(gen) for gen in node.generators}
+            stack.extend(
+                child for child in ast.iter_child_nodes(node) if id(child) not in generators
+            )
+            for gen in node.generators:
+                stack.extend(
+                    child for child in ast.iter_child_nodes(gen) if child is not gen.target
+                )
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _shadowed_nested_import_bindings(tree: ast.Module) -> set[tuple[int, str]]:
+    """``(id(Import node), bound name)`` pairs another binding shadows.
+
+    Two shadowing shapes make a binding-keyed nested import load-bearing
+    despite matching a top-level binding, because deleting it would resolve
+    the name somewhere other than the module import the key matched:
+
+    * a STRICTLY ENCLOSING function scope binds the name (parameter,
+      assignment, any binding construct — an enclosing ``import`` counts
+      too, since ``import foo as os`` binds a different module under the
+      same name);
+    * the import's OWN scope binds the name by a non-import construct
+      (``os = 1`` anywhere in the function makes ``os`` function-local
+      throughout, so without the import the use site hits that assignment
+      or UnboundLocalError, never the module import), or by an import that
+      binds the same name to a DIFFERENT value — ``import pathlib as os``
+      and ``from pathlib import Path as os`` leave the plain ``import os``
+      beside them as what restores the module, never a repeat (review
+      finding, 2026-10-07, final Copilot round).  The own-scope import
+      question is answered pairwise over ``(bound name, bound value)``, so
+      an import cannot exempt itself and a same-value repeat —
+      ``import os as _os`` twice — stays flagged.
+
+    Class bodies pass the enclosing set through unchanged — nested
+    functions skip class scope in name resolution, so a class-body binding
+    exposes nothing on deletion.  Module scope contributes nothing: its
+    bindings are the ``top_seen`` baseline the comparison is against.
+    """
+    out: set[tuple[int, str]] = set()
+
+    def collect(scope_node: ast.AST, enclosing: frozenset[str]) -> None:
+        if isinstance(scope_node, ast.Module):
+            own_all: frozenset[str] = frozenset()
+            exempt: frozenset[str] = frozenset()
+            own_pairs: frozenset[tuple[str, str]] = frozenset()
+        else:
+            own_all = frozenset(_function_bound_names(scope_node))
+            exempt = enclosing | frozenset(_function_bound_names(scope_node, include_imports=False))
+            own_pairs = frozenset(_import_bound_pairs(scope_node))
+        stack: list[ast.AST] = list(ast.iter_child_nodes(scope_node))
+        while stack:
+            child = stack.pop()
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    value = alias.name if alias.asname else alias.name.split(".")[0]
+                    divergent = any(b == bound and v != value for b, v in own_pairs)
+                    if bound in exempt or "*" in exempt or divergent:
+                        out.add((id(child), bound))
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                collect(child, enclosing | own_all)
+            else:
+                stack.extend(ast.iter_child_nodes(child))
+
+    collect(tree, frozenset())
+    return out
+
+
+def _import_bound_pairs(fn: ast.AST) -> set[tuple[str, str]]:
+    """``(bound name, bound value)`` pairs the function's own imports bind.
+
+    A plain ``import A.B`` binds ``A`` to module ``A``; ``import A.B as C``
+    binds ``C`` to module ``A.B``; ``from M import N as C`` binds ``C`` to
+    the attribute ``M.N``, encoded ``"from:M:N"`` so it can never equal a
+    module path.  The pairs let the own-scope exemption above compare
+    values, not just names: an import whose scope holds another import of
+    the SAME name but a DIFFERENT value is load-bearing (it restores the
+    module that other import displaced), while a same-value repeat is the
+    duplicate the gate exists to flag.  The walk stops where
+    :func:`_function_bound_names` stops (nested function and class bodies
+    bind their own scopes).
+    """
+    out: set[tuple[str, str]] = set()
+    body = getattr(fn, "body", [])
+    stack: list[ast.AST] = list(body) if isinstance(body, list) else [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    out.add((alias.asname, alias.name))
+                else:
+                    root = alias.name.split(".")[0]
+                    out.add((root, root))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                out.add((alias.asname or alias.name, f"from:{node.module}:{alias.name}"))
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _class_suite_import_ids(tree: ast.Module) -> set[int]:
+    """ids of ``Import`` nodes whose nearest enclosing scope is a class suite.
+
+    A class-body ``import os`` after a top-level ``import os`` is NOT
+    redundant: it binds the class attribute ``C.os``, which deleting the
+    statement removes.  Nested function bodies open their own scope again,
+    so the walk stops at them."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        stack: list[ast.AST] = list(node.body)
+        while stack:
+            item = stack.pop()
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(item, ast.Import):
+                out.add(id(item))
+            stack.extend(ast.iter_child_nodes(item))
+    return out
+
+
+def test_a_planted_nested_duplicate_is_found() -> None:
+    source = "import os\n\n\ndef f() -> str:\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(source) == [(5, "os")]
+
+
+def test_a_second_top_level_import_is_found() -> None:
+    """CodeQL's canonical example: the same module twice at top level."""
+    source = "import os\nimport sys\nimport os\n\nprint(os.sep, sys.path)\n"
+    assert duplicate_plain_imports(source) == [(3, "os")]
+
+
+def test_a_same_scope_duplicate_is_found() -> None:
+    source = "def f() -> str:\n    import os\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(source) == [(3, "os")]
+
+
+def test_an_aliased_or_from_import_is_not_in_scope() -> None:
+    source = (
+        "import os\nimport ast\n\n\ndef f() -> str:\n"
+        "    import os as _os\n    from ast import parse\n\n"
+        "    return _os.sep + str(parse('1'))\n"
+    )
+    assert duplicate_plain_imports(source) == []
+
+
+def test_a_plain_local_beside_an_aliased_top_import_is_load_bearing() -> None:
+    """``import os as _os`` does not bind ``os``: the local import is the only
+    binding the function has, and deleting it raises NameError — measured.
+    The checker must not pressure that deletion."""
+    source = "import os as _os\n\n\ndef f() -> str:\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(source) == []
+
+
+def test_a_guarded_top_import_with_a_local_retry_is_not_counted() -> None:
+    source = (
+        "try:\n    import fcntl\nexcept ImportError:\n    fcntl = None\n\n\n"
+        "def f() -> object:\n    import fcntl\n\n    return fcntl\n"
+    )
+    assert duplicate_plain_imports(source) == []
+
+
+def test_a_repeated_identical_alias_is_found() -> None:
+    """CodeQL keys on the bound alias: ``import os as _os`` twice repeats
+    the ``_os`` binding and is in the class, same scope or across scopes."""
+    source = "import os as _os\nimport os as _os\n\nprint(_os.sep)\n"
+    assert duplicate_plain_imports(source) == [(2, "os")]
+    source = (
+        "import os as _os\n\n\ndef f() -> str:\n    import os as _os\n\n" "    return _os.sep\n"
+    )
+    assert duplicate_plain_imports(source) == [(5, "os")]
+
+
+def test_a_class_suite_import_is_a_binding_not_a_duplicate() -> None:
+    """``class C: import os`` binds ``C.os``; deleting it removes the
+    attribute, so the cross-scope shape must not flag it — while a repeat
+    inside the same class suite is still a repeat."""
+    source = "import os\n\n\nclass C:\n    import os\n"
+    assert duplicate_plain_imports(source) == []
+    source = "class C:\n    import os\n    import os\n"
+    assert duplicate_plain_imports(source) == [(3, "os")]
+
+
+def test_a_same_block_duplicate_inside_try_or_if_is_found() -> None:
+    source = (
+        "try:\n    import os\n    import os\nexcept ImportError:\n    pass\n\n"
+        "if True:\n    import sys\n    import sys\n"
+    )
+    assert duplicate_plain_imports(source) == [(3, "os"), (9, "sys")]
+
+
+def test_a_shadowed_nested_import_is_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): binding equality against the top
+    level does not prove a nested import redundant when an enclosing
+    function binds the same name — deleting it makes the name resolve to
+    the enclosing binding, measured below as the AttributeError the review
+    traced.  Mutation: dropping the shadowing exemption from
+    ``duplicate_plain_imports`` fails exactly this test."""
+    shadowed = (
+        "import os\n\n\ndef outer():\n    os = 1\n\n    def inner():\n"
+        "        import os\n\n        return os.sep\n\n    return inner\n"
+    )
+    assert duplicate_plain_imports(shadowed) == []
+    # The premise, measured in place: WITHOUT the inner import, the call
+    # resolves ``os`` to the enclosing int and breaks.
+    namespace: dict[str, object] = {}
+    deleted = shadowed.replace("        import os\n\n", "")
+    code = compile(deleted, "<shadowed>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    outer = cast(Callable[[], Callable[[], str]], namespace["outer"])
+    with pytest.raises(AttributeError):
+        outer()()
+    # A parameter shadows the same way.
+    param = (
+        "import os\n\n\ndef f(os):\n    def g():\n        import os\n\n"
+        "        return os.sep\n\n    return g\n"
+    )
+    assert duplicate_plain_imports(param) == []
+    # Own-scope assignment: ``os`` is function-local THROUGHOUT the
+    # function, so the import never duplicates the module-level binding.
+    own = (
+        "import os\n\n\ndef f():\n    import os\n\n    x = os.sep\n"
+        "    os = 1\n    return x, os\n"
+    )
+    assert duplicate_plain_imports(own) == []
+    # A mapping-rest capture in an enclosing function shadows the same way
+    # (``MatchMapping.rest`` is a string attribute, not a Name node).
+    match_shadow = (
+        "import os\n\n\ndef outer(value):\n    match value:\n"
+        "        case {**os}:\n            pass\n\n    def inner():\n"
+        "        import os\n\n        return os.sep\n\n    return inner\n"
+    )
+    assert duplicate_plain_imports(match_shadow) == []
+    # A comprehension target binds only the comprehension's own scope, so
+    # it exempts NOTHING: the re-import stays flagged, and deleting it is
+    # behavior-preserving (measured — review finding, 2026-10-07; the
+    # first collector over-collected these targets and hid the duplicate).
+    comp_target = (
+        "import os\n\n\ndef f():\n    import os\n\n"
+        "    values = [os for os in ()]\n    return os.sep, values\n"
+    )
+    assert duplicate_plain_imports(comp_target) == [(5, "os")]
+    # A walrus INSIDE a comprehension binds the containing scope (PEP 572),
+    # so it still exempts.
+    comp_walrus = (
+        "import os\n\n\ndef f():\n    import os\n\n"
+        "    values = [(os := v) for v in (1,)]\n    return os, values\n"
+    )
+    assert duplicate_plain_imports(comp_walrus) == []
+
+
+def test_a_module_scope_rebinding_makes_the_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): after ``import os`` a module-scope
+    ``os = 1`` leaves the global holding the int, so a nested re-import is
+    what gives the function the module back (measured: deleting it raises
+    AttributeError on ``os.sep``), and a later top-level re-import RESTORES
+    the module binding rather than repeating it.  Both forms are exempt;
+    without the rebinding both stay flagged (controls below).  Mutation:
+    dropping the module-rebound filter fails the cross-scope case, dropping
+    the same-list reset fails the top-level case — each exactly here."""
+    rebound = "import os\n\nos = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(rebound) == []
+    restored = "import os\n\nos = 1\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(restored) == []
+    control_nested = "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(control_nested) == [(5, "os")]
+    control_top = "import os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(control_top) == [(2, "os")]
+    # A match mapping-rest capture is a rebinding too — ``rest`` is a plain
+    # string attribute, not a Name node, and the first collector form
+    # missed it (review finding, 2026-10-07).  Same restore semantics.
+    mapping_rest = (
+        "import os\n\nmatch {1: 2}:\n    case {**os}:\n        pass\n\n"
+        "import os\n\nprint(os.sep)\n"
+    )
+    assert duplicate_plain_imports(mapping_rest) == []
+
+
+def test_an_import_rebinding_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07, final Copilot round): imports rebind
+    too.  ``import pathlib as os`` and ``from pathlib import Path as os``
+    each leave ``os`` bound to something other than the ``os`` module, so a
+    later plain ``import os`` RESTORES the module — deleting it breaks the
+    use sites (measured below: AttributeError on ``os.sep``) — while
+    ``import os.path`` rebinds ``os`` to the SAME module object, so a
+    repeat across it stays a flagged redundancy (measured: deletion changes
+    nothing).  Mutation: dropping the value-aware reset from
+    ``_scan_direct_imports`` fails the two top-level exemptions; dropping
+    the divergent-import own-scope bindings from ``_function_bound_names``
+    fails the two function-scope exemptions — each exactly here."""
+    aliased = "import os\nimport pathlib as os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(aliased) == []
+    from_form = "import os\nfrom pathlib import Path as os\nimport os\n\nprint(os.sep)\n"
+    assert duplicate_plain_imports(from_form) == []
+    # The premise, measured in place: WITHOUT the restore import, the use
+    # site resolves ``os`` to the rebound value and breaks.
+    for deleted in (
+        "import os\nimport pathlib as os\nos.sep\n",
+        "import os\nfrom pathlib import Path as os\nos.sep\n",
+    ):
+        with pytest.raises(AttributeError):
+            exec(  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+                compile(deleted, "<rebound>", "exec"), {}
+            )
+    # Same-value rebinding is no exemption: ``import os.path`` binds ``os``
+    # to the os module itself, so the repeat across it stays flagged, and a
+    # genuine duplicate aliased pair stays flagged (value-equality guard).
+    same_value = "import os\nimport os.path\nimport os\n"
+    assert duplicate_plain_imports(same_value) == [(3, "os")]
+    aliased_pair = "import pathlib as p\nimport pathlib as p\n"
+    assert duplicate_plain_imports(aliased_pair) == [(2, "pathlib")]
+    # The same two shapes exempt at function scope (the own-scope set
+    # counts divergent import bindings; a plain re-import still cannot
+    # self-exempt — control below).
+    fn_aliased = (
+        "import os\n\n\ndef f():\n    import pathlib as os\n    import os\n\n" "    return os.sep\n"
+    )
+    assert duplicate_plain_imports(fn_aliased) == []
+    fn_from = (
+        "import os\n\n\ndef f():\n    from pathlib import Path as os\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(fn_from) == []
+    fn_control = "import os\n\n\ndef f():\n    import os\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(fn_control) == [(5, "os"), (6, "os")]
+
+
+def test_a_class_body_binding_does_not_exempt_a_nested_duplicate() -> None:
+    """Nested functions skip class scope in name resolution, so a class
+    attribute of the same name exposes nothing on deletion — the method's
+    re-import stays flagged, and the exemption cannot widen into classes."""
+    source = (
+        "import os\n\n\nclass C:\n    os = 1\n\n    def m(self):\n"
+        "        import os\n\n        return os.sep\n"
+    )
+    assert duplicate_plain_imports(source) == [(8, "os")]
+
+
+def test_sibling_same_value_imports_are_never_green_half_deleted() -> None:
+    """The gate's fixpoint is safe without dominance analysis (review
+    finding, 2026-10-07): two exclusive-branch ``import os`` siblings under
+    a top-level ``import os`` are both flagged; deleting only one leaves
+    ``os`` function-local through the surviving import (the emptied branch
+    raises UnboundLocalError, measured) and the gate STILL flags that
+    intermediate, so it can never certify it; the state it does certify —
+    both deleted — resolves every use to the module binding the pair was
+    redundant against.  The different-value sibling, where a single
+    deletion WOULD be certified while breaking a branch, is the case the
+    pairwise own-scope exemption already removes from the report."""
+    both = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        import os\n\n        return os.sep\n"
+        "    if mode == 2:\n        import os\n\n        return os.pathsep\n"
+    )
+    assert duplicate_plain_imports(both) == [(6, "os"), (10, "os")]
+    half = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        return os.sep\n"
+        "    if mode == 2:\n        import os\n\n        return os.pathsep\n"
+    )
+    # The unsafe intermediate stays red: the gate never demands it as an
+    # end state, it refuses it.
+    assert duplicate_plain_imports(half) == [(8, "os")]
+    namespace: dict[str, object] = {}
+    code = compile(half, "<half>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    half_f = cast(Callable[[int], str], namespace["f"])
+    with pytest.raises(UnboundLocalError):
+        half_f(1)
+    green = (
+        "import os\n\n\ndef f(mode):\n"
+        "    if mode == 1:\n        return os.sep\n"
+        "    if mode == 2:\n        return os.pathsep\n"
+    )
+    assert duplicate_plain_imports(green) == []
+    namespace = {}
+    code = compile(green, "<green>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    green_f = cast(Callable[[int], str], namespace["f"])
+    assert green_f(1) == os.sep and green_f(2) == os.pathsep
+
+
+def test_a_top_import_executing_after_the_call_does_not_make_the_local_one_dead() -> None:
+    """PIN (review finding, 2026-10-07): module scope executes in statement
+    order, so a nested import is a repeat only of a top-level binding that
+    is continuously the module since BEFORE the nested import's top-level
+    container — a function body runs only during some top-level statement
+    after its container, never earlier.  Pre-fix the baseline was the
+    module's final binding set, order-blind, and the gate demanded deleting
+    a local import whose top-level twin had not yet executed when the
+    function ran (measured: NameError).  The early contrast holds the flag;
+    the rebound contrast pins the continuity rule: a top-level restore
+    AFTER the def leaves no binding stable since before it, and a call
+    between the rebinding and the restore would see the rebound value."""
+    late = "def f():\n    import os\n\n    return os.sep\n\n\nvalue = f()\nimport os\n"
+    assert duplicate_plain_imports(late) == []
+    broken = "def f():\n    return os.sep\n\n\nvalue = f()\nimport os\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<late>", "exec")
+    with pytest.raises(NameError):
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    early = "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\nvalue = f()\n"
+    assert duplicate_plain_imports(early) == [(5, "os")]
+    rebound = (
+        "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\n"
+        "os = 1\nimport os\nvalue = f()\n"
+    )
+    assert duplicate_plain_imports(rebound) == []
+    # A same-value top-level repeat does not restart the clock: the binding
+    # has been the module since line 1, so the nested import is still the
+    # repeat (and the top-level twin is the same-list duplicate).
+    repeat = (
+        "import os\n\n\ndef f():\n    import os\n\n    return os.sep\n\n\n"
+        "import os\nvalue = f()\n"
+    )
+    assert duplicate_plain_imports(repeat) == [(5, "os"), (10, "os")]
+
+
+def test_a_global_deletion_makes_the_name_volatile() -> None:
+    """PIN (review finding, 2026-10-07): ``global os; del os`` in a called
+    helper invalidates the top-level import with no module-scope statement
+    to reset on, so a name some function declares ``global`` AND binds or
+    deletes is volatile — never flagged, anywhere, and never trusted as
+    continuously the module.  Runtime premise measured: deleting the
+    function-local restore import raises NameError once the helper has
+    run.  A ``global`` that only reads mutates nothing, and the read-only
+    contrast holds the flag.  Mutation: with the volatile set emptied,
+    exactly this test fails."""
+    deleting = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(deleting) == []
+    same_list = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\nimport os\n"
+    )
+    assert duplicate_plain_imports(same_list) == []
+    read_only = (
+        "import os\n\n\ndef helper():\n    global os\n    return os.sep\n\n\nhelper()\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(read_only) == [(13, "os")]
+    broken = (
+        "import os\n\n\ndef helper():\n    global os\n    del os\n\n\nhelper()\n\n\n"
+        "def f():\n    return os.sep\n"
+    )
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<global-del>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    broken_f = cast(Callable[[], str], namespace["f"])
+    with pytest.raises(NameError):
+        broken_f()
+
+
+def test_a_globals_mutation_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): ``globals()['os'] = 1`` rebinds
+    the name with no Name node, so the restore import after it was flagged
+    and its deletion measured as AttributeError on ``os.sep``.  Direct
+    subscript stores/deletes and mutating method calls on a bare
+    ``globals()`` (and ``vars()``) now reset the whole baseline, exactly
+    like ``sys.modules`` mutations; a ``globals()`` READ mutates nothing,
+    and the read contrast holds the flag.  Mutation: with the
+    namespace-mapping branch disabled, exactly this test fails."""
+    mutated = "import os\n\nglobals()['os'] = 1\n\nimport os\n\nvalue = os.sep\n"
+    assert duplicate_plain_imports(mutated) == []
+    popped = "import os\n\nglobals().pop('os')\n\nimport os\n\nvalue = os.sep\n"
+    assert duplicate_plain_imports(popped) == []
+    in_function = (
+        "import os\n\n\ndef f():\n    globals()['os'] = 1\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(in_function) == []
+    read_only = "import os\n\nvalue = globals()['os']\n\nimport os\n"
+    assert duplicate_plain_imports(read_only) == [(5, "os")]
+    broken = "import os\n\nglobals()['os'] = 1\n\nvalue = os.sep\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<globals-del>", "exec")
+    with pytest.raises(AttributeError):
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+
+
+def test_a_sys_modules_mutation_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): ``sys.modules[k] = replacement``
+    re-routes what a later import binds without rebinding any name, so the
+    re-import after it is the restore — runtime-proved below: with the
+    mutation live, the second ``import`` binds the replacement, and
+    deleting it leaves the original bound.  A direct mutation (subscript
+    store or delete, or a mutating method call) resets the whole
+    module-scope baseline and exempts the mutating function's own
+    imports; the mutation-free contrast holds the flag.  An ALIAS of
+    ``sys.modules`` is outside this gate's lexical boundary, like every
+    dynamic shape it draws the line at."""
+    mutated = (
+        "import sys\n\nimport target\n\n" "sys.modules['target'] = replacement\n\nimport target\n"
+    )
+    assert duplicate_plain_imports(mutated) == []
+    popped = "import sys\n\nimport target\n\nsys.modules.pop('target')\n\nimport target\n"
+    assert duplicate_plain_imports(popped) == []
+    in_function = (
+        "import sys\n\nimport target\n\n\ndef f(replacement):\n"
+        "    sys.modules['target'] = replacement\n    import target\n\n    return target\n"
+    )
+    assert duplicate_plain_imports(in_function) == []
+    plain = "import sys\n\nimport target\n\nvalue = 1\n\nimport target\n"
+    assert duplicate_plain_imports(plain) == [(7, "target")]
+    original = types.ModuleType("tih_swap_target")
+    replacement = types.ModuleType("tih_swap_target")
+    import sys as real_sys
+
+    swap = (
+        "import tih_swap_target\n"
+        "sys.modules['tih_swap_target'] = replacement\n"
+        "import tih_swap_target\n"
+        "final = tih_swap_target\n"
+    )
+    swap_deleted = (
+        "import tih_swap_target\n"
+        "sys.modules['tih_swap_target'] = replacement\n"
+        "final = tih_swap_target\n"
+    )
+    try:
+        real_sys.modules["tih_swap_target"] = original
+        namespace: dict[str, object] = {"sys": real_sys, "replacement": replacement}
+        code = compile(swap, "<swap>", "exec")
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+        assert namespace["final"] is replacement
+        real_sys.modules["tih_swap_target"] = original
+        namespace = {"sys": real_sys, "replacement": replacement}
+        code = compile(swap_deleted, "<swap-deleted>", "exec")
+        exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+        assert namespace["final"] is original
+    finally:
+        real_sys.modules.pop("tih_swap_target", None)
+
+
+def test_a_wildcard_import_invalidates_every_tracked_binding() -> None:
+    """PIN (review finding, 2026-10-07): ``from plugin import *`` can
+    rebind ANY exported name, so every tracked module-scope binding stops
+    counting as continuously the module and the later plain import is the
+    restore — pre-fix the reset tracked only the literal ``"*"`` and the
+    gate demanded deleting a possibly load-bearing restore.  Covered for
+    a direct wildcard and one inside a module-scope compound statement;
+    the wildcard-free contrast holds the flag.  Mutation: with the
+    ``\"*\"`` branch removed from the reset, exactly this test fails."""
+    star = "import os\n\nfrom plugin import *\n\nimport os\n"
+    assert duplicate_plain_imports(star) == []
+    star_compound = (
+        "import os\n\nif flag:\n    from plugin import *\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(star_compound) == []
+    no_star = "import os\n\nfrom plugin import helper\n\nimport os\n"
+    assert duplicate_plain_imports(no_star) == [(5, "os")]
+
+
+def test_a_maybe_rebinding_at_module_scope_forces_the_exemption() -> None:
+    """PIN (review finding, 2026-10-07): a module-scope rebinding inside a
+    compound statement MAY execute, the gate does not evaluate conditions,
+    and in every world where it runs the deletion a flag would demand
+    breaks — measured below: with the condition true and the nested
+    import deleted, ``os`` is 1 and ``os.sep`` raises AttributeError.  So
+    the maybe-rebound key stops counting as continuously module and the
+    nested import is exempt, for ``if False:`` exactly as for ``if cond:``
+    (the gate treats them identically; the statically-dead shape stays the
+    CodeQL lane's to report).  Mutation: a definite-only reset that skips
+    compound statements — the proposed 'track definite state' direction —
+    flags the live-rebinding shape and fails exactly this test."""
+    maybe = "import os\n\nif cond:\n    os = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(maybe) == []
+    dead = "import os\n\nif False:\n    os = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    assert duplicate_plain_imports(dead) == []
+    broken = "import os\n\ncond = True\nif cond:\n    os = 1\n\n\ndef f():\n    return os.sep\n"
+    namespace: dict[str, object] = {}
+    code = compile(broken, "<maybe>", "exec")
+    exec(code, namespace)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    broken_f = cast(Callable[[], str], namespace["f"])
+    with pytest.raises(AttributeError):
+        broken_f()
+
+
+def test_a_conditional_import_stays_flagged_and_deletion_repairs_the_unbound_path() -> None:
+    """PIN (review finding, 2026-10-07): ``if flag: import os`` under a
+    stable module import stays flagged.  Exempting conditionally executed
+    imports would let an always-taken branch hide the entire class while
+    CodeQL still reports it — a gate green while the alerts it exists to
+    block re-accumulate.  What the demanded deletion changes is measured
+    here, not asserted: every path that completes today completes
+    identically (the name resolves to the same module object), and the
+    ONLY divergent path is the one that raises UnboundLocalError on the
+    flagged name — it becomes the module binding the key matched, a
+    strict repair of an unbound read.  Exception-based feature detection
+    has its idiom (ImportError under ``try``, exempt already);
+    UnboundLocalError on a module name is not it."""
+    src = (
+        "import os\n\n\ndef f(flag):\n    if flag:\n        import os\n"
+        "    try:\n        return os.sep\n    except UnboundLocalError:\n"
+        "        return None\n"
+    )
+    assert duplicate_plain_imports(src) == [(6, "os")]
+    deleted = (
+        "import os\n\n\ndef f(flag):\n"
+        "    try:\n        return os.sep\n    except UnboundLocalError:\n"
+        "        return None\n"
+    )
+    assert duplicate_plain_imports(deleted) == []
+    before_ns: dict[str, object] = {}
+    code = compile(src, "<cond>", "exec")
+    exec(code, before_ns)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    after_ns: dict[str, object] = {}
+    code = compile(deleted, "<cond-deleted>", "exec")
+    exec(code, after_ns)  # noqa: S102 -- fixed test literal, premise measurement (TIH-001)
+    f_before = cast(Callable[[bool], object], before_ns["f"])
+    f_after = cast(Callable[[bool], object], after_ns["f"])
+    assert f_before(True) == os.sep and f_after(True) == os.sep
+    assert f_before(False) is None and f_after(False) == os.sep
+
+
+def test_a_guarded_rebinding_import_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): an import nested in a compound
+    statement rebinds its names too — ``if flag: import pathlib as os``
+    leaves ``os`` possibly not the module, so a function's later
+    ``import os`` is the restore, not a repeat (measured pre-fix as a
+    demanded deletion that leaves ``os`` bound to pathlib: AttributeError
+    on ``os.sep``).  ``_statement_bound_names`` now records nested
+    Import/ImportFrom bindings, value-blind on purpose — the reset only
+    widens, the direction that never demands a deletion.  The guard-free
+    contrast holds the flag."""
+    guarded = (
+        "import os\n\nif flag:\n    import pathlib as os\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(guarded) == []
+    from_guarded = (
+        "import os\n\nif flag:\n    from pathlib import Path as os\n\n\n"
+        "def f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(from_guarded) == []
+    unguarded = (
+        "import os\n\nif flag:\n    value = 1\n\n\ndef f():\n    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(unguarded) == [(8, "os")]
+
+
+def test_a_default_or_decorator_walrus_makes_the_restore_import_load_bearing() -> None:
+    """PIN (review finding, 2026-10-07): a definition's decorators,
+    parameter defaults and annotations execute in the ENCLOSING scope, so
+    a walrus there rebinds the module name and the next import of it is
+    the restore, not a repeat — pre-fix, both scope walks skipped these
+    children with the definition's body, and the gate demanded deletions
+    measured to leave ``os == 1`` and raise AttributeError on ``os.sep``.
+    The module-scope cases pin ``_statement_bound_names``'s reset (def and
+    lambda defaults); the nested case pins ``_function_bound_names``'s
+    own-scope exemption.  Mutation: with either walk's traversal of
+    ``_definition_enclosing_children`` removed, its cases here fail.  The
+    walrus-free contrasts prove the exemption is the rebinding, not the
+    definition."""
+    module_default = "import os\n\n\ndef f(x=(os := 1)):\n    return x\n\n\nimport os\n"
+    assert duplicate_plain_imports(module_default) == []
+    module_lambda = "import os\n\ng = lambda x=(os := 2): x\n\nimport os\n"
+    assert duplicate_plain_imports(module_lambda) == []
+    nested_default = (
+        "import os\n\n\ndef outer():\n"
+        "    def inner(x=(os := 1)):\n        return x\n\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(nested_default) == []
+    plain = "import os\n\n\ndef f(x=1):\n    return x\n\n\nimport os\n"
+    assert duplicate_plain_imports(plain) == [(8, "os")]
+    plain_nested = (
+        "import os\n\n\ndef outer():\n"
+        "    def inner(x=1):\n        return x\n\n"
+        "    import os\n\n    return os.sep\n"
+    )
+    assert duplicate_plain_imports(plain_nested) == [(8, "os")]
+
+
+def test_the_tree_carries_no_duplicate_plain_import() -> None:
+    tracked = tracked_names(REPO_ROOT, "*.py")
+    assert len(tracked) > 300, "scope collapsed"
+    offenders = [
+        f"{name}:{lineno}: import {module}"
+        for name in tracked
+        for lineno, module in duplicate_plain_imports(
+            (REPO_ROOT / name).read_text(encoding="utf-8")
+        )
+    ]
+    assert offenders == [], "\n".join(offenders)

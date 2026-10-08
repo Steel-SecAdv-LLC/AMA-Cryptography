@@ -14,10 +14,13 @@ Features:
 - Protected data endpoints
 - Key rotation support
 
-Usage:
-    pip install flask cryptography
-    # Optional: build native C library for quantum-resistant signatures
-    python flask_integration.py
+Usage (from the repository root, one working directory for both steps):
+    pip install -e ".[examples]"
+    # Installing this project builds its native C library, and the build is
+    # required, not optional: the cryptography this example serves runs on
+    # it with no fallback path (INVARIANT-7).  The [examples] extra supplies
+    # Flask; Flask alone leaves the import below failing on a fresh checkout.
+    python examples/python/flask_integration.py
 
 Then visit:
     http://localhost:5000/api/health

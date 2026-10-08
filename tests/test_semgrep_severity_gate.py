@@ -401,7 +401,6 @@ def test_an_installed_semgrep_is_never_reported_as_absent() -> None:
     installation — so it answered "not installed" everywhere semgrep was
     installed, and the end-to-end assertion had never executed.
     """
-    import importlib.util
 
     if importlib.util.find_spec("semgrep") is None:
         pytest.skip("semgrep is genuinely not installed in this environment")

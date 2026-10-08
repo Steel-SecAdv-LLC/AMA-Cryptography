@@ -12,8 +12,9 @@ Renders `benchmarks/competitive.html` from the two measurement artefacts:
     Botan, Nettle, libgcrypt and mbedTLS.
   * `benchmarks/pqc_results.json` — the ML-KEM / ML-DSA head-to-head
     (`pqc_comparative_bench.py`), which runs at the Python layer because
-    OpenSSL 4.0.1 via `cryptography` is the only peer on the host that
-    implements those at all.
+    the OpenSSL bundled by the installed `cryptography` wheel is the only
+    peer on the host that implements those at all. Its label and wheel
+    version are read from that file, never written here.
 
 Why a generator and not a static page
 -------------------------------------
@@ -23,9 +24,10 @@ Three structures in this file are hand-maintained and say so on the page:
 COVERAGE (each cell records the result of a runtime capability probe or a
 benchmark row taken at measurement time — the probe source is quoted in the
 methodology section — but the matrix itself is a transcription), VERSIONS
-(eight of the nine entries are pinned string literals, because the harness
-does not record peer versions), and NOTES (engineering prose, which must be
-reconciled against the rendered numbers whenever the JSON changes).
+(seven entries are pinned string literals, because the C harness does not
+record peer versions; the AMA and PQC-peer entries come from the result
+files), and NOTES (engineering prose, which must be reconciled against the
+rendered numbers whenever the JSON changes).
 
 Design rules (see the project's data-viz guidance)
 --------------------------------------------------
@@ -132,10 +134,41 @@ def _source_provenance() -> dict[str, Any]:
     return p1
 
 
+def _pqc_peer() -> tuple[str, str]:
+    """The PQC peer's label and the `cryptography` wheel version, from the data.
+
+    The label is the one non-AMA implementation string the PQC harness
+    wrote into its rows; the wheel version is the one its provenance
+    records. Both used to be literals ("OpenSSL 4.0.1", "49.0.0") — true of
+    the 2026-07-29 measurement and silently false over any re-measure
+    through a different wheel, which is the same relabelling failure
+    _ama_version() exists to stop.
+    """
+    q = json.loads((BENCH / "pqc_results.json").read_text(encoding="utf-8"))
+    labels = {str(r["implementation"]) for r in q["results"]} - {"AMA"}
+    if len(labels) != 1:
+        raise RuntimeError(
+            f"expected exactly one non-AMA implementation in pqc_results.json, "
+            f"found {sorted(labels)!r}; the page's PQC column is one peer"
+        )
+    peer_block = (q.get("provenance") or {}).get("peer") or {}
+    wheel = peer_block.get("cryptography")
+    if not isinstance(wheel, str) or not wheel.strip():
+        raise RuntimeError(
+            "pqc_results.json records no provenance.peer.cryptography, so the "
+            "wheel its peer rows were measured through cannot be named. "
+            "Re-run benchmarks/pqc_comparative_bench.py, which writes it."
+        )
+    return labels.pop(), wheel
+
+
+PQC_PEER, PQC_WHEEL = _pqc_peer()
+PQC_PEER_VERSION = f"(via cryptography {PQC_WHEEL})"
+
 VERSIONS = {
     "AMA": _ama_version(),
     "OpenSSL": "3.0.13",
-    "OpenSSL 4.0.1": "(via cryptography 49.0.0)",
+    PQC_PEER: PQC_PEER_VERSION,
     "libsodium": "1.0.18",
     "wolfSSL": "5.6.6",
     "Botan": "2.19.3",
@@ -224,25 +257,44 @@ COVERAGE: dict[str, dict[str, bool]] = {
 NOTES = {
     "AES-256-GCM": (
         "AMA defaults to constant-time AES (INVARIANT-20), which never indexes "
-        "a table with key-dependent data. OpenSSL and libgcrypt lead through "
-        "AES-NI pipelines tuned end-to-end for this one construction. AMA "
-        "places 3rd of 8, ahead of Nettle, libsodium, Botan, mbedTLS and "
-        "wolfSSL on this build."
+        "a table with key-dependent data. OpenSSL leads 8.6x through an "
+        "AES-NI + VAES + VPCLMULQDQ pipeline tuned end-to-end for this one "
+        "construction, with libgcrypt, Nettle and libsodium also ahead on this "
+        "host. AMA places 5th of 8, 1.74x ahead of Botan and ahead of mbedTLS "
+        "and wolfSSL on this build — the stable rank across every same-day "
+        "pass."
     ),
     "ChaCha20-Poly1305": (
-        "OpenSSL runs an AVX-512 vectorised ChaCha20 core. AMA's is SIMD but "
-        "not vectorised to that width. Third of seven."
+        "OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; "
+        "libsodium is 1.47x ahead. AMA's is SIMD but not vectorised to that "
+        "width. Third of seven in every same-day pass."
     ),
     "SHA3-256": (
-        "libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA's "
-        "single-stream scalar permutation places first of six, 0.7% ahead of "
-        "libgcrypt — a photo finish, not a durable lead (the x4 AVX2 path "
-        "batches four independent hashes and does not apply to one stream)."
+        "AMA's single-stream scalar permutation places first of six on this "
+        "pass, 38% ahead of libgcrypt — a pair that races within this "
+        "shared-vCPU host's run-to-run variance (the same-day passes span "
+        "AMA 12.6% behind to 38% ahead; the x4 AVX2 path batches four "
+        "independent hashes and does not apply to one stream)."
     ),
-    "HMAC-SHA3-256": "Tracks the SHA3-256 permutation result above; first of four here.",
+    "HMAC-SHA3-256": (
+        "Second of four on this pass, 1.11x behind OpenSSL — whose HMAC row "
+        "outruns its own SHA3 row here, a different-provider artefact inside "
+        "OpenSSL, not a property of the hash. AMA led this table on three of "
+        "the five settled same-day passes; read it as the same "
+        "within-variance race as the permutation itself."
+    ),
+    "Ed25519 sign": (
+        "libsodium and wolfSSL lead by 1.22x and 1.14x on this pass. AMA "
+        "re-derives the public half from the scalar on every signature and "
+        "refuses a stored half the scalar does not generate (INVARIANT-51); "
+        "the peers read the cached public half out of the key. Third of six "
+        "on four of the five settled passes."
+    ),
+    "Ed25519 verify": ("Fastest of six on every same-day pass; 1.55x ahead of libsodium " "here."),
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 1.5x of both. Third of five."
+        "multiply path. AMA is within 1.23x of OpenSSL and 1.11x of "
+        "libsodium. Third of five in every same-day pass."
     ),
     "P-256 ECDSA sign": (
         "OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation "
@@ -250,21 +302,37 @@ NOTES = {
         "which serves P-256, P-384 and P-521 from one body of code."
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
+    "secp256k1 ECDSA sign": (
+        "Fastest of three on every same-day pass: 1.21x ahead of Botan and "
+        "4.4x ahead of OpenSSL here, after the fixed-base comb landed (#379)."
+    ),
     "secp256k1 ECDSA verify": (
-        "Fastest of three: 14.9% ahead of Botan and 1.48x ahead of OpenSSL. "
-        "The signing side also leads outright, after the fixed-base comb "
-        "landed (#379)."
+        "Third of three on this pass, 1.24x behind Botan — but first on four "
+        "of the five settled same-day passes (by 4.6%-11.8% over Botan): the "
+        "verify block caught this pass's contention window, and the race is "
+        "stated rather than re-rolled."
     ),
     "ML-KEM-1024 encaps": (
-        "The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
-        "scalar, AVX-512 adding a further 1.22x) but is not vectorised across "
-        "the breadth OpenSSL 4.0.1 reaches. Closing it is a multi-week "
-        "vectorisation project, not a tuning pass, and it is not claimed as "
-        "done."
+        f"The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
+        f"scalar, AVX-512 adding a further 1.22x) but is not vectorised across "
+        f"the breadth {PQC_PEER} reaches, which is 2.1x ahead here. Closing it "
+        f"is a multi-week vectorisation project, not a tuning pass, and it is "
+        f"not claimed as done."
     ),
-    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation.",
-    "ML-KEM-1024 keygen": "The narrowest of the three ML-KEM gaps.",
-    "ML-DSA-65 keygen": "Within 20%; signing and verification both lead.",
+    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.7x behind.",
+    "ML-KEM-1024 keygen": (
+        "2.3x behind — and at this Python plane the AMA row also carries the "
+        "FIPS 140-3 pairwise consistency test (INVARIANT-41: a full "
+        "encapsulate/decapsulate before any keypair is released), which the "
+        "peer's keygen does not run."
+    ),
+    "ML-DSA-65 keygen": (
+        "3.3x behind at this plane — but the AMA row is keygen plus the "
+        "INVARIANT-41 pairwise consistency test (a full ML-DSA sign and "
+        "verify before the keypair is released), which the peer row does not "
+        "perform. Signing (3.1x) and verification (1.8x) both lead outright, "
+        "on every same-day pass."
+    ),
 }
 
 
@@ -283,7 +351,7 @@ def build_grid(c: dict[str, Any], q: dict[str, Any]) -> dict[str, dict[str, Any]
             "mbps": r.get("mb_per_sec"),
         }
     for r in q["results"]:
-        lib = "AMA" if r["implementation"] == "AMA" else "OpenSSL 4.0.1"
+        lib = "AMA" if r["implementation"] == "AMA" else PQC_PEER
         grid.setdefault(r["primitive"], {})[lib] = {
             "ops": r["ops_per_sec"],
             "cpb": None,
@@ -427,7 +495,7 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
 
     # ── full matrix table ──
     cols = [lib for lib in ORDER if lib in libs_in]
-    head = "".join(f"<th>{esc(lib)}</th>" for lib in cols) + "<th>OpenSSL 4.0.1</th>"
+    head = "".join(f"<th>{esc(lib)}</th>" for lib in cols) + f"<th>{esc(PQC_PEER)}</th>"
     mrows = []
     for prim in PRIM_ORDER:
         cell = grid.get(prim, {})
@@ -435,7 +503,7 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
             continue
         best = max((v["ops"] for v in cell.values()), default=0)
         tds = []
-        for lib in [*cols, "OpenSSL 4.0.1"]:
+        for lib in [*cols, PQC_PEER]:
             v = cell.get(lib)
             if not v:
                 tds.append('<td class="x">—</td>')
@@ -465,16 +533,16 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     cov_rows = "\n".join(crows)
     cov_head = "".join(f"<th>{esc(lib)}</th>" for lib in ORDER)
 
-    # The key already carries the version for the PQC-oracle entry, so its
-    # VALUE is only the parenthetical — the old value repeated "4.0.1" and
+    # The key already carries the version for the PQC-peer entry, so its
+    # VALUE is only the parenthetical — an older value repeated "4.0.1" and
     # the page rendered "OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0)".
     vers = " · ".join(
-        f"{esc(k)} {esc(v)}" for k, v in VERSIONS.items() if k in libs_in or "4.0.1" in k
+        f"{esc(k)} {esc(v)}" for k, v in VERSIONS.items() if k in libs_in or k == PQC_PEER
     )
 
     ama_only = sum(1 for p, c_ in COVERAGE.items() if sum(c_.values()) == 1 and c_["AMA"])
 
-    # Fields and this mapping are a verified 1:1 bijection (21/21). Substitute
+    # Fields and this mapping are a verified 1:1 bijection (23/23). Substitute
     # with format_map(mapping) — the direct dict idiom — rather than
     # format(**kwargs): it renders byte-identically and keeps the call
     # unambiguous, with no keyword arguments to reconcile against the escaped
@@ -490,6 +558,8 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
             "src_measured": esc(str(_source_provenance().get("measured_at", "unknown"))),
             "freq": f"{freq:.3f}",
             "host_line": host_line,
+            "pqc_peer": esc(PQC_PEER),
+            "pqc_wheel": esc(PQC_WHEEL),
             "msg": f"{msg:,}",
             "nlibs": len(libs_in),
             "vers": vers,
@@ -623,7 +693,7 @@ pre{{background:var(--plane);border:1px solid var(--border);border-radius:9px;pa
 implements it.</p>
 <p class="lede">This is not a curated selection of favourable comparisons. It is the
 whole overlapping surface: {n_total} measured primitives across {nlibs} native libraries
-plus OpenSSL 4.0.1 for the post-quantum pair, with the results AMA loses reported at the
+plus {pqc_peer} for the post-quantum pair, with the results AMA loses reported at the
 same weight as the results it wins, and an engineering account of each gap.</p>
 
 <div class="tiles">
@@ -706,27 +776,30 @@ come from NIST ACVP and Wycheproof vectors in its own suite.
 <div class="callout">
 <b>Where the post-quantum numbers come from.</b> The system OpenSSL 3.0.13 implements
 no ML-KEM, ML-DSA or SLH-DSA — probed, not assumed. The only peer on this host that
-implements any of them is OpenSSL 4.0.1, reached through <code>cryptography</code>
-49.0.0, so that pair is measured at the Python layer where both sides pay comparable
-call overhead. It is a different measurement plane from the native C rows and is
-labelled as such rather than merged into them.
+implements any of them is {pqc_peer}, reached through <code>cryptography</code>
+{pqc_wheel}, so that pair is measured at the Python layer where both sides pay
+comparable call overhead. It is a different measurement plane from the native C rows
+and is labelled as such rather than merged into them: the native table compares C
+calls, the post-quantum pair compares Python calls, and the AMA keygen rows at that
+plane include the INVARIANT-41 pairwise consistency test the C rows do not.
 </div>
 <div class="callout">
-<b>The post-quantum rows are also from a different host.</b>
-<code>benchmarks/pqc_results.json</code> was captured where <code>cryptography</code>
-49.0.0 (OpenSSL 4.0.1) was installed; the host this page's native rows were measured
-on carries 41.0.7, which exposes no ML-KEM or ML-DSA, so those rows cannot be
-re-measured here and were carried forward unchanged. They are unaffected by the
-symmetric and elliptic-curve kernel work recorded in the changelog, which touched
-no lattice code. Read them as a prior record, not as a measurement of this host.
+<b>Both result files come from one host and one commit.</b> The native rows and the
+post-quantum pair were measured on the same host in the same pass, and the generator
+refuses to render the two files under one stamp unless their provenance blocks name
+the same commit. An earlier record's post-quantum rows were carried forward from a
+different host and said so here; that carve-out is gone because the condition is.
 </div>
 <pre>python benchmarks/benchmark_suite.py
 g++ -O2 -std=c++17 -DHAVE_OPENSSL -DHAVE_SODIUM -DHAVE_WOLFSSL -DHAVE_BOTAN \\
     -DHAVE_NETTLE -DHAVE_GCRYPT -DHAVE_MBEDTLS -I/usr/include/botan-2 -Iinclude \\
+    -DAMA_HARNESS_SOURCE_SHA3=&quot;\\&quot;$(python \\
+      benchmarks/comparative_benchmark.py --harness-source-digest)\\&quot;&quot; \\
     benchmarks/multi_library_bench.cpp -Lbuild/lib -lama_cryptography \\
     -lssl -lcrypto -lsodium -lwolfssl -lbotan-2 -lnettle -lhogweed -lgcrypt -lmbedcrypto \\
     -o multibench
-./multibench 65536                          # -> multi_library_results.json
+./multibench 65536                          # -> multi_library_results.json (rows, no provenance)
+python benchmarks/comparative_benchmark.py --stamp-multibench  # pins commit + linked-object digest
 python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 
@@ -737,11 +810,13 @@ Host: {host_line}<br>
 {vers}<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
 and <code>benchmarks/pqc_results.json</code>, including the AMA version above, which comes
-from those files' provenance rather than from the working tree. The PEER LIBRARY
-versions on the line above are pinned in <code>benchmarks/generate_competitive.py</code>,
-because the harness does not record them — eight of the nine entries there are
-string literals. Regenerating this page without re-running the harness re-renders
-the same measurements under the same stamp; it cannot relabel them.
+from those files' provenance rather than from the working tree. The native PEER
+LIBRARY versions on the line above are pinned in
+<code>benchmarks/generate_competitive.py</code>, because the C harness does not
+record them — seven of the nine entries there are string literals; the AMA and
+post-quantum peer entries come from the result files. Regenerating this page without
+re-running the harness re-renders the same measurements under the same stamp; it
+cannot relabel them.
 </p>
 
 </div></body></html>

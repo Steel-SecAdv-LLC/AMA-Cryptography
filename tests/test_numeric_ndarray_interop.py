@@ -402,7 +402,11 @@ class TestEngineRejectsBadStates:
             _engine().converge([0.0] * DIM, max_steps=-1)
 
     def test_negative_tolerance(self) -> None:
-        with pytest.raises(ValueError, match="tolerance must be >= 0"):
+        # "finite and >= 0" since the 2026-10-07 review round: NaN/inf were
+        # interpreted by the helix walk while descent refused them, so the
+        # contract is validated before dispatch (test_ava_descent.py pins
+        # the non-finite rows; this test keeps the negative one).
+        with pytest.raises(ValueError, match="tolerance must be finite and >= 0"):
             _engine().converge([0.0] * DIM, tolerance=-1.0)
 
     def test_zero_max_steps_returns_the_input(self) -> None:

@@ -17,9 +17,13 @@ returns.
 
 from __future__ import annotations
 
+import math
 import random
+import sys
+from collections import deque
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
+from unittest import mock
 
 import pytest
 
@@ -142,6 +146,102 @@ class TestCalibration:
             f"cadence is reading the bounded window's len() again"
         )
 
+    def test_contamination_at_the_budget_rate_cannot_capture_the_threshold(self) -> None:
+        """PIN (mutation-earned 2026-10-06): the contamination guard in
+        ``_calibrated_score_threshold``.
+
+        Anomalies arriving at the alarm-budget rate place ~budget of the
+        score history at their own score level, so the raw ``(1 - b)`` order
+        statistic lands inside the anomaly cluster and the threshold
+        converges onto the anomalies (measured unguarded on this stream:
+        threshold ~49 against an anomaly score level of ~60 by 4,000
+        samples, still climbing, with asymptotic recall tending to ~50% —
+        the loss ``benchmarks/r3_efficacy.tsv`` recorded against the trivial
+        baseline).  The guard caps the threshold at ``_TAIL_GUARD_RATIO``
+        times a contamination-immune lower order statistic; this drives a
+        long contaminated stream and requires the threshold to stay with
+        the clean bulk and the recall to stay high.  Fails against the
+        unguarded order statistic.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(394)  # noqa: S311 -- test stream, not key material (TDC-001)
+        inject = random.Random(777)  # noqa: S311 -- test stream, not key material (TDC-001)
+        n = 12000
+        trace = [0.1236 * math.exp(0.0337 * rng.gauss(0.0, 1.0)) for _ in range(n)]
+        injected = set(inject.sample(range(100, n), n // 100))
+        alarms = []
+        for i, x in enumerate(trace):
+            value = x * 3.0 if i in injected else x
+            alarms.append(monitor.record_timing("op", value) is not None)
+        recall = sum(1 for i in injected if alarms[i]) / len(injected)
+        # Read the OPERATIONAL cache — the threshold the alarms above were
+        # actually judged against — rather than calling the method with a
+        # literal budget: the cache is computed under the monitor's own
+        # profile budget, and a literal that drifted from it would make this
+        # assertion measure a threshold no decision used.
+        threshold = monitor._calibrated_threshold["op"][1]
+        assert threshold is not None
+        # The x3 anomaly cluster scores ~60 robust sigmas on this trace
+        # shape; the clean q95 is ~2 and the guard ratio 4, so a guarded
+        # threshold stays an order of magnitude below the cluster.  The
+        # unguarded mutant crosses 15 long before the stream ends.
+        assert threshold < 15.0, f"threshold {threshold} was captured by the contamination"
+        assert recall >= 0.90, f"recall {recall} — the threshold absorbed the anomalies"
+
+    def test_a_quantized_bulk_does_not_collapse_the_guarded_threshold(self) -> None:
+        """Degenerate-scale behaviour of the contamination guard, pinned.
+
+        On a coarse-timer or strongly bimodal operation most samples equal
+        the trailing median, so most robust scores are exactly 0 and the
+        guard's lower order statistic is 0.  A cap of ``4 * 0`` would
+        collapse the bar to the sigma floor and alarm on every legitimate
+        slow-path sample; the guard must instead stand aside and let the raw
+        ``(1 - b)`` quantile govern.  This drives a 98%-constant /
+        2%-slow-path stream — the slow path must stay UNDER the 5% guard
+        fraction, or the guard statistic itself lands in the slow cluster
+        and the zero branch is never reached (the first version of this test
+        used 10% and measured as constraining nothing: the always-cap mutant
+        passed it) — and requires the threshold to sit at the quantile of
+        the real score distribution, not at zero.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(1201)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for i in range(2000):
+            value = 0.1000 if i % 50 else 0.1000 * (1.5 + rng.random())
+            monitor.record_timing("op", value)
+        threshold = monitor._calibrated_score_threshold("op", 0.01)
+        assert threshold is not None
+        # The slow-path scores are hundreds of robust sigmas (MAD of the
+        # bulk is ~0, floored by the EWMA scale); a collapsed cap would
+        # report ~0 here and the sigma floor would govern every decision.
+        assert threshold > monitor.threshold, (
+            f"guarded threshold {threshold} collapsed below the sigma floor "
+            f"on a quantized bulk — the zero-guard branch is gone"
+        )
+
+    def test_an_oversized_alarm_budget_keeps_the_guard_rank_in_the_tail(self) -> None:
+        """RANGE: ``guard_tail`` is clamped at the median for budgets > 0.1.
+
+        An uncapped ``5 * budget`` crosses 1.0 at budgets above 0.2, which
+        would send the guard rank to the window minimum and cap the
+        threshold at four times the smallest score ever observed.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(77)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for _ in range(600):
+            monitor.record_timing("op", rng.lognormvariate(-3.9, 0.22))
+        generous = monitor._calibrated_score_threshold("op", 0.30)
+        # No cache eviction: the budget is part of the cache key, so the
+        # second call must recompute on its own (the eviction this test used
+        # to perform was hiding exactly the stale-budget bug the key fixes —
+        # review finding, 2026-10-06).
+        strict = monitor._calibrated_score_threshold("op", 0.01)
+        assert generous is not None and strict is not None
+        assert 0.0 < generous <= strict, (
+            f"budget 0.30 produced threshold {generous} vs {strict} at 0.01 — "
+            f"the guard rank left the tail"
+        )
+
     def test_uncalibrated_severity_is_capped_at_warning(self) -> None:
         """Criticality claims a measured tail; before calibration a gross
         outlier alarms at 'warning' only."""
@@ -159,6 +259,408 @@ class TestCalibration:
         anomaly = monitor.record_timing("op", 50.0)
         assert anomaly is not None
         assert anomaly.severity == "critical"
+
+
+class TestSplitLineResonance:
+    """The split-line (top-two-ordinates) channel of detect_resonance.
+
+    PIN test_the_channel_sums_exactly_two_ordinates — fails when the
+    channel is reduced to the single largest ordinate (j = 1, Fisher's
+    statistic again); earned by mutation after the first candidate pin
+    (the two-tone detection comparison) was measured NOT to kill that
+    mutant — under j = 1 the measured null bar lands at 8.32, below
+    Fisher's conservative analytic 8.76, so the comparison's margin came
+    from bar softness, not from the second ordinate.  The two-tone test
+    below therefore claims the measured capability, not the mechanism.
+    The first (rejected) harmonic-comb form of this channel is recorded
+    in ``detect_resonance``'s comment block."""
+
+    @staticmethod
+    def _detect(series: list[float]) -> dict[str, object]:
+        monitor = ResonanceTimingMonitor()
+        for value in series:
+            monitor.record_timing("op", value)
+        return monitor.detect_resonance("op")
+
+    def test_the_channel_sums_exactly_two_ordinates(self) -> None:
+        """PIN: ``multiline_ratio`` is the top-2 sum over the mean, strictly
+        above the top-1 ratio on any spectrum whose second ordinate is
+        positive — reduced to j = 1 the field collapses onto
+        ``resonance_ratio`` and both assertions fail."""
+        rng = random.Random(42000)  # noqa: S311 -- test stream, not key material (TDC-001)
+        series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(100)]
+        out = self._detect(series)
+        assert out["multiline_ordinates"] == 2
+        multiline = cast(float, out["multiline_ratio"])
+        single = cast(float, out["resonance_ratio"])
+        assert multiline > single + 0.5, out
+
+    def test_two_tone_energy_is_caught_where_the_single_bin_test_misses(self) -> None:
+        """Measured capability on two equal tones (not the mechanism pin —
+        see the class docstring)."""
+        fisher_hits = multiline_hits = 0
+        for seed in range(40):
+            rng = random.Random(42000 + seed)  # noqa: S311 -- test stream, not keys (TDC-001)
+            series = [
+                0.1
+                + 0.0022 * math.sin(2.0 * math.pi * i / 7.111)
+                + 0.0022 * math.sin(2.0 * math.pi * i / 11.3)
+                + 0.004 * rng.gauss(0.0, 1.0)
+                for i in range(100)
+            ]
+            out = self._detect(series)
+            fisher_hits += bool(out["has_resonance"])
+            multiline_hits += bool(out["has_multiline_resonance"])
+        # Measured on these exact seeds: Fisher 14/40, split-line 23/40
+        # (re-measured 2026-10-07 under the Nyquist-correct bars; 22/40
+        # under the all-exponential bars they superseded, per §6.6).
+        # Deterministic arithmetic, so the floors cannot flake.
+        assert multiline_hits >= fisher_hits + 5, (fisher_hits, multiline_hits)
+        assert multiline_hits >= 16
+
+    def test_clean_streams_stay_inside_the_budget_order(self) -> None:
+        rng = random.Random(31)  # noqa: S311 -- test stream, not key material (TDC-001)
+        flags = 0
+        n = 150
+        for _ in range(n):
+            series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(100)]
+            flags += bool(self._detect(series)["has_multiline_resonance"])
+        # Budget 1%; under the Nyquist-correct bars these exact seeds
+        # measure 1/150 (re-measured 2026-10-07), and 4% (6 of 150) stays
+        # the generous deterministic ceiling.
+        assert flags <= 6, flags
+
+    def test_the_null_bar_is_deterministic_and_cached(self) -> None:
+        """An OFF-TABLE size, so the derivation and its cache actually run:
+        m = 64 is pinned and returned before the cache is ever read, so the
+        earlier form of this test passed with the cache broken (review
+        finding, 2026-10-07)."""
+        key = (
+            24,
+            ResonanceTimingMonitor.MULTILINE_ORDINATES,
+            ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+            ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+        )
+        assert 24 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        first = ResonanceTimingMonitor._multiline_threshold(24)
+        assert key in ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE
+        again = ResonanceTimingMonitor._multiline_threshold(24)
+        assert first == again
+        # Between the pinned neighbours (16: 8.80, 32: 11.14).
+        assert 8.8 < first < 11.2, first
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+
+    def test_a_degenerate_ordinates_override_is_normalized(self) -> None:
+        """PIN (review finding, 2026-10-07): ``detect_resonance`` used the
+        raw ``MULTILINE_ORDINATES`` while ``_multiline_threshold`` clamps it
+        to at least 1, so an override of 0 reported a zero ratio against a
+        top-1 bar (and a negative one invoked negative-slice semantics).
+        The statistic, the threshold and the reported count now share one
+        normalization.  Mutation: dropping the ``max(1, ...)`` in
+        ``detect_resonance`` fails exactly this test."""
+
+        class ZeroLine(ResonanceTimingMonitor):
+            MULTILINE_ORDINATES: ClassVar[int] = 0
+
+        monitor = ZeroLine()
+        rng = random.Random(7)  # noqa: S311 -- test stream, not key material (TDC-001)
+        for _ in range(100):
+            monitor.record_timing("op", 0.1 + 0.004 * rng.gauss(0.0, 1.0))
+        try:
+            out = monitor.detect_resonance("op")
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(
+                (
+                    64,
+                    1,
+                    ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+                    ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+                ),
+                None,
+            )
+        assert out["multiline_ordinates"] == 1
+        # The top-1 sum over the mean IS the Fisher ratio; the raw j = 0
+        # slice summed nothing and read 0.0 against a top-1 bar.
+        assert out["multiline_ratio"] == out["resonance_ratio"], out
+
+    def test_concurrent_first_derivations_run_the_simulation_once(self) -> None:
+        """PIN (review finding, 2026-10-07): unsynchronized cache misses let
+        concurrent first reports each pay the full null simulation.  Two
+        threads released together at an off-table size must produce exactly
+        ONE derivation — the loser reuses the winner's result through the
+        double-check under ``_MULTILINE_DERIVE_LOCK``.  Instantiations of
+        the seeded RNG count the derivations (the derivation's only RNG
+        construction).  Mutation: the lock and double-check removed, both
+        threads construct an RNG and the count reads 2, failing exactly
+        here."""
+        import threading as _threading
+
+        key = (
+            19,
+            ResonanceTimingMonitor.MULTILINE_ORDINATES,
+            ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+            ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+        )
+        assert 19 not in ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        # The module the class lives in, without a second import style for a
+        # module this file already imports from (CodeQL #755).
+        monitoring_module = sys.modules[ResonanceTimingMonitor.__module__]
+
+        # monitoring's module-level ``import random`` binds the same module object,
+        # so the stdlib import above is the original to delegate to and restore.
+        real_random_module = random
+        constructions: list[int] = []
+
+        class _CountingRandomModule:
+            def __getattr__(self, name: str) -> object:
+                return getattr(real_random_module, name)
+
+            def Random(self, seed: int) -> object:  # noqa: N802 -- mirrors random.Random (TDC-001)
+                constructions.append(seed)
+                return real_random_module.Random(seed)
+
+        barrier = _threading.Barrier(2)
+        results: list[float] = []
+
+        def derive() -> None:
+            barrier.wait()
+            results.append(ResonanceTimingMonitor._multiline_threshold(19))
+
+        try:
+            with mock.patch.object(monitoring_module, "random", _CountingRandomModule()):
+                threads = [_threading.Thread(target=derive) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+        assert len(results) == 2 and results[0] == results[1], results
+        assert len(constructions) == 1, constructions
+
+    def test_the_threshold_follows_the_configured_ordinates(self) -> None:
+        """PIN (review finding, 2026-10-07): the null simulation derives the
+        retained top values from ``MULTILINE_ORDINATES`` — a subclass that
+        configures j = 3 gets a bar measured for the top-3 sum, strictly
+        above the j = 2 bar, instead of the shipped table's.  Mutation:
+        hard-coding the top two back (or returning the pinned table
+        regardless of j) fails exactly this test."""
+
+        class ThreeLine(ResonanceTimingMonitor):
+            MULTILINE_ORDINATES: ClassVar[int] = 3
+
+        try:
+            three = ThreeLine._multiline_threshold(32)
+            two = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[32]
+            assert three > two, (three, two)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(
+                (
+                    32,
+                    3,
+                    ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE,
+                    ResonanceTimingMonitor._MULTILINE_NULL_TRIALS,
+                ),
+                None,
+            )
+
+    def test_the_pinned_table_matches_a_fresh_derivation(self) -> None:
+        """PIN: the pinned thresholds and the derivation procedure cannot
+        drift apart — one size is re-derived from scratch and compared to
+        its table entry exactly (same seed, same arithmetic, so equality is
+        byte-level).  A corrupted or stale table entry fails here."""
+        m = 32
+        table_value = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[m]
+        pinned = dict(ResonanceTimingMonitor._MULTILINE_THRESHOLDS)
+        try:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLDS.clear()
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.clear()
+            fresh = ResonanceTimingMonitor._multiline_threshold(m)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLDS.update(pinned)
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.clear()
+        assert fresh == table_value, (fresh, table_value)
+
+    def test_an_oversized_window_stays_on_the_pinned_table(self) -> None:
+        """PIN (review finding, 2026-10-07): the analysis window is capped
+        at ``_MAX_RESONANCE_SAMPLES``, so a monitor constructed with any
+        ``window_size`` stays on the pinned null-bar table.  Uncapped,
+        16,385 samples pad to 32,768 and scan m = 16,384 — off the table,
+        into the 65.5-million-draw synchronous null simulation (measured
+        15.1 s) plus a 32,768-point pure-Python FFT.  Mutation: with the
+        ``min(...)`` cap removed from ``detect_resonance``, the
+        ``scanned_bins`` assertion fails (after paying exactly the latency
+        this cap exists to refuse).
+
+        History is injected directly: the pin is on ``detect_resonance``'s
+        window, and 16,385 ``record_timing`` calls at window_size=20,000
+        cost ~23 s of windowed-MAD work that buys the pin nothing.
+        """
+        cap = ResonanceTimingMonitor._MAX_RESONANCE_SAMPLES
+        table = ResonanceTimingMonitor._MULTILINE_THRESHOLDS
+        assert cap == 2 * max(table)
+        monitor = ResonanceTimingMonitor(window_size=20000, max_history=20000)
+        rng = random.Random(777)  # noqa: S311 -- test stream, not key material (TDC-001)
+        samples = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(cap + 1)]
+        with monitor._lock:
+            history = monitor.timing_history.setdefault("op", deque(maxlen=monitor.max_history))
+            history.extend(samples)
+        cache_before = set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE)
+        out = monitor.detect_resonance("op")
+        assert out["scanned_bins"] == cap // 2, out["scanned_bins"]
+        assert out["multiline_threshold"] == table[cap // 2]
+        # The pinned bar answered; no size was simulated for this report.
+        assert set(ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE) == cache_before
+
+    def test_a_degenerate_window_size_is_refused_at_construction(self) -> None:
+        """PIN (review finding, 2026-10-07): ``window_size`` feeds
+        ``detect_resonance``'s slice bound, and Python slices treat
+        ``[-0:]`` as the whole sequence — measured pre-fix, a
+        ``window_size=0`` monitor with ``max_history=20000`` scanned all
+        18,000 recorded samples, past the 16,384 cap the oversized-window
+        pin above establishes (a negative size slices from a positive
+        offset, the same bypass).  The constructor now refuses both, the
+        way it already refuses degenerate ``max_operations``; ``max_history``
+        below 1 is the same class (0 is a monitor that silently retains
+        nothing, -1 a deferred deque ValueError at first record).
+        Mutation: with the ``window_size`` validation removed, the first
+        two assertions fail."""
+        with pytest.raises(ValueError, match="window_size"):
+            ResonanceTimingMonitor(window_size=0)
+        with pytest.raises(ValueError, match="window_size"):
+            ResonanceTimingMonitor(window_size=-5)
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=0)
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=-1)
+        # Integral, not merely >= 1 (review finding, 2026-10-07): 1.5
+        # constructed and then the FIRST record raised TypeError inside
+        # EWMAStats' deque(maxlen=...), and NaN defeats every comparison
+        # and reached the resonance slice — both measured pre-fix.  cast
+        # feeds the mistyped runtime value the boundary check exists for.
+        for bad_window in (1.5, float("nan")):
+            with pytest.raises(ValueError, match="window_size"):
+                ResonanceTimingMonitor(window_size=cast(int, bad_window))
+        with pytest.raises(ValueError, match="max_history"):
+            ResonanceTimingMonitor(max_history=cast(int, 1.5))
+
+    def test_the_smallest_window_clean_rate_stays_on_budget(self) -> None:
+        """PIN (review finding, 2026-10-07): the pinned bars are calibrated
+        to the spectrum detect_resonance actually produces — the KEPT
+        Nyquist ordinate of a real FFT is chi-square(1), not exponential,
+        and the all-exponential bars this table replaced measured 2.29%
+        clean flags against the 1% budget at the smallest window (8
+        samples, m = 4; 100,000 Gaussian streams through the production
+        pipeline), 1.03% under these 40,000-trial Nyquist-correct bars.
+        Deterministic seeds: exactly 96/10,000 here, and 218/10,000 with
+        the superseded m = 4 bar restored — the mutation this ceiling
+        kills."""
+        monitor = ResonanceTimingMonitor(window_size=8)
+        rng = random.Random(20261007)  # noqa: S311 -- test stream, not key material (TDC-001)
+        flags = 0
+        for _ in range(10000):
+            series = [0.1 + 0.004 * rng.gauss(0.0, 1.0) for _ in range(8)]
+            with monitor._lock:
+                monitor.timing_history["op"] = deque(series, maxlen=monitor.max_history)
+            flags += bool(monitor.detect_resonance("op")["has_multiline_resonance"])
+        assert 40 <= flags <= 160, flags
+
+    def test_the_ratio_helper_scores_empty_and_zero_mean_spectra_zero(self) -> None:
+        """RANGE (review finding, 2026-10-07, measured false): the review
+        read ``_mean(scanned)`` ahead of the guard as a division on empty
+        input, but ``_mean`` returns 0.0 for an empty sequence, so the
+        guard runs and the helper's stated degenerate path works —
+        measured here for the empty and the all-zero spectrum.  Exercises
+        the predicate's domain; not mutation-tested beyond that."""
+        assert ResonanceTimingMonitor._top_ordinates_ratio([], 2) == 0.0
+        assert ResonanceTimingMonitor._top_ordinates_ratio([0.0, 0.0], 2) == 0.0
+
+    def test_the_table_answers_only_its_measured_configuration(self) -> None:
+        """PIN (review finding, 2026-10-07): the pinned bars were measured at
+        the 1% rate with 4,000 trials; a subclass configured for another
+        alarm rate (or trial count) must get a bar derived for ITS
+        configuration, not the table's — the Fisher channel and the reported
+        false_alarm_rate already honor the override, so serving the 1% table
+        would silently decouple the split-line bar from both.  Mutation:
+        gating the table on j alone fails exactly this test."""
+
+        class FivePercent(ResonanceTimingMonitor):
+            RESONANCE_FALSE_ALARM_RATE: ClassVar[float] = 0.05
+
+        key = (32, 2, 0.05, ResonanceTimingMonitor._MULTILINE_NULL_TRIALS)
+        try:
+            derived = FivePercent._multiline_threshold(32)
+            pinned = ResonanceTimingMonitor._MULTILINE_THRESHOLDS[32]
+            # A five-fold larger budget sits strictly lower in the null.
+            assert derived < pinned, (derived, pinned)
+        finally:
+            ResonanceTimingMonitor._MULTILINE_THRESHOLD_CACHE.pop(key, None)
+
+    def test_a_multiline_only_verdict_reaches_report_and_posture(self) -> None:
+        """PIN (review finding): get_security_report admitted an analysis
+        only on has_resonance, so the exact case the split-line channel
+        exists for — its flag true, Fisher's false — never reached the
+        report or the posture evaluation.  Driven end to end on a
+        deterministic multiline-only verdict."""
+        from ama_cryptography.adaptive_posture import PostureEvaluator
+        from ama_cryptography.monitoring import AmaCryptographyMonitor
+
+        monitor = AmaCryptographyMonitor()
+        rng = random.Random(42013)  # noqa: S311 -- test stream, not key material (TDC-001)
+        found = None
+        for seed in range(60):
+            rng = random.Random(42000 + seed)  # noqa: S311 -- test stream, not keys (TDC-001)
+            series = [
+                0.1
+                + 0.0022 * math.sin(2.0 * math.pi * i / 7.111)
+                + 0.0022 * math.sin(2.0 * math.pi * i / 11.3)
+                + 0.004 * rng.gauss(0.0, 1.0)
+                for i in range(100)
+            ]
+            probe = ResonanceTimingMonitor()
+            for v in series:
+                probe.record_timing("op", v)
+            out = probe.detect_resonance("op")
+            if out["has_multiline_resonance"] and not out["has_resonance"]:
+                found = series
+                break
+        assert found is not None, "no multiline-only seed in range — scenario invalid"
+        for v in found:
+            monitor.timing.record_timing("op", v)
+        report = monitor.get_security_report()
+        analysis = report.get("resonance_analysis", {})
+        assert "op" in analysis, "multiline-only verdict dropped at report admission"
+        score = PostureEvaluator()._score_resonance(analysis)
+        assert score > 0.0, "multiline-only verdict reached the report but scored 0"
+
+    def test_posture_scores_the_multiline_excess(self) -> None:
+        from ama_cryptography.adaptive_posture import PostureEvaluator
+
+        ev = PostureEvaluator()
+        quiet = ev._score_resonance(
+            {
+                "op": {
+                    "resonance_ratio": 1.0,
+                    "threshold_ratio": 8.76,
+                    "multiline_ratio": 2.0,
+                    "multiline_threshold": 12.78,
+                }
+            }
+        )
+        loud = ev._score_resonance(
+            {
+                "op": {
+                    "resonance_ratio": 1.0,
+                    "threshold_ratio": 8.76,
+                    "multiline_ratio": 26.0,
+                    "multiline_threshold": 12.78,
+                }
+            }
+        )
+        assert quiet == 0.0
+        assert loud > 0.4
 
 
 class TestSustainedShift:
@@ -479,8 +981,6 @@ class TestThePairwiseBarDoesNotDependOnArrivalOrder:
         and ``random.seed(n)`` seed the same algorithm identically, so the
         values — and the figures measured from them above — are unchanged.
         """
-        import math
-
         rng = random.Random(seed)  # noqa: S311 -- test stream, not key material (TDC-001)
         out: list[tuple[str, float]] = []
         for _ in range(records):

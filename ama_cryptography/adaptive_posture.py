@@ -526,9 +526,19 @@ class PostureEvaluator:
             threshold = float(analysis.get("threshold_ratio", self._RESONANCE_DEFAULT_THRESHOLD))
             if threshold <= 0.0:
                 threshold = self._RESONANCE_DEFAULT_THRESHOLD
-            scores.append(
-                min(1.0, max(0.0, (ratio - threshold) / (threshold * self._RESONANCE_RAMP)))
-            )
+            excess = (ratio - threshold) / (threshold * self._RESONANCE_RAMP)
+            # The split-line channel scores by the same construction: its
+            # excess over ITS reported bar, so the two stay consistent with
+            # the detector by the same argument as above.  max, not sum — a
+            # single periodic process usually moves both statistics, and
+            # adding them would double-count one piece of evidence.
+            ml_ratio = float(analysis.get("multiline_ratio", 0.0))
+            ml_threshold = float(analysis.get("multiline_threshold", 0.0))
+            if ml_threshold > 0.0:
+                excess = max(
+                    excess, (ml_ratio - ml_threshold) / (ml_threshold * self._RESONANCE_RAMP)
+                )
+            scores.append(min(1.0, max(0.0, excess)))
         return max(scores, default=0.0)
 
     def _score_lyapunov_stability(self, timing_alerts: List[Dict]) -> float:

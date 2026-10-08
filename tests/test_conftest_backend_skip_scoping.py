@@ -1765,7 +1765,6 @@ class TestNativeLibraryDetection:
         nothing reads, which is precisely the macOS defect this table was
         rewritten to fix, in a different guise.
         """
-        import ast
 
         from tests.conftest import _NATIVE_LIB_NAMES
 

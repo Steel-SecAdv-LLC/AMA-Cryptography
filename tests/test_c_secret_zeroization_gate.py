@@ -730,7 +730,6 @@ void late(void) {
         toward their true cost; a quadratic scan cannot be retried under the
         ceiling.
         """
-        import time
 
         payloads = [
             "#define WIPE(a) memset((a), 0, 32)\n" + "WIPE(secret_key\n" * count
@@ -989,7 +988,6 @@ class TestPatternIsLinear:
         for that case the retry costs nothing and removes the false
         positives.
         """
-        import time
 
         pad = " " if not prefix.endswith(", ") else "0"
         payloads = [prefix + pad * (2**exponent) for exponent in (14, 15, 16)]

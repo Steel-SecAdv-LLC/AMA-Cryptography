@@ -249,7 +249,6 @@ class TestPreloadRefusal:
         present, a read failure is a refusal, on every platform.  (The first
         draft applied this only on POSIX; on Windows a read error silently
         skipped the check and the DLL loaded unverified.)"""
-        import platform
 
         monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
 

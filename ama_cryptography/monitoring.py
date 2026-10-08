@@ -41,6 +41,7 @@ import importlib
 import logging
 import math
 import os
+import random
 import stat
 import tempfile
 import threading
@@ -1247,8 +1248,12 @@ class ResonanceTimingMonitor:
       ``|x - median| / (1.4826 * MAD)`` computed against the trailing window
       *before* the observation enters it.  The alarm threshold per operation
       is ``max(threshold_sigma, calibrated)`` where ``calibrated`` is the
-      empirical ``(1 - alarm_budget)`` quantile of recently observed clean
-      scores.  ``threshold_sigma`` is therefore a sensitivity floor that
+      empirical ``(1 - alarm_budget)`` quantile of recently observed scores,
+      capped against a contamination-immune lower order statistic
+      (2026-10-06, measured: anomalies arriving at the budget rate otherwise
+      drag the quantile onto their own score level and halve asymptotic
+      recall — see ``_calibrated_score_threshold``).  ``threshold_sigma``
+      is therefore a sensitivity floor that
       governs on well-behaved (near-normal) data, and the empirical quantile
       governs on the heavy-tailed distributions real timings exhibit — where
       any fixed Gaussian-calibrated constant is wrong by orders of magnitude
@@ -1278,7 +1283,10 @@ class ResonanceTimingMonitor:
     - Empirically calibrated false-alarm budgets (heavy-tail safe)
     - Two-sided winsorized CUSUM for sustained regime changes
     - High-resolution timing via perf_counter_ns() (cross-platform)
-    - Sliding window FFT analysis for periodic pattern detection
+    - Sliding window FFT analysis for periodic pattern detection, with a
+      split-line channel (an empirically calibrated top-ordinates
+      statistic, null bar measured per spectrum size) for periodic energy
+      split across lines that the single-bin maximum dilutes
     """
 
     #: Fraction of clean operations an operation's point-anomaly path may
@@ -1378,6 +1386,18 @@ class ResonanceTimingMonitor:
     _SCORE_HISTORY_LEN: ClassVar[int] = 4096
     #: Recompute the cached calibrated threshold every N observations.
     _THRESHOLD_RECOMPUTE_INTERVAL: ClassVar[int] = 32
+    #: Contamination guard for the calibrated threshold (2026-10-06,
+    #: measured — see ``_calibrated_score_threshold``).  The tail quantile is
+    #: capped at ``_TAIL_GUARD_RATIO`` times the ``(1 - max(5b,
+    #: _TAIL_GUARD_FRACTION))`` quantile: the guard rank sits where
+    #: anomalies at rates up to ~4% of samples cannot reach, and the ratio
+    #: of 4 clears the heaviest measured clean tail's quantile growth
+    #: (~2.5 across the ranks involved, Ed25519 wall-clock evidence) by a
+    #: 1.6x margin.  Without the cap, anomalies injected at the budget rate
+    #: drag the ``(1 - b)`` order statistic onto their own score level and
+    #: halve asymptotic point recall.
+    _TAIL_GUARD_RATIO: ClassVar[float] = 4.0
+    _TAIL_GUARD_FRACTION: ClassVar[float] = 0.05
 
     # Two-sided SIGN CUSUM parameters for the sustained-shift path.  The
     # statistic accumulates sign(x - mu0), not a standardized magnitude:
@@ -1495,6 +1515,25 @@ class ResonanceTimingMonitor:
             Uses collections.deque with maxlen for O(1) append and automatic
             pruning, and EWMA/Welford's algorithm for O(1) incremental statistics.
         """
+        # window_size feeds detect_resonance's slice bound: Python slices
+        # treat [-0:] as the whole sequence, so an unvalidated 0 (and any
+        # negative, via its positive-offset slice) walked the entire
+        # max_history deque past the _MAX_RESONANCE_SAMPLES cap — measured
+        # at 18,000 scanned samples against the 16,384 cap (review finding,
+        # 2026-10-07).  max_history < 1 is the same class of degenerate: 0
+        # is a monitor that silently retains nothing (INVARIANT-3), -1 a
+        # deque() ValueError deferred to the first record.
+        # Integral, not merely >= 1: a positive non-integer passes the
+        # magnitude check but fails later and darker — window_size=1.5
+        # constructs, then the first record raises TypeError inside
+        # EWMAStats' deque(maxlen=...), and NaN defeats every comparison
+        # and reaches the slice (review finding, 2026-10-07).  bool is an
+        # int subclass and True == 1, so it passes as the degenerate but
+        # well-defined window it is.
+        if not isinstance(window_size, int) or window_size < 1:
+            raise ValueError("window_size must be an integer >= 1")
+        if not isinstance(max_history, int) or max_history < 1:
+            raise ValueError("max_history must be an integer >= 1")
         if max_operations < 1:
             raise ValueError("max_operations must be at least 1")
         if max_ratio_operations < 1:
@@ -1558,7 +1597,7 @@ class ResonanceTimingMonitor:
         # quantile is recomputed every _THRESHOLD_RECOMPUTE_INTERVAL
         # observations instead of per call.
         self._score_history: Dict[str, Deque[float]] = {}
-        self._calibrated_threshold: Dict[str, Tuple[int, Optional[float]]] = {}
+        self._calibrated_threshold: Dict[str, Tuple[int, Optional[float], float]] = {}
         # Monotone per-operation count of every score ever ingested into
         # _score_history.  The recompute cadence must be driven by THIS and
         # never by len(_score_history): the history is a bounded deque, so
@@ -1685,9 +1724,14 @@ class ResonanceTimingMonitor:
             # The observed score joins the calibration history AFTER the
             # decision, so a sample can never raise the threshold it is
             # judged against.  Calibration deliberately ingests every score
-            # (alarming ones included): a quantile over the trailing window
-            # is robust to the alarm fraction itself, and excluding flagged
-            # samples would create a ratchet that can only tighten.
+            # (alarming ones included), because excluding flagged samples
+            # would create a ratchet that can only tighten.  The sentence
+            # this comment used to carry — that a quantile over the trailing
+            # window "is robust to the alarm fraction itself" — was measured
+            # false on 2026-10-06 for anomaly rates near the budget (the
+            # (1-b) rank lands inside the anomaly cluster); robustness is
+            # provided in _calibrated_score_threshold by the contamination
+            # guard, not by the ingest policy.
             self._score_history[operation].append(point_verdict[2])
             self._score_sample_total[operation] = self._score_sample_total.get(operation, 0) + 1
 
@@ -1931,16 +1975,55 @@ class ResonanceTimingMonitor:
         return event
 
     def _calibrated_score_threshold(self, operation: str, alarm_budget: float) -> Optional[float]:
-        """Empirical ``(1 - alarm_budget)`` quantile of the operation's
-        trailing robust scores, or ``None`` until enough scores exist.
+        """Contamination-guarded empirical ``(1 - alarm_budget)`` quantile of
+        the operation's trailing robust scores, or ``None`` until enough
+        scores exist.
 
         Activation requires ``max(100, ceil(1/alarm_budget))`` observed
         scores: estimating the (1 - b) tail from fewer than 1/b samples is
         extrapolation, and until then the ``threshold_sigma`` floor governs
-        alone (the documented warmup posture).  The quantile is the
+        alone (the documented warmup posture).  The tail quantile is the
         conservative order statistic ``ceil((1 - b) * (n + 1))`` and is
         recomputed every ``_THRESHOLD_RECOMPUTE_INTERVAL`` observations,
         cached in between.
+
+        The guard (2026-10-06, measured): the raw ``(1 - b)`` order statistic
+        is NOT robust to anomalies at a rate near the budget itself.  With
+        anomalies injected on 1% of samples against a 1% budget, the rank
+        falls inside the anomaly cluster, so the threshold converges onto the
+        anomaly scores and asymptotic recall tends to ~50% — measured on a
+        trace shaped like the canonical host's (median 0.1236 ms, MAD 0.0028):
+        the calibrated threshold climbed 2.7 -> 49.0 toward the x3 anomaly
+        score level of ~60, and ``benchmarks/r3_efficacy.tsv`` recorded the
+        resulting point-recall loss against the trivial baseline.  The
+        returned threshold is therefore capped at
+        ``_TAIL_GUARD_RATIO * q_guard`` where ``q_guard`` is the
+        ``(1 - max(5b, 0.05))`` quantile — an order statistic at least 4-5%
+        of the window away from the top, which contamination at rates up to
+        ~4% cannot reach.  Clean heavy tails pass the cap untouched: measured
+        quantile ratios on the heaviest clean trace in the repository's
+        evidence (Ed25519 wall-clock, ``benchmarks/detector_baseline_eval.py``:
+        a 1% budget needs ~628 and 0.1% ~1073) put the tail's growth near
+        1.7 per tenfold tail-probability decade, bounding every relevant
+        ``q_tail / q_guard`` below ~2.5, against the ratio of 4 allowed here.
+        A clean distribution would need a quantile ratio no measured trace
+        exhibits before the cap binds, and when it binds the direction is
+        MORE alarms, which the budget-monotonicity and clean-FAR gates in
+        ``benchmarks/detector_baseline_eval.py`` bound on the streams they
+        pin.  No decision feeds back into the estimate — both ranks are plain
+        order statistics of the same ingest-everything window, so the
+        tightening ratchet that excluding flagged scores would create cannot
+        arise here.
+
+        The cap holds only while the guard statistic is positive.  On a
+        degenerate scale — at least ``guard_tail`` of the window scoring
+        exactly 0, a quantized or strongly bimodal bulk — the guard carries
+        no tail information, the cap is inapplicable, and the raw quantile
+        governs (the pre-guard behaviour; the branch below records why).  On
+        such a window the raw quantile can still be captured by anomalies
+        arriving at the budget rate: the contamination immunity stated above
+        is a property of the capped path, not of the degenerate one (review
+        finding, 2026-10-07).
         """
         history = self._score_history.get(operation)
         if history is None:
@@ -1959,12 +2042,40 @@ class ResonanceTimingMonitor:
         # window is the sample); total is WHEN to recompute.
         total = self._score_sample_total.get(operation, n)
         cached = self._calibrated_threshold.get(operation)
-        if cached is not None and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
+        # The budget is part of the cache identity: the entry used to hold
+        # only (sample_total, threshold), so a second call under a DIFFERENT
+        # alarm_budget inside the recompute interval was served the first
+        # budget's bar — and profiles are caller-extensible at runtime
+        # (review finding, 2026-10-06; _calibrated_ratio_threshold already
+        # keys its cache this way).
+        if (
+            cached is not None
+            and cached[2] == alarm_budget
+            and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL
+        ):
             return cached[1]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
-        threshold = ordered[k]
-        self._calibrated_threshold[operation] = (total, threshold)
+        # The guard rank must stay a tail statistic: 5b uncapped crosses 1.0
+        # for budgets above 0.2 (the profile dict is caller-extensible), which
+        # would degenerate k_guard to the window MINIMUM and cap the threshold
+        # at 4x the smallest score ever seen.  Clamped at the median — for
+        # budgets that large the (1 - b) rank itself sits below it anyway.
+        guard_tail = min(max(5.0 * alarm_budget, self._TAIL_GUARD_FRACTION), 0.5)
+        k_guard = min(n - 1, max(0, math.ceil((1.0 - guard_tail) * (n + 1)) - 1))
+        guard_base = ordered[k_guard]
+        if guard_base > 0.0:
+            threshold = min(ordered[k], self._TAIL_GUARD_RATIO * guard_base)
+        else:
+            # Degenerate scale: >= guard_tail of the window scored exactly 0
+            # (a quantized or strongly bimodal bulk where most samples equal
+            # the trailing median).  A zero guard carries no tail information
+            # — capping at 4 * 0 would collapse the bar to the sigma floor
+            # and spend false alarms on every legitimate slow-path sample —
+            # so the cap is inapplicable and the raw quantile governs, which
+            # is the pre-guard behaviour, not a new failure mode.
+            threshold = ordered[k]
+        self._calibrated_threshold[operation] = (total, threshold, alarm_budget)
         return threshold
 
     def snapshot_baselines(self) -> Dict[str, Dict[str, float]]:
@@ -2224,6 +2335,13 @@ class ResonanceTimingMonitor:
                 - false_alarm_rate: The per-call rate that threshold targets
                 - scanned_bins: Number of periodogram ordinates examined
                 - has_resonance: Boolean flag (ratio > threshold_ratio)
+                - multiline_ratio: Sum of the top ``multiline_ordinates``
+                  ordinates over the mean (the split-line channel)
+                - multiline_threshold: The measured null bar
+                  ``has_multiline_resonance`` compares against
+                - multiline_ordinates: How many ordinates the channel sums (2)
+                - has_multiline_resonance: Boolean flag
+                  (multiline_ratio > multiline_threshold)
 
         Two properties this had to acquire before the flag meant anything.
 
@@ -2264,7 +2382,21 @@ class ResonanceTimingMonitor:
 
         Note:
             Requires minimum 8 samples. Returns empty dict if insufficient
-            data. This is an on-demand operation (not hot path).
+            data. This is an on-demand operation (not hot path).  The
+            analysis takes at most :attr:`_MAX_RESONANCE_SAMPLES` of the
+            most recent samples regardless of ``window_size``: the cap is
+            twice the largest pinned spectrum size, so every null bar this
+            method can ask for is in :attr:`_MULTILINE_THRESHOLDS` and the
+            pure-Python FFT stays bounded (review finding, 2026-10-07: a
+            ``window_size=20000`` monitor produced m = 16,384, off the
+            pinned table, and the first report ran a 65.5-million-draw
+            synchronous null simulation — measured 15.1 s — plus a
+            32,768-point FFT).  The pinned bars answer for the default
+            configuration; a subclass overriding the resonance
+            configuration derives its own bars, a bounded one-time cost
+            per spectrum size stated at :meth:`_multiline_threshold`'s
+            cost contract (measured 56.3 s at the capped worst size
+            under the 40,000-trial Nyquist-correct null, 2026-10-07).
         """
         # Snapshot under the monitor lock: record_timing() appends to this
         # same deque under self._lock on every instrumented operation, and
@@ -2285,7 +2417,8 @@ class ResonanceTimingMonitor:
             if operation not in self.timing_history:
                 return {}
             history_list = list(self.timing_history[operation])
-        timings = history_list[-self.window_size :]
+        effective_window = min(self.window_size, self._MAX_RESONANCE_SAMPLES)
+        timings = history_list[-effective_window:]
 
         if len(timings) < 8:
             return {}
@@ -2323,6 +2456,39 @@ class ResonanceTimingMonitor:
         ratio = float(dominant_power / mean_power) if mean_power > 0 else 0.0
         threshold = self._resonance_threshold(len(scanned))
 
+        # Split-line channel (direction adopted 2026-10-06 from Mercury
+        # Agent's 3R Resonance engine; statistic re-derived to this module's
+        # evidence standard).  The Fisher test above judges the single
+        # largest ordinate, so periodic energy split across two comparable
+        # spectral lines — two interleaved periodic processes, or a
+        # fundamental with a strong harmonic — can sit below the max/mean
+        # bar at both.  The channel sums the top MULTILINE_ORDINATES
+        # ordinates over the spectrum mean, against a null bar measured
+        # for this spectrum size — motivated by the same split Siegel's
+        # threshold-excess test addresses, but an empirically calibrated
+        # statistic of its own, not Siegel's, which sums every positive
+        # excess above a cutoff (corrected per §6.6, 2026-10-07: this
+        # comment called it "Siegel's generalisation").  Capability on the
+        # in-tree deterministic two-tone seeds, re-measured 2026-10-07
+        # under the Nyquist-correct bars: split-line 23/40 where Fisher
+        # reads 14/40, and 1/150 flags on the clean-stream seeds (the
+        # pre-ship figures this comment carried — 56% vs 34%, square wave
+        # 80% vs 76%, clean 1.17% — were measured under the
+        # all-exponential bars and are superseded per §6.6).
+        # A harmonic-comb mean filter — the first form this
+        # channel took — measured WORSE than Fisher on every family (a
+        # symmetric square wave has no even harmonics, so the comb mean
+        # averaged dead bins) and was replaced by this statistic rather
+        # than tuned.
+        # One normalization for the statistic, its threshold and the
+        # reported count: _multiline_threshold clamps the configured j to at
+        # least 1, and using the raw value here let an override of 0 report
+        # a zero ratio against a top-1 bar, and a negative one invoke
+        # Python's negative-slice semantics (review finding, 2026-10-07).
+        multiline_ordinates = max(1, int(self.MULTILINE_ORDINATES))
+        multiline_ratio = self._top_ordinates_ratio(scanned, multiline_ordinates)
+        multiline_threshold = self._multiline_threshold(len(scanned))
+
         return {
             "dominant_frequency": float(dominant_freq),
             "dominant_power": float(dominant_power),
@@ -2332,6 +2498,10 @@ class ResonanceTimingMonitor:
             "false_alarm_rate": self.RESONANCE_FALSE_ALARM_RATE,
             "scanned_bins": len(scanned),
             "has_resonance": ratio > threshold,
+            "multiline_ratio": multiline_ratio,
+            "multiline_threshold": multiline_threshold,
+            "multiline_ordinates": multiline_ordinates,
+            "has_multiline_resonance": multiline_ratio > multiline_threshold,
         }
 
     #: Target per-call false-alarm rate for :meth:`detect_resonance`.  The
@@ -2356,6 +2526,238 @@ class ResonanceTimingMonitor:
         m = max(1, int(scanned_bins))
         alpha = cls.RESONANCE_FALSE_ALARM_RATE
         return math.log(m / alpha)
+
+    #: Ordinates the split-line statistic sums.  Two is the measured
+    #: operating point: it lifts two-tone detection from 14/40 to 23/40
+    #: over Fisher on the deterministic test seeds (re-measured 2026-10-07
+    #: under the Nyquist-correct bars) while still edging the single-line
+    #: case; three measured no better on either family and pays a higher
+    #: bar.
+    MULTILINE_ORDINATES: ClassVar[int] = 2
+
+    @staticmethod
+    def _top_ordinates_ratio(scanned: List[float], j: int) -> float:
+        """Sum of the ``j`` largest ordinates over the spectrum mean —
+        an empirically calibrated statistic, kin in motivation to
+        Siegel's threshold-excess test but not his statistic."""
+        mean_power = _mean(scanned)
+        if not scanned or mean_power <= 0.0:
+            return 0.0
+        return sum(sorted(scanned, reverse=True)[:j]) / mean_power
+
+    #: Pinned null bars for the split-line statistic at every spectrum size
+    #: the detection pipeline produces (the analysed window zero-pads to a
+    #: power of two and detect_resonance caps it at
+    #: :attr:`_MAX_RESONANCE_SAMPLES`, so the scanned half-spectrum is one
+    #: of these twelve for ANY constructor ``window_size``).  The bars were
+    #: measured for the shipped statistic, ``MULTILINE_ORDINATES = 2``;
+    #: _multiline_threshold bypasses this table and derives the bar when a
+    #: subclass configures any other j, so the statistic and its threshold
+    #: cannot drift apart (review finding, 2026-10-07).
+    #: Each value is the measured (1 - RESONANCE_FALSE_ALARM_RATE) order
+    #: statistic over _MULTILINE_NULL_TRIALS seeded draws — byte-identical
+    #: to what _multiline_threshold derives, pinned because the derivation
+    #: is pure Python and the largest size measured 8.65 s of synchronous
+    #: first-use latency inside get_security_report at the earlier 4,000
+    #: trials (review finding, 2026-10-07; 56.3 s at today's 40,000).
+    #: The null is the no-padding spectrum law — m - 1
+    #: interior Exp(1) ordinates plus the kept Nyquist bin's chi-square(1)
+    #: — re-measured 2026-10-07 after the all-exponential null's bars let
+    #: 2.29% of clean streams flag against the 1% budget at m = 4; under
+    #: these bars the end-to-end rate measured 1.03% there, 0.76-1.09% in
+    #: the m = 8 class and 0.89% at m = 64 (100,000 and 50,000/20,000
+    #: seeded Gaussian streams through the production pipeline).
+    #: Regenerate after changing the statistic, the trial
+    #: count or the seed:
+    #:     python -c "from ama_cryptography.monitoring import \
+    #:         ResonanceTimingMonitor as R; R._MULTILINE_THRESHOLDS.clear(); \
+    #:         print({m: R._multiline_threshold(m) for m in \
+    #:         (4,8,16,32,64,128,256,512,1024,2048,4096,8192)})"
+    #: tests/test_timing_detector_calibration.py re-derives one size from
+    #: scratch and fails if the table and the procedure drift apart.
+    _MULTILINE_THRESHOLDS: ClassVar[Dict[int, float]] = {
+        4: 3.9469485278721614,
+        8: 6.482228180197571,
+        16: 8.98674347681762,
+        32: 11.218252461874897,
+        64: 13.246674969301802,
+        128: 14.91706042606178,
+        256: 16.389151357259998,
+        512: 17.931876331438872,
+        1024: 19.405989189789423,
+        2048: 20.866007761676723,
+        4096: 22.22414806143564,
+        8192: 23.71409553781085,
+    }
+    #: Cap on the samples detect_resonance analyses, derived from the pinned
+    #: table so the two cannot drift: n samples zero-pad to the next power
+    #: of two and the scanned half-spectrum is half of that, so twice the
+    #: largest pinned size is the largest window whose null bar is pinned.
+    #: Without it, a monitor constructed with window_size above this cap
+    #: fell through to the measured-null simulation below on its first
+    #: report — 65.5 million draws at m = 16,384, measured 15.1 s of
+    #: synchronous latency inside get_security_report, plus a 32,768-point
+    #: pure-Python FFT (review finding, 2026-10-07).  Frequency resolution
+    #: beyond 16,384 samples buys this detector nothing it acts on.
+    _MAX_RESONANCE_SAMPLES: ClassVar[int] = 2 * max(_MULTILINE_THRESHOLDS)
+    #: Runtime cache for sizes outside the pinned table.  detect_resonance
+    #: can no longer reach it (its spectrum sizes are capped onto the table
+    #: above); it serves direct _multiline_threshold callers — the
+    #: calibration suite's table↔procedure coupling test re-derives a
+    #: pinned size through this path — and is filled on first use.
+    _MULTILINE_THRESHOLD_CACHE: ClassVar[Dict[Tuple[int, int, float, int], float]] = {}
+    #: The configuration the pinned table's bars were MEASURED under —
+    #: (MULTILINE_ORDINATES, RESONANCE_FALSE_ALARM_RATE,
+    #: _MULTILINE_NULL_TRIALS) at measurement time.  A historical fact of
+    #: the table, not an alias of the live class attributes: a subclass
+    #: that overrides any of the three changes the statistic or its null,
+    #: so _multiline_threshold reads the table only when the live
+    #: configuration matches this one and derives the bar otherwise
+    #: (review finding, 2026-10-07: the j-only gate still served the 1%
+    #: table to a subclass configured for a different alarm rate, and the
+    #: cache identity omitted the rate and the trial count).
+    _MULTILINE_TABLE_CONFIG: ClassVar[Tuple[int, float, int]] = (2, 0.01, 40000)
+    #: Null-measurement trials behind each cached threshold.  40,000
+    #: resolves the 1% tail to ~±0.05% (400 expected exceedances): at the
+    #: earlier 4,000 trials the quantile's sampling noise alone left the
+    #: m = 4 bar measuring 1.42% end-to-end against the 1% budget even
+    #: under the corrected null (measured 2026-10-07).  The one-time
+    #: derivation cost grows with the spectrum size: measured on this
+    #: project's 4-vCPU container, seconds at the small sizes and 56.3 s
+    #: at the capped worst size m = 8,192, then ~11 us from the cache.
+    #: Only a non-default configuration reaches the derivation at all —
+    #: the window cap keeps every default-pipeline size on the pinned
+    #: table.
+    _MULTILINE_NULL_TRIALS: ClassVar[int] = 40000
+    #: Serializes the measured-null derivation: concurrent first reports
+    #: for an overridden configuration would otherwise all miss the cache
+    #: and each pay the full simulation (review finding, 2026-10-07).  One
+    #: lock for all keys — the path is one-time per configuration, so a
+    #: second configuration waiting out the first's derivation is cheaper
+    #: than per-key in-flight bookkeeping.  The double-check inside
+    #: _multiline_threshold makes the waiters reuse the winner's result.
+    _MULTILINE_DERIVE_LOCK: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _multiline_threshold(cls, scanned_bins: int) -> float:
+        """Null bar for the split-line statistic at this spectrum size.
+
+        The sum of the two largest of ``m`` iid exponentials has no inverse
+        as clean as Fisher's ``ln(m / alpha)``, so the null is MEASURED the
+        way this module's other empirical bars are: the conservative
+        ``(1 - alpha)`` order statistic of the statistic over seeded draws
+        of ``m`` iid unit-exponential ordinates (the periodogram null).
+        The seed is fixed per size, so the bar is byte-reproducible across
+        processes, and the result is cached: the draw runs once per
+        distinct cache identity per process, off the hot path
+        (detect_resonance is on-demand, not per-record).
+
+        Cost contract (measured, 2026-10-07): the DEFAULT configuration
+        never pays the draw from the public pipeline — detect_resonance's
+        window cap keeps every spectrum size it can produce on the pinned
+        table.  A subclass that overrides ``RESONANCE_FALSE_ALARM_RATE``,
+        ``MULTILINE_ORDINATES`` or ``_MULTILINE_NULL_TRIALS`` has changed
+        what the bar must be, so its first report at each spectrum size
+        derives the bar here — 56.3 s at the capped worst size (m = 8,192,
+        40,000 trials, 4-vCPU container, 2026-10-07), microseconds from the
+        cache thereafter.  That one-time cost is what a correct empirical
+        bar for a non-default configuration costs: the table cannot be
+        precomputed over a continuous override space, and serving the
+        default table to an overridden configuration was the defect the
+        configuration gate closed.  An overriding operator who cannot
+        afford first-report latency can warm the cache at startup by
+        calling this method directly for the sizes the window produces.
+
+        The null is the exact no-padding spectrum law — m - 1 interior
+        Exp(1) ordinates plus the kept Nyquist bin's chi-square(1)
+        (corrected per §6.6, 2026-10-07: the previous all-exponential
+        null ignored the Nyquist bin's shape and measured 2.29% clean
+        flags against the 1% budget at m = 4).  One m-keyed bar still
+        serves every n that pads to it — the pipeline zero-pads n samples
+        to the next power of two, padded ordinates are correlated, and
+        the no-padding member is each class's measured worst case
+        (end-to-end under these bars: 1.03% at m = 4, 0.76-1.09% in the
+        m = 8 class, 0.89% at the n = 100 production size).  A per-(n, m)
+        simulated null was measured and rejected earlier as buying back
+        fractions of a point at twelve times the table.
+        """
+        m = max(1, int(scanned_bins))
+        j = max(1, int(cls.MULTILINE_ORDINATES))
+        alpha = cls.RESONANCE_FALSE_ALARM_RATE
+        trials = cls._MULTILINE_NULL_TRIALS
+        # The pinned table answers only for the configuration its bars were
+        # measured under — _MULTILINE_TABLE_CONFIG.  An override of the
+        # statistic (MULTILINE_ORDINATES), the target rate
+        # (RESONANCE_FALSE_ALARM_RATE) or the null's resolution
+        # (_MULTILINE_NULL_TRIALS) changes what the bar must be, so any
+        # other configuration derives it, and the cache identity carries
+        # every threshold-defining parameter so entries cannot be served
+        # across configurations (review findings, 2026-10-07: first the
+        # hard-coded top-2 simulation under a configurable statistic, then
+        # a j-only gate that still served the 1% table to a subclass
+        # configured for another alarm rate).
+        if (j, alpha, trials) == cls._MULTILINE_TABLE_CONFIG:
+            pinned = cls._MULTILINE_THRESHOLDS.get(m)
+            if pinned is not None:
+                return pinned
+        cache_key = (m, j, alpha, trials)
+        cached = cls._MULTILINE_THRESHOLD_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        with cls._MULTILINE_DERIVE_LOCK:
+            # Double-check under the lock: a concurrent first report
+            # may have derived this key while this caller waited
+            # (review finding, 2026-10-07: unsynchronized misses each
+            # paid the full simulation).
+            cached = cls._MULTILINE_THRESHOLD_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            seed = 0x3C0 + m
+            rng = random.Random(seed)  # noqa: S311 -- fixed-seed null bar, not keys (RTM-001)
+            stats = []
+            for _ in range(trials):
+                # One pass per trial: total plus the j largest, no materialised
+                # draw list and no per-trial sort.  At the largest advertised
+                # window (10,000 samples -> 8,192 scanned bins) the sorted form
+                # performed one full 8,192-element sort per trial before first return
+                # (review finding, 2026-10-06); the draws themselves are the
+                # irreducible cost and run once per cache identity per process.
+                # The null is the exact no-padding spectrum law of a centred
+                # real Gaussian series: m - 1 interior ordinates iid Exp(1)
+                # and the KEPT Nyquist ordinate chi-square(1) at the same
+                # unit mean — the all-exponential null this replaces ignored
+                # the Nyquist bin's shape and measured 2.29% flags against
+                # the 1% budget at m = 4 over 100,000 clean Gaussian streams
+                # through the production pipeline (review finding,
+                # 2026-10-07).  Each size's no-padding member (n = 2m) is
+                # its class's measured worst case; padded members measured
+                # below it (m = 8 against the old bar: 1.18-1.58% padded,
+                # 1.85% unpadded), so one bar per size stays conservative
+                # for every window length that maps to it.
+                total = 0.0
+                tops = [0.0] * j
+                for _i in range(m):
+                    if _i:
+                        x = rng.expovariate(1.0)
+                    else:
+                        gaussian = rng.gauss(0.0, 1.0)
+                        x = gaussian * gaussian
+                    total += x
+                    if x > tops[-1]:
+                        for idx in range(j):
+                            if x > tops[idx]:
+                                tops.insert(idx, x)
+                                tops.pop()
+                                break
+                top_sum = 0.0
+                for value in tops:
+                    top_sum += value
+                stats.append(top_sum / (total / m) if total > 0.0 else 0.0)
+            stats.sort()
+            rank = min(trials - 1, max(0, math.ceil((1.0 - alpha) * (trials + 1)) - 1))
+            threshold = stats[rank]
+            cls._MULTILINE_THRESHOLD_CACHE[cache_key] = threshold
+            return threshold
 
 
 class RecursionPatternMonitor:
@@ -3591,7 +3993,6 @@ class RefactoringAnalyzer:
     def _initialize_import_baselines(self) -> None:
         """Record resolved filesystem paths of all imported crypto modules."""
         try:
-            import importlib
 
             for mod_name in _IMPORT_BASELINE_MODULES:
                 try:
@@ -3680,7 +4081,6 @@ class RefactoringAnalyzer:
         Returns:
             List of ImportHijackViolation for any modules resolving to different paths
         """
-        import importlib
 
         violations: List[ImportHijackViolation] = []
         for mod_name in _IMPORT_BASELINE_MODULES:
@@ -4270,7 +4670,14 @@ class AmaCryptographyMonitor:
             monitored_operations = list(self.timing.timing_history)
         for operation in monitored_operations:
             resonance = self.timing.detect_resonance(operation)
-            if resonance.get("has_resonance"):
+            if resonance.get("has_resonance") or resonance.get("has_multiline_resonance"):
+                # Either channel admits the analysis: the split-line verdict
+                # exists precisely for the case where its flag is true and
+                # Fisher's is not, and an admission filter on has_resonance
+                # alone dropped exactly that case from the report and from
+                # the posture evaluation downstream (review finding,
+                # 2026-10-06 — the end-to-end path is pinned by
+                # test_a_multiline_only_verdict_reaches_report_and_posture).
                 resonance_data[operation] = resonance
 
         if resonance_data:

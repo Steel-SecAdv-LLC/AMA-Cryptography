@@ -66,11 +66,16 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import os
+import platform
 import random
 import statistics
+from functools import partial
+import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
@@ -150,6 +155,35 @@ def rates(alarms: list[bool], injected: set[int]) -> tuple[float, float]:
     return tp / len(injected), fp / len(untouched)
 
 
+def paired_rates(
+    trace: list[float],
+    inject: Callable[[list[float]], tuple[list[float], set[int]]],
+    detectors: Sequence[tuple[str, Callable[[list[float]], list[bool]]]],
+    repeats: int,
+) -> dict[str, tuple[float, float]]:
+    """Mean ``(tpr, fpr)`` per detector over ``repeats`` SHARED injections.
+
+    The injection runs exactly once per repeat and EVERY detector scores
+    that same trace — one draw per (family, parameter, repeat).  The first
+    committed form put the detector loop outermost around a shared RNG, so
+    3R consumed one set of injection placements and the baseline the next
+    set, and the head-to-head columns compared different traces (review
+    finding, 2026-10-07).  Pinned by the pairing test, which counts
+    injections and compares the traces each detector received.
+    """
+    tprs: dict[str, list[float]] = {name: [] for name, _ in detectors}
+    fprs: dict[str, list[float]] = {name: [] for name, _ in detectors}
+    for _ in range(repeats):
+        injected_trace, idx = inject(trace)
+        for name, fn in detectors:
+            tpr, fpr = rates(fn(injected_trace), idx)
+            tprs[name].append(tpr)
+            fprs[name].append(fpr)
+    return {
+        name: (statistics.fmean(tprs[name]), statistics.fmean(fprs[name])) for name, _ in detectors
+    }
+
+
 def step_metrics(alarms: list[bool], clean: list[bool], mid: int) -> tuple[bool, int, float, float]:
     """Score a step injection against the same detector's run on the clean trace.
 
@@ -167,6 +201,134 @@ def step_metrics(alarms: list[bool], clean: list[bool], mid: int) -> tuple[bool,
     post = len(alarms) - mid
     excess = (sum(alarms[mid:]) - sum(clean[mid:])) / post
     return bool(attributable), delay, len(before) / (mid - WINDOW), excess
+
+
+def _write_table(out: Path, body: str, provenance: str) -> None:
+    """The one write path for the table; it refuses an unpublishable trailer."""
+    _refuse_unpublishable_provenance(provenance)
+    out.write_text(body + provenance, encoding="utf-8")
+
+
+def _refuse_unpublishable_provenance(provenance: str) -> None:
+    """Refuse to publish a table whose trailer cannot pin what ran.
+
+    AGENTS.md section 8 item 7: a published figure carries its build
+    flags, and the artifact line is what ties them to the measured
+    object.  ``_provenance_lines`` stays able to DESCRIBE an unpinnable
+    state (its own test reads those lines), but a regeneration must not
+    PUBLISH one: on a loader without mapped-byte evidence, or with no
+    digest-matched build tree, the table is refused rather than written
+    with 'unrecorded' in its trailer (review finding on f0582cf).
+    """
+    unpublishable = [
+        line
+        for line in provenance.splitlines()
+        if line.startswith(
+            ("# artifact: unrecorded", "# build: unrecorded", "# build: not recorded")
+        )
+    ]
+    if unpublishable:
+        raise SystemExit(
+            "refusing to write the efficacy table: the provenance trailer "
+            "cannot pin what ran — " + "; ".join(unpublishable) + ". Re-run "
+            "on a host whose loader yields mapped-byte artifact evidence "
+            "and whose build tree digest-matches the measured object."
+        )
+
+
+def _provenance_lines(seed: int) -> str:
+    """The measurement's provenance, recorded with the figures it covers.
+
+    AGENTS.md section 8 (item 7) requires every published performance
+    figure to carry its host, build flags, and run identifier; the first
+    committed revision of the table carried only n/median/MAD/seed and the
+    README's generic host sentence (review finding, 2026-10-07).  Each
+    value below is read from the measuring process itself, never typed in.
+
+    The artifact line names the exact native library these timings ran on:
+    the loaded backend from the module attestation, pinned by its mapped
+    SHA3-256 preload digest.  The build line reuses
+    ``benchmark_runner._native_build_configuration``, which attributes a
+    ``CMakeCache.txt`` only after digest-matching a build tree's copy of
+    the library to the measured object — a stale or unrelated local build
+    tree is passed over and the line says the configuration is not
+    recorded, never a guess from a tree that happens to exist (review
+    finding, 2026-10-07; the first form of this function read
+    ``build/CMakeCache.txt`` unconditionally and allowlisted three keys).
+    """
+    from ama_cryptography._self_test import module_attestation
+
+    from benchmarks import benchmark_runner
+
+    run_id = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + f"+seed{seed}"
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # A commit only names the measuring code while the worktree matches
+        # it: the native digest below covers neither this script nor the
+        # detector's Python, so a dirty tree could publish different rows
+        # under the same commit= value (review finding, 2026-10-07).
+        status = subprocess.run(
+            ["git", "-C", str(REPO), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if status:
+            commit += "+dirty-worktree"
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unrecorded (no git in the measuring environment)"
+    model = platform.processor() or platform.machine()
+    hypervised = ""
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
+            if line.lower().startswith("model name"):
+                model = line.split(":", 1)[1].strip()
+            elif line.lower().startswith("flags") and " hypervisor" in f" {line}":
+                hypervised = ", virtualized"
+    # Only facts the process can establish (review finding, 2026-10-07: the
+    # first form hard-coded "shared cloud container, not pinned", which a
+    # regeneration on a dedicated or pinned host would publish unexamined):
+    # the CPU model, the visible core count, this process's actual affinity
+    # mask, and the hypervisor CPUID bit.  Tenancy is not observable from
+    # inside and is said so.
+    affinity = (
+        f"affinity {len(os.sched_getaffinity(0))}/{os.cpu_count()} cores"
+        if hasattr(os, "sched_getaffinity")
+        else "affinity unrecorded on this platform"
+    )
+    host = f"{model} x{os.cpu_count()} ({affinity}{hypervised}; tenancy unrecorded)"
+    native = module_attestation().get("native_backend") or {}
+    lib_name = Path(str(native.get("path") or "")).name
+    digest = str(native.get("preload_digest_hex") or "")
+    if lib_name and digest and native.get("preload_digest_is_of_mapped_bytes"):
+        # The flag is the evidence that these bytes are the ones that
+        # executed; on loaders where the preload digest is not of the
+        # mapped object (no procfs re-read), claiming the artifact — and
+        # deriving build flags from it — would outrun the evidence
+        # (review finding, 2026-10-07; _self_test applies the same rule).
+        artifact = f"{lib_name} sha3_256={digest}"
+        build = benchmark_runner._native_build_configuration()
+    elif lib_name and digest:
+        artifact = (
+            "unrecorded (preload digest is not of the mapped bytes on this "
+            "loader; the measured object cannot be pinned)"
+        )
+        build = "unrecorded (no pinned artifact to attribute a build tree to)"
+    else:
+        artifact = "unrecorded (no native-backend attestation in the measuring process)"
+        build = "unrecorded (no pinned artifact to attribute a build tree to)"
+    return (
+        f"# provenance: run_id={run_id} commit={commit} python={platform.python_version()}\n"
+        f"# host: {host}\n"
+        f"# artifact: {artifact}\n"
+        f"# build: {build}\n"
+    )
 
 
 def main() -> int:
@@ -196,31 +358,26 @@ def main() -> int:
         fpr = sum(alarms[WINDOW:]) / (len(alarms) - WINDOW)
         rows.append(f"clean\t-\t{name}\t-\t{fpr:.4f}\t-\t1\t-")
 
+    detectors = (("3R", r3_alarms), ("baseline", baseline_alarms))
     for k in (1.5, 2.0, 3.0, 5.0, 10.0):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            tprs, fprs = [], []
-            for _ in range(args.repeats):
-                t, idx = inject_point(trace, k, rng)
-                tpr, fpr = rates(fn(t), idx)
-                tprs.append(tpr)
-                fprs.append(fpr)
-            tpr_m = statistics.fmean(tprs)
-            fpr_m = statistics.fmean(fprs)
+        point_rates = paired_rates(
+            trace, partial(inject_point, k=k, rng=rng), detectors, args.repeats
+        )
+        for name, _ in detectors:
+            tpr_m, fpr_m = point_rates[name]
             rows.append(f"point\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for k in (1.5, 2.0, 3.0):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            tprs, fprs = [], []
-            for _ in range(args.repeats):
-                t, idx = inject_burst(trace, k, rng)
-                tpr, fpr = rates(fn(t), idx)
-                tprs.append(tpr)
-                fprs.append(fpr)
-            tpr_m = statistics.fmean(tprs)
-            fpr_m = statistics.fmean(fprs)
+        burst_rates = paired_rates(
+            trace, partial(inject_burst, k=k, rng=rng), detectors, args.repeats
+        )
+        for name, _ in detectors:
+            tpr_m, fpr_m = burst_rates[name]
             rows.append(f"burst\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for s in (0.05, 0.10, 0.30, 1.00):
-        for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
-            t, mid = inject_step(trace, s)
+        # inject_step is deterministic, so the step family was paired
+        # already; hoisting the injection makes that structural too.
+        t, mid = inject_step(trace, s)
+        for name, fn in detectors:
             detected, delay, fpr, excess = step_metrics(fn(t), clean_alarms[name], mid)
             rows.append(
                 f"step\t+{int(s*100)}%\t{name}"
@@ -228,11 +385,11 @@ def main() -> int:
                 f"\t{delay}\t1\t{excess:+.4f}"
             )
 
-    out = REPO / args.out
-    out.write_text(
+    _write_table(
+        REPO / args.out,
         "\n".join(rows)
         + f"\n# benign_n={len(trace)} median_ms={med:.4f} mad_ms={mad:.4f} seed={args.seed}\n",
-        encoding="utf-8",
+        _provenance_lines(args.seed),
     )
     print("\n".join(rows))
     return 0

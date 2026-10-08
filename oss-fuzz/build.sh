@@ -40,7 +40,21 @@ cmake -B "$BUILD_DIR" \
     -DCMAKE_C_FLAGS="$CFLAGS" \
     -DCMAKE_CXX_FLAGS="$CXXFLAGS"
 
-cmake --build "$BUILD_DIR" -j$(nproc)
+# OSS-Fuzz's contract delivers CC/CXX, their FLAGS, and LIB_FUZZING_ENGINE as
+# IFS-separated strings that must word-split into argv.  The split is made
+# explicit here once, into arrays, so every later use is fully quoted
+# (shellcheck SC2086 at source, not by directive).  `read -d ''` so the split
+# covers newlines too: a plain `read -ra` stops at the first newline, and a
+# FLAGS value assembled across lines would silently lose every flag after it
+# — the unquoted expansion this replaces split on all of IFS.  read returns
+# nonzero at EOF-without-NUL under a herestring, hence `|| true` under -eu.
+read -rd '' -a CC_ARGV <<< "$CC" || true
+read -rd '' -a CXX_ARGV <<< "$CXX" || true
+read -rd '' -a CFLAGS_ARGV <<< "${CFLAGS:-}" || true
+read -rd '' -a CXXFLAGS_ARGV <<< "${CXXFLAGS:-}" || true
+read -rd '' -a ENGINE_ARGV <<< "${LIB_FUZZING_ENGINE:-}" || true
+
+cmake --build "$BUILD_DIR" -j"$(nproc)"
 
 # Find the static library
 AMA_LIB=$(find "$BUILD_DIR" -name "libama_cryptography_static.a" | head -1)
@@ -82,7 +96,7 @@ for target in "${FUZZ_TARGETS[@]}"; do
     fi
 
     echo "Building fuzz target: $target"
-    $CC $CFLAGS -I"$INCLUDE_DIR" \
+    "${CC_ARGV[@]}" "${CFLAGS_ARGV[@]}" -I"$INCLUDE_DIR" \
         -c "$src_file" -o "$BUILD_DIR/${target}.o"
 
     # Per-target extras.  fuzz_frost uses --wrap=ama_randombytes to
@@ -92,16 +106,16 @@ for target in "${FUZZ_TARGETS[@]}"; do
     extra_objs=()
     extra_link_flags=()
     if [ "$target" = "fuzz_frost" ]; then
-        $CC $CFLAGS -I"$INCLUDE_DIR" \
+        "${CC_ARGV[@]}" "${CFLAGS_ARGV[@]}" -I"$INCLUDE_DIR" \
             -c "fuzz/fuzz_rng.c" -o "$BUILD_DIR/fuzz_rng.o"
         extra_objs+=("$BUILD_DIR/fuzz_rng.o")
         extra_link_flags+=("-Wl,--wrap=ama_randombytes")
     fi
 
-    $CXX $CXXFLAGS \
+    "${CXX_ARGV[@]}" "${CXXFLAGS_ARGV[@]}" \
         "$BUILD_DIR/${target}.o" "${extra_objs[@]}" \
         "$AMA_LIB" \
-        $LIB_FUZZING_ENGINE \
+        "${ENGINE_ARGV[@]}" \
         "${extra_link_flags[@]}" \
         -lm -lpthread \
         -o "$OUT/${target}"

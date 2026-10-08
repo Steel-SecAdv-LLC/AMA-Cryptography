@@ -10,12 +10,16 @@
 # OSS-Fuzz, not to this repository.
 FROM gcr.io/oss-fuzz-base/base-builder
 
-RUN apt-get update && apt-get install -y \
-    cmake \
-    make \
-    pkg-config \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*
+# apt retries three times with a pause because stalled Ubuntu mirrors are a
+# measured failure mode, not a hypothesis: the OSS-Fuzz lane died twice on
+# 2026-10-07 (runs 37665893658 and 37672010498) fetching archive.ubuntu.com
+# inside this build, identically on the re-run — the same class the
+# workflows' apt-install.sh already retries (INVARIANT: apt-retry gate).
+RUN for attempt in 1 2 3; do \
+        apt-get update && apt-get install -y cmake make pkg-config python3 && break; \
+        if [ "$attempt" = 3 ]; then exit 100; fi; \
+        sleep 20; \
+        done && rm -rf /var/lib/apt/lists/*
 
 # ClusterFuzzLite builds the checkout that triggered the workflow, so the
 # source is COPIED rather than cloned (oss-fuzz/Dockerfile clones, as an

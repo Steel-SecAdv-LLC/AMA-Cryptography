@@ -363,5 +363,53 @@ class TestMlockNativeBranches:
                 return -1
 
         monkeypatch.setattr(native, "ama_secure_munlock", _FakeFn(), raising=False)
+        # Hermetic page registry: secure_munlock reaches the backend only
+        # for pages no OTHER registered lock still covers, so with live
+        # locks left by earlier tests the 32-byte buffer can land on a
+        # page whose refcount is >= 2 — the call then decrements and never
+        # touches the patched symbol.  Measured: one macOS lane failed
+        # DID NOT RAISE while three sibling lanes passed the same commit
+        # (run 37672010249, 2026-10-07), and both outcomes reproduce
+        # deterministically by seeding the registry.  An empty registry
+        # makes every page count 0, so the backend is always reached.
+        monkeypatch.setattr(sm, "_LOCKED_PAGE_REFS", {})
         with pytest.raises(sm.SecureMemoryError, match="munlock"):
             sm.secure_munlock(bytearray(32))
+
+    def test_a_shared_page_is_decremented_not_munlocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PIN of the registry semantics the lane flake exposed (review of
+        run 37672010249, 2026-10-07): a page another registered lock still
+        covers (refcount >= 2) is decremented and NEVER munlocked — the
+        kernel would otherwise drop the lock for every buffer on that page
+        — while count-1 and unregistered pages are released to the
+        backend.  Mutation: with the count gate removed from
+        _release_locked_pages, the shared page is released and the first
+        assertion fails."""
+        import ama_cryptography.pqc_backends as pq
+
+        native = pq._native_lib
+        if native is None or not hasattr(native, "ama_secure_munlock"):
+            pytest.skip("Native munlock unavailable")
+        calls: list[int] = []
+
+        class _CountingFn:
+            argtypes: ClassVar[list[Any]] = []
+            restype = None
+
+            def __call__(self, *args: object) -> int:
+                calls.append(1)
+                return 0
+
+        monkeypatch.setattr(native, "ama_secure_munlock", _CountingFn(), raising=False)
+        buf = bytearray(32)
+        addr, size = sm._buffer_address(buf, "test")
+        pages = dict.fromkeys(sm._pages_covering(addr, size), 2)
+        monkeypatch.setattr(sm, "_LOCKED_PAGE_REFS", dict(pages))
+        sm.secure_munlock(buf)
+        assert calls == [], "a shared page must be decremented, not munlocked"
+        assert all(sm._LOCKED_PAGE_REFS[page] == 1 for page in pages)
+        sm.secure_munlock(buf)
+        assert calls, "the last reference releases the page to the backend"
+        assert not sm._LOCKED_PAGE_REFS

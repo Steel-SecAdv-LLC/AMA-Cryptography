@@ -12,13 +12,13 @@
     "counts": {
       "Core Crypto\n& NIST KATs": 1156,
       "Key Management\n& Rotation": 282,
-      "Memory Security\n& Fuzzing": 366,
-      "Other": 3809,
-      "PQC Backends\n& Integration": 776,
+      "Memory Security\n& Fuzzing": 367,
+      "Other": 3880,
+      "PQC Backends\n& Integration": 800,
       "Performance\n& Monitoring": 378
     },
-    "n_files": 272,
-    "total_tests": 6767,
+    "n_files": 274,
+    "total_tests": 6863,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -36,6 +36,7 @@
       "test_apt_retry_gate.py",
       "test_artefact_cache_poisoning.py",
       "test_ascon.py",
+      "test_ava_descent.py",
       "test_avx_scoping_gate.py",
       "test_bandit_severity_gate.py",
       "test_benchmark_baseline_freshness.py",

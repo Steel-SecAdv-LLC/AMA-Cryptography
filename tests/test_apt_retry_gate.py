@@ -963,7 +963,6 @@ class TestLogicalLinesAndSegmentScopedExemption:
         1.96 ms / 30.1 ms / 447 ms / 7166 ms at n = 12 / 16 / 20 / 24; on the
         unambiguous one, 0.007 / 0.009 / 0.014 / 0.015 ms.
         """
-        import time
 
         line = "  run: apt-get " + " ".join(["--x"] * 24) + " zzz\n"
         start = time.perf_counter()
