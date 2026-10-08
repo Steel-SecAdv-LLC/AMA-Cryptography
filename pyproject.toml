@@ -23,7 +23,7 @@
 requires = [
     "setuptools>=84.0.0",
     "wheel>=0.48.0",
-    "cmake>=4.4.3",
+    "cmake>=4.4.4",
     "Cython>=3.3.0",
     "numpy>=1.24.0",
 ]
@@ -125,7 +125,7 @@ legacy = [
     # a CVE followed the next major (this package is test/benchmark-only;
     # INVARIANT-1 keeps it off the production path, and CI already resolves
     # the newest release through this range).
-    "cryptography>=50.0.0",
+    "cryptography>=50.0.2",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules.
@@ -168,7 +168,7 @@ benchmark = [
     "pynacl>=1.6.2",
     # Same 50.0.0 floor as [legacy] above, for the same advisories.
     # Mirrors benchmarks/requirements-bench.txt.
-    "cryptography>=50.0.0",
+    "cryptography>=50.0.2",
 ]
 examples = [
     # Third-party packages the shipped examples under examples/python/ import
@@ -199,7 +199,7 @@ dev = [
     # with the pins.
     "pytest>=9.1.1,<9.2",
     "pytest-cov>=4.0.0",
-    "hypothesis>=6.168.0",
+    "hypothesis>=6.168.4",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
@@ -208,8 +208,8 @@ dev = [
     # DEFAULT behaviour -- the surface that moves between releases (black
     # revises its stable style on calendar majors; ruff's default rule set
     # moves on minors).  Capped so one CI run measures one black and one ruff.
-    "black>=26.5.1,<27",
-    "ruff>=0.16.8,<0.17",
+    "black>=26.10.0,<27",
+    "ruff>=0.16.10,<0.17",
     # Capped below 2.4: the lint job, pre-commit and requirements-lock.txt run
     # 2.3.1, and this extra floated past them.  mypy 2.4.0 stopped honouring a
     # `# mypy:` inline-config line inside a docstring (measured: the same file
@@ -217,7 +217,7 @@ dev = [
     # install this extra measured a different mypy from the one CI type-checks
     # with, and test_suppression_hygiene_gate.py's premise test went red on
     # them alone.  Raise the cap with the pins, after re-measuring that test.
-    "mypy>=2.3.1,<2.4",
+    "mypy>=2.4.0,<2.5",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
     # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
