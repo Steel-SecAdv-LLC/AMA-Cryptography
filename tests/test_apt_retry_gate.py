@@ -330,10 +330,15 @@ def _isolated_env() -> dict[str, str]:
     apt-install.sh calls, so inheriting ``RUNNER_TEMP`` would hand every test
     the job's real, partly spent deadline.  Each test gets its own budget
     unless it names a state file itself.
+
+    The same holds for every ``APT_*`` knob the helper reads: each CI job sets
+    ``APT_TOTAL_BUDGET`` for its own budget, and inheriting it made the
+    default-budget assertions fail inside CI only (``8f61a789``: 300 s where
+    the test expects the script's 600 s default) while passing locally.  A
+    test that needs a knob sets it explicitly.
     """
-    e = dict(os.environ)
+    e = {k: v for k, v in os.environ.items() if not k.startswith("APT_")}
     e.pop("RUNNER_TEMP", None)
-    e.pop("APT_BUDGET_STATE", None)
     return e
 
 

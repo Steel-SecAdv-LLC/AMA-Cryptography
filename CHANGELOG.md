@@ -76,6 +76,20 @@ marked otherwise.
   way). `dec6` is now a pure function returning the value and an invalid
   flag; the codec's mutants were re-run and it is 0/0 on gcc 13 and clang 18,
   count and taint.
+- **clang-tidy on `8f61a789`:** the analyser found a path where the
+  decoder's NULL-output refusal, stated on the output size, let a NULL
+  `out` reach the loop. That path is infeasible (the size is zero exactly
+  when the input body is), but the guard now refuses on the body length
+  the loops read, which the analyser can follow. Mutation then showed the
+  NULL-output refusals in both directions were pinned by no test: the
+  existing cases passed a zero capacity, so the capacity check refused
+  them first. Two tests with a claimed capacity now fail with SIGSEGV
+  when either guard is removed (PIN).
+- **The apt-helper tests read the CI job's own budget.** Every Linux test
+  job on `8f61a789` failed one assertion: the job sets `APT_TOTAL_BUDGET`,
+  the test inherited it, and expected the script's default. The tests now
+  drop every `APT_*` knob from the environment and set any they need
+  (verified under budgets of unset, 300 s and 12 s).
 - **Fixed on the way:** the `key_formats` support-matrix table was malformed
   (Sphinx `-W`); POST's RNG tests patched a `secrets` binding the stage no
   longer reads (retargeted to the entropy seam, both PIN); the CHANGELOG

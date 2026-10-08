@@ -45,6 +45,12 @@
  *   unknown-variant refusal in encode ..... fails: empty input, unknown variant
  *   'Z' -> 'Y' in the upper-case range .... fails: RFC 4648 vectors
  *   *out_len cleared on refusal ........... fails: every named refusal
+ *   NULL output with a claimed capacity ... fails: SIGSEGV, both directions
+ *                                           (added 2026-10-08: the earlier
+ *                                           NULL-output cases passed a zero
+ *                                           capacity, so the capacity check
+ *                                           refused them and this guard was
+ *                                           unpinned)
  *
  * Redundant by construction (6.3): the '=' count requires the second-to-last
  * '=' to be followed by a last one (`& last`).  Without that, "Zg=A" counts
@@ -465,6 +471,15 @@ static void test_argument_refusals(void) {
     n = 99;
     CHECK(ama_base64_decode(NULL, 0, "AQID", 4, AMA_BASE64_STANDARD_PADDED, &n)
               == AMA_ERROR_INVALID_PARAM && n == 0u, "decode: NULL output");
+    /* A NULL buffer with a capacity that would otherwise suffice: only the
+     * NULL check stands between this and a write through NULL (the capacity
+     * check alone refuses the two cases above). */
+    n = 99;
+    CHECK(ama_base64_decode(NULL, sizeof dec, "AQID", 4, AMA_BASE64_STANDARD_PADDED, &n)
+              == AMA_ERROR_INVALID_PARAM && n == 0u, "decode: NULL output, claimed capacity");
+    n = 99;
+    CHECK(ama_base64_encode(NULL, sizeof enc, data, 3, AMA_BASE64_STANDARD_PADDED, &n)
+              == AMA_ERROR_INVALID_PARAM && n == 0u, "encode: NULL output, claimed capacity");
     n = 99;
     memset(dec, 0xA5, sizeof dec);
     CHECK(ama_base64_decode(dec, 2, "AQID", 4, AMA_BASE64_STANDARD_PADDED, &n)

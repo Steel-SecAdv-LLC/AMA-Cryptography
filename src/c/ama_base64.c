@@ -215,7 +215,11 @@ AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
         return AMA_ERROR_INVALID_PARAM;
     }
     const size_t need = full * 3u + (rem == 0u ? 0u : rem - 1u);
-    if (out_cap < need || (out == NULL && need > 0u)) {
+    /* need > 0 exactly when body > 0 (a one-character tail was refused
+     * above), so a NULL `out` is refused for any input that decodes to an
+     * octet.  Stated on `body`, the bound the loops below read, so the
+     * relation is visible to a path-sensitive analyser as well. */
+    if (out_cap < need || (out == NULL && body > 0u)) {
         return AMA_ERROR_INVALID_PARAM;
     }
     const uint32_t c62 = char62(variant);
