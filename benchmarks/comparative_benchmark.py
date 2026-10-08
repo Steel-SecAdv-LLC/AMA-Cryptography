@@ -910,7 +910,87 @@ def _measurement_provenance() -> "Dict[str, Any]":
     }
     if not attributable:
         block["unattributable_because"] = reasons
+    _attach_native_artifact(block)
     return block
+
+
+def _attach_native_artifact(block: "Dict[str, Any]") -> None:
+    """Pin the native object these timings executed, and its build.
+
+    A commit names the sources; it cannot name the compiled object a stale
+    build tree supplied, so a record carrying only ``ama_commit`` could
+    publish an old library's timings under a fresh commit (review finding
+    on b8471c4).  The loaded backend is pinned by its mapped-bytes SHA3-256
+    from the module attestation, and the build configuration is attributed
+    only by digest-matching — the same evidence rule as the efficacy
+    table's trailer (``r3_efficacy_eval._provenance_lines``).
+    """
+    unpinned = "unrecorded (no pinned artifact to attribute a build tree to)"
+    try:
+        from ama_cryptography._self_test import module_attestation
+
+        from benchmarks import benchmark_runner
+
+        nb = module_attestation().get("native_backend") or {}
+        name = Path(str(nb.get("path") or "")).name
+        digest = str(nb.get("preload_digest_hex") or "")
+        if name and digest and nb.get("preload_digest_is_of_mapped_bytes"):
+            block["native_artifact"] = {"file": name, "sha3_256": digest}
+            block["native_build"] = benchmark_runner._native_build_configuration()
+        elif name and digest:
+            block["native_artifact"] = (
+                "unrecorded (preload digest is not of the mapped bytes on this "
+                "loader; the measured object cannot be pinned)"
+            )
+            block["native_build"] = unpinned
+        else:
+            block["native_artifact"] = (
+                "unrecorded (no native-backend attestation in the measuring process)"
+            )
+            block["native_build"] = unpinned
+    except Exception as exc:  # pragma: no cover - provenance must never raise
+        block["native_artifact"] = f"unrecorded ({type(exc).__name__}: {exc})"
+        block["native_build"] = unpinned
+
+
+def stamp_c_harness_provenance(results_json: Path, linked_library: Path) -> "Dict[str, Any]":
+    """Stamp the C harness's result file with this checkout's provenance.
+
+    ``multi_library_bench.cpp`` writes its rows with no provenance, and
+    ``generate_competitive.py`` refuses to render a record whose measuring
+    build is unknown.  This computes the same block the Python-plane
+    harnesses record and pins the shared object the C binary linked: its
+    SHA3-256 must be byte-identical to the attested loaded backend, or the
+    record is marked unattributable — a stale ``build/lib`` object would
+    otherwise be published under the fresh commit, the relabelling class
+    the provenance block exists to stop (review finding on b8471c4).
+    """
+    from ama_cryptography.pqc_backends import native_sha3_256
+
+    provenance = _measurement_provenance()
+    linked_digest = native_sha3_256(linked_library.read_bytes()).hex()
+    artifact = provenance.get("native_artifact")
+    pinned = isinstance(artifact, dict) and artifact.get("sha3_256") == linked_digest
+    provenance["linked_library"] = {
+        "file": linked_library.name,
+        "sha3_256": linked_digest,
+        "byte_identical_to_loaded_backend": bool(pinned),
+    }
+    if not pinned:
+        provenance["attributable"] = False
+        reasons = list(provenance.get("unattributable_because", []))
+        reasons.append(
+            "the shared object the C harness linked is not byte-identical to "
+            "the attested loaded backend, so neither the commit nor the build "
+            "configuration is evidence of what it ran"
+        )
+        provenance["unattributable_because"] = reasons
+    data = json.loads(results_json.read_text(encoding="utf-8"))
+    data.pop("provenance", None)
+    merged: Dict[str, Any] = {"provenance": provenance}
+    merged.update(data)
+    results_json.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
+    return provenance
 
 
 def main() -> None:
@@ -970,4 +1050,18 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--stamp-multibench":
+        _repo = Path(__file__).resolve().parent.parent
+        _results = (
+            Path(sys.argv[2])
+            if len(sys.argv) > 2
+            else _repo / "benchmarks" / "multi_library_results.json"
+        )
+        _linked = (
+            Path(sys.argv[3])
+            if len(sys.argv) > 3
+            else _repo / "build" / "lib" / "libama_cryptography.so"
+        )
+        print(json.dumps(stamp_c_harness_provenance(_results, _linked), indent=1))
+    else:
+        main()

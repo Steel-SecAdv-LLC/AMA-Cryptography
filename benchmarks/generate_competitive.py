@@ -785,7 +785,8 @@ g++ -O2 -std=c++17 -DHAVE_OPENSSL -DHAVE_SODIUM -DHAVE_WOLFSSL -DHAVE_BOTAN \\
     benchmarks/multi_library_bench.cpp -Lbuild/lib -lama_cryptography \\
     -lssl -lcrypto -lsodium -lwolfssl -lbotan-2 -lnettle -lhogweed -lgcrypt -lmbedcrypto \\
     -o multibench
-./multibench 65536                          # -> multi_library_results.json
+./multibench 65536                          # -> multi_library_results.json (rows, no provenance)
+python benchmarks/comparative_benchmark.py --stamp-multibench  # pins commit + linked-object digest
 python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 

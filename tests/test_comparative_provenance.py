@@ -112,6 +112,68 @@ class TestTheBlockNamesOnlyWhatItCanShow:
         assert block["dirty_paths"] == ["benchmarks/pqc_results.json"]
 
 
+class TestTheNativeArtifactIsPinned:
+    """A commit names the sources; these pin the compiled object too.
+
+    Review finding on b8471c4: the block carried only ``ama_commit``, so a
+    stale ``build/lib`` object could be linked by the C harness and its
+    timings published as ``attributable: true`` under the fresh commit.
+    """
+
+    def test_the_block_pins_the_loaded_backend_and_its_build(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RANGE: with the backend attested in this process, the block
+        carries the mapped-bytes digest and a build line, never silence."""
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        block = cb._measurement_provenance()
+        artifact = block["native_artifact"]
+        assert isinstance(artifact, dict), artifact
+        assert artifact["file"].startswith("libama_cryptography"), artifact
+        assert len(artifact["sha3_256"]) == 64, artifact
+        assert isinstance(block["native_build"], str) and block["native_build"]
+
+    def test_stamping_pins_a_byte_identical_linked_object(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A copy of the attested backend's bytes is pinned as identical,
+        and the stamped file carries the block the generator requires."""
+        from ama_cryptography._self_test import module_attestation
+
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        source = Path(str(module_attestation()["native_backend"]["path"]))
+        linked = tmp_path / source.name
+        linked.write_bytes(source.read_bytes())
+        results = tmp_path / "multi_library_results.json"
+        results.write_text(json.dumps({"results": []}), encoding="utf-8")
+        block = cb.stamp_c_harness_provenance(results, linked)
+        assert block["linked_library"]["byte_identical_to_loaded_backend"] is True
+        assert block["attributable"] is True
+        written = json.loads(results.read_text(encoding="utf-8"))
+        assert written["provenance"]["linked_library"] == block["linked_library"]
+        assert written["provenance"]["native_artifact"]["sha3_256"] == (
+            block["linked_library"]["sha3_256"]
+        )
+
+    def test_a_differing_linked_object_disowns_the_record(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """PIN (mutation-earned): a linked object whose bytes differ from
+        the attested backend marks the record unattributable with the
+        stale-build reason.  Mutation: with the mismatch branch removed,
+        exactly this test fails while the byte-identical case still
+        passes."""
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        linked = tmp_path / "libama_cryptography.so"
+        linked.write_bytes(b"not the attested backend")
+        results = tmp_path / "multi_library_results.json"
+        results.write_text(json.dumps({"results": []}), encoding="utf-8")
+        block = cb.stamp_c_harness_provenance(results, linked)
+        assert block["linked_library"]["byte_identical_to_loaded_backend"] is False
+        assert block["attributable"] is False
+        assert any("byte-identical" in r for r in block["unattributable_because"])
+
+
 class TestProvenanceIsTakenBeforeMeasuring:
     def test_comparative_benchmark(self, monkeypatch: pytest.MonkeyPatch) -> None:
         order: list[str] = []

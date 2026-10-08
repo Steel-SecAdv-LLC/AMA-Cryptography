@@ -899,11 +899,19 @@ class AvaDescent:
         # finiteness refusal below can see (review finding, 2026-10-06:
         # [1e200, -1e200] leaked an incidental OverflowError ahead of every
         # defined refusal in the class).
-        total = 0.0
+        #
+        # (d / n) * d, not d * d summed and divided at the end: the raw
+        # square overflows for |d| > ~1.34e154 even when the final variance
+        # is a representable float, so [1e154, -1e154] was refused while its
+        # variance, 1e308, is representable (review finding, 2026-10-08).
+        # Dividing the deviation first keeps every term finite unless its
+        # contribution to the variance itself is not, so the refusal below
+        # fires only for a genuinely non-representable variance.
+        n = len(v)
+        var = 0.0
         for x in v.tolist():
             d = x - m
-            total += d * d
-        var = total / len(v)
+            var += (d / n) * d
         if not math.isfinite(var):
             raise ValueError(
                 "variance overflowed the float range; variance-adapted "

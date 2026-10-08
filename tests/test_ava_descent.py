@@ -328,12 +328,29 @@ class TestReviewHardening:
     def test_variance_overflow_is_a_defined_refusal(self) -> None:
         """PIN (review finding): [1e200, -1e200] leaked an incidental
         OverflowError from the squared deviation ahead of every defined
-        refusal; it is now a named ValueError."""
+        refusal; it is now a named ValueError.  Its variance, 1e400, is
+        genuinely non-representable, so the refusal survives the 2026-10-08
+        scale-before-sum correction below."""
         d = AvaDescent()
         with pytest.raises(ValueError, match="variance overflowed"):
             d.variance_adapted_step([1e200, -1e200], [0.0, 0.0])
         with pytest.raises(ValueError, match="variance overflowed"):
             d.descend([0.0, 0.0], [1e200, -1e200], mode="variance")
+
+    def test_a_representable_variance_is_computed_not_refused(self) -> None:
+        """PIN (review finding, 2026-10-08): the accumulation summed raw
+        squared deviations, so [1e154, -1e154] overflowed the running sum
+        and was refused although its variance, 1e308, is a representable
+        float.  The deviation is now divided by n before the multiply, so
+        only a genuinely non-representable variance refuses.  Mutation:
+        restoring the raw d*d accumulation fails exactly this test's
+        finite case while the [1e200, -1e200] refusal above still passes."""
+        out = AvaDescent().variance_adapted_step([1e154, -1e154], [0.0, 0.0])
+        assert all(math.isfinite(x) for x in out.tolist()), out.tolist()
+        # The damping actually used the huge variance: a unit gradient is
+        # attenuated by 1/(1 + 1e308), i.e. to zero at float resolution.
+        moved = AvaDescent().variance_adapted_step([1e154, -1e154], [1.0, 1.0])
+        assert moved.tolist() == [1e154, -1e154], moved.tolist()
 
     def test_catalan_combines_scalar_gains_before_the_gradient(self) -> None:
         """PIN (review finding): alpha * gradient first overflowed for a
