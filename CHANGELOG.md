@@ -38,23 +38,42 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **`benchmarks/multi_library_results.json`, `pqc_results.json` and
   `competitive.html` are a single-host, single-commit measurement of the
-  5.0.0 tree** (`d55db17`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
-  SHA-NI, the canonical-host class; method, full data and the three
+  5.0.0 tree** (`a35078d`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  SHA-NI, the canonical-host class; method, full data and the four
   same-day passes' spans in `docs/BENCHMARK_HISTORY.md`). They replace
   the 2026-07-29 record of the 3.4.0 tree, measured on a host without
-  those ISA extensions. AMA leads outright on HMAC-SHA3-256 (1st in all
-  three same-day runs), Ed25519 verify (1.63x libsodium), both secp256k1
-  ECDSA sides and ML-DSA-65 sign/verify (3.5x/1.9x OpenSSL 4.0.3);
-  SHA3-256 is 2nd of 6 on the committed run, a pair with libgcrypt that
-  races within this host's run-to-run variance (AMA 10.3% ahead to 12.6%
-  behind across the same-day runs); it trails where the page says and
-  why (OpenSSL's VAES AES-GCM pipeline 10.4x against the INVARIANT-20
-  constant-time default, Ed25519 sign 3rd of 6 behind peers that skip
-  INVARIANT-51's per-signature derivation, the known ML-KEM
-  vectorisation-breadth gap, PQC keygens carrying INVARIANT-41's pairwise
-  test at the measured plane). The page's NOTES prose is reconciled to
-  the committed ranks, which `tests/test_competitive_page.py` enforces
-  against the rendered table.
+  those ISA extensions. AMA leads outright on this run's draw of
+  SHA3-256 (28.2% over libgcrypt), Ed25519 verify (1.87x libsodium),
+  both secp256k1 ECDSA sides and ML-DSA-65 sign/verify (2.3x/2.0x
+  OpenSSL 4.0.3); three rows race within this host's run-to-run
+  variance and are stated as spans, not facts (SHA3 from 12.6% behind to
+  28.2% ahead of libgcrypt across the four runs; HMAC-SHA3-256 2nd of 4
+  here, 1st on the other three; Ed25519 sign 2nd of 6 here behind
+  peers that skip INVARIANT-51's per-signature derivation); it trails
+  where the page says and why (OpenSSL's VAES AES-GCM pipeline 7.6x on
+  this run against the INVARIANT-20 constant-time default, the known
+  ML-KEM vectorisation-breadth gap, PQC keygens carrying INVARIANT-41's
+  pairwise test at the measured plane). The page's NOTES prose is
+  reconciled to the committed ranks, which
+  `tests/test_competitive_page.py` enforces against the rendered table.
+- **The provenance chain's last gaps closed** (four review findings on
+  `f0582cf`, all Medium, each the same evidence rule one level deeper,
+  every refusal mutation-pinned). The C harness's `loaded_library`
+  evidence is tied to the live mapping, not a pathname: a POSIX mapping
+  survives rename/replacement, so the bytes are hashed from an open
+  descriptor whose device and inode must equal what `/proc/self/maps`
+  records for the mapping containing `ama_sha3_256` — the Python
+  loader's mapped-bytes rule applied to the C plane.
+  `multi_library_bench.cpp` is a measured build path (PIN
+  `test_a_dirty_c_harness_disowns_the_commit`: a dirty harness produced
+  different rows under a clean HEAD). A pinned artifact whose build
+  configuration no tree digest-matches is demoted like an unpinned one
+  (PIN `test_an_unrecorded_build_configuration_disowns_the_commit`: a
+  figure does not publish without its build flags, section 8 item 7).
+  And the efficacy table's regeneration fails closed on the same rule
+  instead of writing 'unrecorded' trailer lines (PINs
+  `test_an_unpublishable_trailer_refuses_the_regeneration` and
+  `test_the_write_path_itself_refuses_an_unpublishable_trailer`).
 - **The C harness attests the object its own process resolved** (review
   finding on `8a26498`, Medium): a stamp that hashes a caller-supplied
   path proves nothing about what the dynamic loader mapped —

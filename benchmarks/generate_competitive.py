@@ -257,11 +257,11 @@ COVERAGE: dict[str, dict[str, bool]] = {
 NOTES = {
     "AES-256-GCM": (
         "AMA defaults to constant-time AES (INVARIANT-20), which never indexes "
-        "a table with key-dependent data. OpenSSL leads 10.3x through an "
+        "a table with key-dependent data. OpenSSL leads 7.6x through an "
         "AES-NI + VAES + VPCLMULQDQ pipeline tuned end-to-end for this one "
         "construction, with libgcrypt, Nettle and libsodium also ahead on this "
-        "host. AMA places 5th of 8, ahead of Botan, mbedTLS and wolfSSL on "
-        "this build."
+        "host. AMA places 5th of 8, 1.84x ahead of Botan and ahead of "
+        "mbedTLS and wolfSSL on this build."
     ),
     "ChaCha20-Poly1305": (
         "OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; "
@@ -270,26 +270,28 @@ NOTES = {
     ),
     "SHA3-256": (
         "libgcrypt carries a hand-optimised Keccak permutation. AMA's "
-        "single-stream scalar permutation places second of six, 12.6% behind "
-        "libgcrypt and ahead of Botan, OpenSSL, wolfSSL and Nettle — a pair "
-        "that races within this host's run-to-run variance (same-day runs "
-        "span AMA 10.3% ahead to 12.6% behind; the x4 AVX2 path batches four "
-        "independent hashes and does not apply to one stream)."
+        "single-stream scalar permutation places first of six on this run, "
+        "28.2% ahead of libgcrypt — a pair that races within this host's "
+        "run-to-run variance (four same-day runs span AMA 12.6% behind to "
+        "28.2% ahead; the x4 AVX2 path batches four independent hashes and "
+        "does not apply to one stream)."
     ),
     "HMAC-SHA3-256": (
-        "Tracks the SHA3-256 permutation race above; first of four here, "
-        "2.3% ahead of OpenSSL, and first in each of the three same-day runs."
+        "Tracks the SHA3-256 permutation race above; second of four on "
+        "this run, 3.1% behind libgcrypt, and first in three of the four "
+        "same-day runs — the same within-variance race as the hash itself."
     ),
     "Ed25519 sign": (
-        "libsodium and wolfSSL lead by 1.22x and 1.14x. AMA re-derives the "
-        "public half from the scalar on every signature and refuses a stored "
-        "half the scalar does not generate (INVARIANT-51); the peers read the "
-        "cached public half out of the key. Third of six."
+        "libsodium leads by 1.09x on this run (second of six; third, behind "
+        "wolfSSL too, on three of the four same-day runs). AMA re-derives "
+        "the public half from the scalar on every signature and refuses a "
+        "stored half the scalar does not generate (INVARIANT-51); the peers "
+        "read the cached public half out of the key."
     ),
-    "Ed25519 verify": "Fastest of six, 1.63x ahead of libsodium.",
+    "Ed25519 verify": "Fastest of six, 1.87x ahead of libsodium.",
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 1.31x of OpenSSL and 1.12x of libsodium. "
+        "multiply path. AMA is within 1.29x of OpenSSL and 1.08x of libsodium. "
         "Third of five."
     ),
     "P-256 ECDSA sign": (
@@ -299,29 +301,29 @@ NOTES = {
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
     "secp256k1 ECDSA verify": (
-        "Fastest of three: 4.6% ahead of Botan and 1.38x ahead of OpenSSL. "
-        "The signing side also leads outright (1.67x Botan, 3.5x OpenSSL), "
+        "Fastest of three: 1.12x ahead of OpenSSL and 1.23x ahead of Botan. "
+        "The signing side also leads outright (1.48x Botan, 3.0x OpenSSL), "
         "after the fixed-base comb landed (#379)."
     ),
     "ML-KEM-1024 encaps": (
         f"The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
         f"scalar, AVX-512 adding a further 1.22x) but is not vectorised across "
-        f"the breadth {PQC_PEER} reaches, which is 1.9x ahead here. Closing it "
+        f"the breadth {PQC_PEER} reaches, which is 2.2x ahead here. Closing it "
         f"is a multi-week vectorisation project, not a tuning pass, and it is "
         f"not claimed as done."
     ),
-    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.5x behind.",
+    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.6x behind.",
     "ML-KEM-1024 keygen": (
-        "2.1x behind — and at this Python plane the AMA row also carries the "
+        "2.2x behind — and at this Python plane the AMA row also carries the "
         "FIPS 140-3 pairwise consistency test (INVARIANT-41: a full "
         "encapsulate/decapsulate before any keypair is released), which the "
         "peer's keygen does not run."
     ),
     "ML-DSA-65 keygen": (
-        "3.1x behind at this plane — but the AMA row is keygen plus the "
+        "3.4x behind at this plane — but the AMA row is keygen plus the "
         "INVARIANT-41 pairwise consistency test (a full ML-DSA sign and "
         "verify before the keypair is released), which the peer row does not "
-        "perform. Signing (3.5x) and verification (1.9x) both lead outright."
+        "perform. Signing (2.3x) and verification (2.0x) both lead outright."
     ),
 }
 

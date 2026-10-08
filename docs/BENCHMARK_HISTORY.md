@@ -784,40 +784,40 @@ section: `multibench 65536` (the harness's own best-of-N per row) under
 `comparative_benchmark.py --stamp-multibench`, then
 `pqc_comparative_bench.py` (median of 200, distinct messages for the
 rejection-sampled signer) under `taskset -c 0`, then
-`generate_competitive.py`. Measured at `d55db17` with every measured build
-path clean and both provenance blocks `attributable: true` naming that
-commit; the one dirty path each block records is
-`benchmarks/multi_library_results.json`, the C harness's own result file,
-written moments earlier in the same pass — the class the provenance
-design explicitly distinguishes from a change to the measured build. The
-generator refuses to render the two files under different commits.
+`generate_competitive.py`. Measured at `a35078d` with every measured build
+path clean — the C harness source is itself a measured path — and both
+provenance blocks `attributable: true` naming that commit; the one dirty
+path each block records is `benchmarks/multi_library_results.json`, the C
+harness's own result file, written moments earlier in the same pass — the
+class the provenance design explicitly distinguishes from a change to the
+measured build. The generator refuses to render the two files under
+different commits.
 
-**AMA 5.0.0 at `d55db17`, 57 native rows + 12 PQC rows.** Where AMA leads
-outright: HMAC-SHA3-256 (1st of 4, 2.3% ahead of OpenSSL, and 1st in each
-of the three same-day runs), Ed25519 verify (1st of 6, 1.63x libsodium),
-secp256k1 ECDSA sign (1st of 3, 1.67x Botan, 3.5x OpenSSL) and verify
-(1st of 3, 4.6% ahead of Botan), ML-DSA-65 sign (4,656 vs 1,312 ops/s,
-3.5x OpenSSL 4.0.3) and verify (12,228 vs 6,369, 1.9x). SHA3-256 is 2nd
-of 6 on this run, 12.6% behind libgcrypt and ahead of the other four —
-that pair races within this shared-vCPU host's run-to-run variance, with
-the three same-day runs spanning AMA 10.3% ahead to 12.6% behind; the
-committed row is the clean-head run under the final mechanisms, not the
-best one. Where it trails: AES-256-GCM 5th of 8 (OpenSSL's
-VAES+VPCLMULQDQ pipeline leads 10.4x; the constant-time default,
-INVARIANT-20, is the stated trade; AMA 1.56x ahead of Botan),
-ChaCha20-Poly1305 3rd of 7 (OpenSSL 3.2x), Ed25519 sign 3rd of 6
-(libsodium 1.22x — the AMA signer re-derives A = [a]B every signature,
-INVARIANT-51; the peers read the cached half), X25519 3rd of 5 (within
-1.31x of OpenSSL), P-256 3rd of 4 (OpenSSL's `ecp_nistz256` assembly,
-4.6x on signing), ML-KEM-1024 encaps/decaps 1.9x/1.5x behind OpenSSL
-4.0.3, and both PQC keygens behind at the Python plane (ML-KEM 2.1x,
-ML-DSA 3.1x) where the AMA rows alone carry the INVARIANT-41 pairwise
-consistency test — stated on the page, not netted out. The Python-plane
-rows moved materially across the three same-day runs (ML-DSA sign
-2.3x–3.6x ahead; the peer's ML-DSA keygen 3,361–5,740 ops/s), so read
-the committed figures as a run, not as constants.
+**AMA 5.0.0 at `a35078d`, 57 native rows + 12 PQC rows.** Where AMA leads
+outright on this run: SHA3-256 (1st of 6, 28.2% ahead of libgcrypt),
+Ed25519 verify (1st of 6, 1.87x libsodium), secp256k1 ECDSA sign (1st of
+3, 1.48x Botan, 3.0x OpenSSL) and verify (1st of 3, 1.12x OpenSSL),
+ML-DSA-65 sign (4,053 vs 1,784 ops/s, 2.3x OpenSSL 4.0.3) and verify
+(15,435 vs 7,596, 2.0x). Three rows race within this shared-vCPU host's
+run-to-run variance and their committed ranks are this run's draw, not
+stable facts — the four same-day passes span: SHA3-256 vs libgcrypt from
+12.6% behind to 28.2% ahead (1st on three of four), HMAC-SHA3-256 2nd of
+4 here at 3.1% behind libgcrypt (1st on the other three), Ed25519 sign
+2nd of 6 here at 1.09x behind libsodium (3rd on the other three; the AMA
+signer re-derives A = [a]B every signature, INVARIANT-51, where the
+peers read the cached half). Where it trails: AES-256-GCM 5th of 8
+(OpenSSL's VAES+VPCLMULQDQ pipeline leads 7.6x on this run; the
+constant-time default, INVARIANT-20, is the stated trade; AMA 1.84x
+ahead of Botan), ChaCha20-Poly1305 3rd of 7 (OpenSSL 3.2x), X25519 3rd
+of 5 (within 1.29x of OpenSSL), P-256 3rd of 4 (OpenSSL's `ecp_nistz256`
+assembly, 4.6x on signing), ML-KEM-1024 encaps/decaps 2.2x/1.6x behind
+OpenSSL 4.0.3, and both PQC keygens behind at the Python plane (ML-KEM
+2.2x, ML-DSA 3.4x) where the AMA rows alone carry the INVARIANT-41
+pairwise consistency test — stated on the page, not netted out. The
+Python-plane rows also moved materially across the four runs (ML-DSA
+sign 2.3x–3.6x ahead), so read every committed figure as a run.
 
-**Four mechanisms hardened with the re-measure.** The PQC harness
+**The provenance mechanisms hardened with the re-measure.****The provenance mechanisms hardened with the re-measure.** The PQC harness
 hardcoded "OpenSSL 4.0.1" into every peer row; it now labels rows from
 `openssl_version_text()` of the library it actually linked (this run:
 OpenSSL 4.0.3, via the cryptography 50.0.2 wheel) and records both in
@@ -829,11 +829,22 @@ the compiled object a stale build tree could supply — the provenance
 block pins the loaded backend by its mapped-bytes SHA3-256 with its
 digest-matched build configuration (the efficacy trailer's evidence
 rule), and an unpinnable artifact disowns the commit outright. And
-after a review finding on `8a26498` — a stamp that hashes a
-caller-supplied path proves nothing about what the loader actually
-mapped — the C harness itself records `loaded_library`:
-`dladdr(ama_sha3_256)` names the module that provided the symbol its
-process called, that library's own SHA3 digests its file, and the
-stamper refuses the attribution unless that harness-recorded object is
-byte-identical to the attested backend; the committed record carries
-`byte_identical_to_loaded_backend: true` from that path.
+after review findings on `8a26498` and `f0582cf` — a stamp that hashes
+a caller-supplied path proves nothing about what the loader actually
+mapped, and a pathname alone is not a mapping, since a POSIX mapping
+survives rename/replacement — the C harness itself records
+`loaded_library`: `dladdr(ama_sha3_256)` names the module that provided
+the symbol its process called, the bytes are hashed from an open
+descriptor whose device and inode must equal what `/proc/self/maps`
+records for the mapping containing the symbol (the Python loader's
+mapped-bytes rule, applied to the C plane), and the stamper refuses the
+attribution unless that harness-recorded object is byte-identical to
+the attested backend; the committed record carries
+`byte_identical_to_loaded_backend: true` from that path. Three more
+closures from the `f0582cf` review: `multi_library_bench.cpp` is a
+measured build path (a dirty harness disowns the commit); a pinned
+artifact whose build configuration no tree digest-matches is demoted
+exactly like an unpinned artifact (a figure does not publish without
+its build flags, AGENTS.md section 8 item 7); and the efficacy table's
+regeneration fails closed on the same rule instead of writing
+'unrecorded' trailer lines — every refusal mutation-pinned.
