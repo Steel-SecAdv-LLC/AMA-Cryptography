@@ -316,3 +316,46 @@ def constant_time_equality(
         return cls
 
     return apply
+
+
+_H = TypeVar("_H")
+
+
+class ScrubOnRaise:
+    """Zero every secret a code path has minted if that path raises.
+
+    A function that draws or derives secrets and then runs checks that can
+    still refuse drops them intact on the refusal: nothing owns them yet, and
+    an exception gives no later point at which to zero them (INVARIANT-6,
+    every exit path).  Register each secret as it is minted
+    (``secret = held(...)``): a ``bytearray``, a list of them, or an object
+    with a ``wipe()`` method such as a keypair.  On a clean exit nothing is
+    touched, because the result has taken ownership; on an exception all of
+    it is zeroed before the exception propagates.
+
+    Register only what this path minted.  A secret the caller supplied is the
+    caller's, and zeroing it on the way out of a failed call would destroy
+    their key.
+    """
+
+    __slots__ = ("_held",)
+
+    def __init__(self) -> None:
+        self._held: list[Any] = []
+
+    def __call__(self, secret: _H) -> _H:
+        self._held.append(secret)
+        return secret
+
+    def __enter__(self) -> ScrubOnRaise:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc_type is None:
+            return
+        for secret in self._held:
+            wipe = getattr(secret, "wipe", None)
+            if callable(wipe):
+                wipe()
+            else:
+                _zero(secret)

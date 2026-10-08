@@ -43,6 +43,7 @@ from ama_cryptography._module_state import secure_token_bytearray, secure_token_
 from ama_cryptography._package_transcript import canonical as _canonical
 from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography._secret_material import (
+    ScrubOnRaise,
     SecretBytes,
     SecretMaterial,
     constant_time_equality,
@@ -2935,97 +2936,8 @@ def create_crypto_package(
     # and each provider's .sign() would otherwise recompute it independently.
     _precomputed_hash = bytes.fromhex(content_hash)
 
-    # ========================================================================
-    # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
-    # ========================================================================
-    # INVARIANT-41: key material comes from the health-tested, error-state-gated
-    # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
-    hmac_key = secure_token_bytearray(32)  # 256-bit HMAC key
-    hmac_tag = _hmac_sha3_256(hmac_key, content)
-
-    # ========================================================================
-    # LAYER 3: Digital Signature — Hybrid Ed25519 + ML-DSA-65
-    # ========================================================================
-    keypairs: Dict[str, KeyPair] = {}
-    sphincs_signature: Optional[Signature] = None
-    kem_ciphertext: Optional[bytes] = None
-    kem_shared_secret: Optional[SecretBytes] = None
-    kem_commitment: Optional[str] = None
-
-    # Generate primary signature (with 3R timing instrumentation)
-    primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
-    if config.signing_keypair is not None:
-        if (
-            not isinstance(config.signing_keypair, (tuple, list))
-            or len(config.signing_keypair) != 2
-        ):
-            raise TypeError(
-                "signing_keypair must be a (public_key, secret_key) pair of two "
-                "bytes values (tuple, or the equivalent list)"
-            )
-        _pk, _sk = config.signing_keypair
-        # The secret half may be a bytearray: every keygen in this library
-        # returns one, so its holder can wipe it (INVARIANT-6).
-        if not isinstance(_pk, bytes) or not isinstance(_sk, (bytes, bytearray)):
-            raise TypeError("signing_keypair must be a tuple of (bytes, bytes or bytearray)")
-        if len(_pk) == 0 or len(_sk) == 0:
-            raise ValueError("signing_keypair keys must be non-empty")
-        from ama_cryptography.secure_memory import constant_time_compare
-
-        if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
-            _sk, b"\x00" * len(_sk)
-        ):
-            raise ValueError("signing_keypair keys must not be all-zero")
-        primary_keypair = KeyPair(
-            public_key=_pk,
-            secret_key=_sk,
-            algorithm=config.signature_algorithm,
-            metadata={"source": "pre-generated"},
-        )
-        _signing_secret: SecretBytes = _normalized_signing_secret(config, _pk, _sk)
-    else:
-        primary_keypair = primary_crypto.generate_keypair()
-        _signing_secret = primary_keypair.secret_key
-    keypairs[config.signature_algorithm.name] = primary_keypair
-    # The signature itself is produced at the END of this function, over the
-    # finished package's transcript rather than over `content`.  Signing here
-    # — before the add-ons, the timestamp and the metadata exist — is what
-    # left every one of them outside the signature (2026-09 audit, A-2): an
-    # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
-    # still verified as fully valid.  See `package_transcript`.
-
-    # Optional add-on: SPHINCS+ secondary signature
-    if config.use_sphincs:
-        if not SPHINCS_AVAILABLE:
-            raise SphincsUnavailableError(
-                "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
-                "&& cmake --build build"
-            )
-        sphincs_provider = SphincsProvider()
-        sphincs_keypair = sphincs_provider.generate_keypair()
-        _t0 = time.perf_counter_ns()
-        sphincs_signature = sphincs_provider.sign(
-            content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
-        )
-        _sphincs_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation(
-            "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
-        )
-        _monitor.record_operation_event(
-            "sphincs_sign",
-            key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
-        )
-        keypairs["SPHINCS_256F"] = sphincs_keypair
-
-    # ========================================================================
-    # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
-    # ========================================================================
-    # INVARIANT-41: health-tested, error-state-gated draw (see above).
-    master_secret = secure_token_bytearray(32)  # 256-bit master secret
-    hkdf_salt = secure_token_bytes(32)
-    hkdf_info = b"ama_cryptography_crypto_package_v1"
-    derived_keys: List[SecretBytes] = []
+    # Every refusal that depends only on the configuration comes before the
+    # first secret is drawn, so a refused call mints nothing (PR #415 review).
     if config.num_derived_keys < 1:
         # Layer 4 requires at least one derived key: verify_crypto_package
         # fails closed on an empty derived_keys list, so a package built with
@@ -3036,110 +2948,207 @@ def create_crypto_package(
             f"num_derived_keys must be at least 1, got {config.num_derived_keys}: "
             f"Layer 4 (HKDF key derivation) cannot be verified without one."
         )
-    for i in range(config.num_derived_keys):
-        dk = _hkdf_sha3_256(
-            ikm=master_secret,
-            length=32,
-            salt=hkdf_salt,
-            info=hkdf_info + b":" + str(i).encode(),
+    if config.use_sphincs and not SPHINCS_AVAILABLE:
+        raise SphincsUnavailableError(
+            "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
+            "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+            "&& cmake --build build"
         )
-        derived_keys.append(dk)
+    if config.use_kyber and config.include_kem and not KYBER_AVAILABLE:
+        raise KyberUnavailableError(
+            "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
+            "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+            "&& cmake --build build"
+        )
 
-    # ========================================================================
-    # OPTIONAL ADD-ON: Kyber-1024 Key Encapsulation Mechanism
-    # ========================================================================
-    if config.use_kyber and config.include_kem:
-        if not KYBER_AVAILABLE:
-            raise KyberUnavailableError(
-                "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
-                "&& cmake --build build"
+    # Each secret this call mints is registered as it is minted and zeroed if
+    # anything later raises -- a refused signing key, a timestamp failure, the
+    # signature itself.  A caller-supplied signing key is not registered: it
+    # is the caller's (PR #415 review).
+    with ScrubOnRaise() as held:
+        # ========================================================================
+        # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
+        # ========================================================================
+        # INVARIANT-41: key material comes from the health-tested, error-state-gated
+        # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
+        hmac_key = held(secure_token_bytearray(32))  # 256-bit HMAC key
+        hmac_tag = _hmac_sha3_256(hmac_key, content)
+
+        # ========================================================================
+        # LAYER 3: Digital Signature — Hybrid Ed25519 + ML-DSA-65
+        # ========================================================================
+        keypairs: Dict[str, KeyPair] = {}
+        sphincs_signature: Optional[Signature] = None
+        kem_ciphertext: Optional[bytes] = None
+        kem_shared_secret: Optional[SecretBytes] = None
+        kem_commitment: Optional[str] = None
+
+        # Generate primary signature (with 3R timing instrumentation)
+        primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
+        if config.signing_keypair is not None:
+            if (
+                not isinstance(config.signing_keypair, (tuple, list))
+                or len(config.signing_keypair) != 2
+            ):
+                raise TypeError(
+                    "signing_keypair must be a (public_key, secret_key) pair of two "
+                    "bytes values (tuple, or the equivalent list)"
+                )
+            _pk, _sk = config.signing_keypair
+            # The secret half may be a bytearray: every keygen in this library
+            # returns one, so its holder can wipe it (INVARIANT-6).
+            if not isinstance(_pk, bytes) or not isinstance(_sk, (bytes, bytearray)):
+                raise TypeError("signing_keypair must be a tuple of (bytes, bytes or bytearray)")
+            if len(_pk) == 0 or len(_sk) == 0:
+                raise ValueError("signing_keypair keys must be non-empty")
+            from ama_cryptography.secure_memory import constant_time_compare
+
+            if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
+                _sk, b"\x00" * len(_sk)
+            ):
+                raise ValueError("signing_keypair keys must not be all-zero")
+            primary_keypair = KeyPair(
+                public_key=_pk,
+                secret_key=_sk,
+                algorithm=config.signature_algorithm,
+                metadata={"source": "pre-generated"},
             )
-        kyber_provider = KyberProvider()
-        kyber_keypair = kyber_provider.generate_keypair()
+            _signing_secret: SecretBytes = _normalized_signing_secret(config, _pk, _sk)
+        else:
+            primary_keypair = held(primary_crypto.generate_keypair())
+            _signing_secret = primary_keypair.secret_key
+        keypairs[config.signature_algorithm.name] = primary_keypair
+        # The signature itself is produced at the END of this function, over the
+        # finished package's transcript rather than over `content`.  Signing here
+        # — before the add-ons, the timestamp and the metadata exist — is what
+        # left every one of them outside the signature (2026-09 audit, A-2): an
+        # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
+        # still verified as fully valid.  See `package_transcript`.
+
+        # Optional add-on: SPHINCS+ secondary signature
+        if config.use_sphincs:
+            sphincs_provider = SphincsProvider()
+            sphincs_keypair = held(sphincs_provider.generate_keypair())
+            _t0 = time.perf_counter_ns()
+            sphincs_signature = sphincs_provider.sign(
+                content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
+            )
+            _sphincs_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation(
+                "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
+            )
+            _monitor.record_operation_event(
+                "sphincs_sign",
+                key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
+            )
+            keypairs["SPHINCS_256F"] = sphincs_keypair
+
+        # ========================================================================
+        # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
+        # ========================================================================
+        # INVARIANT-41: health-tested, error-state-gated draw (see above).
+        master_secret = held(secure_token_bytearray(32))  # 256-bit master secret
+        hkdf_salt = secure_token_bytes(32)
+        hkdf_info = b"ama_cryptography_crypto_package_v1"
+        derived_keys: List[SecretBytes] = held([])
+        for i in range(config.num_derived_keys):
+            dk = _hkdf_sha3_256(
+                ikm=master_secret,
+                length=32,
+                salt=hkdf_salt,
+                info=hkdf_info + b":" + str(i).encode(),
+            )
+            derived_keys.append(dk)
+
+        # ========================================================================
+        # OPTIONAL ADD-ON: Kyber-1024 Key Encapsulation Mechanism
+        # ========================================================================
+        if config.use_kyber and config.include_kem:
+            kyber_provider = KyberProvider()
+            kyber_keypair = held(kyber_provider.generate_keypair())
+            _t0 = time.perf_counter_ns()
+            encapsulated = held(kyber_provider.encapsulate(kyber_keypair.public_key))
+            _encaps_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation(
+                "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+            )
+            _monitor.record_operation_event(
+                "kyber_encaps",
+                key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
+            )
+            kem_ciphertext = encapsulated.ciphertext
+            kem_shared_secret = encapsulated.shared_secret
+            kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
+            keypairs["KYBER_1024"] = kyber_keypair
+
+        # ========================================================================
+        # OPTIONAL ADD-ON: RFC 3161 Timestamp
+        # ========================================================================
+        timestamp_token = _acquire_timestamp(content, config)
+
+        # Build metadata
+        metadata: Dict[str, Any] = {
+            "signature_algorithm": config.signature_algorithm.name,
+            "sphincs_enabled": config.use_sphincs,
+            "kyber_enabled": config.use_kyber and config.include_kem,
+            "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
+            "num_derived_keys": len(derived_keys),
+            "pqc_status": get_pqc_capabilities()["status"],
+            "defense_layers": 4,
+            "multi_layer_defense": True,
+            # Signed stand-in for the KEM shared secret; None without the add-on.
+            "kem_shared_secret_commitment": kem_commitment,
+            # Signed stand-in for the Layer-4 derived keys (and, through them, the
+            # master secret): the keys are secrets the redacted form strips.
+            "derived_keys_commitment": _derived_keys_commitment(derived_keys),
+        }
+
+        # ========================================================================
+        # LAYER 3, completed: sign the finished package's transcript
+        # ========================================================================
+        # The package is assembled first with a placeholder signature, the
+        # transcript is taken from THE SAME function the verifier will call, and
+        # the real signature replaces the placeholder.  `package_transcript` never
+        # reads `primary_signature`, so the placeholder cannot influence what is
+        # signed; `test_crypto_package_transcript.py` pins that independently.
+        #
+        # Assembling the object rather than passing a dozen locals to a parallel
+        # builder is deliberate: a second construction site is a second thing that
+        # can drift out of step with the verifier, and the two agreeing is the
+        # entire property being bought here.
+        package = CryptoPackageResult(
+            content_hash=content_hash,
+            hmac_key=hmac_key,
+            hmac_tag=hmac_tag,
+            primary_signature=_unsigned_placeholder(config.signature_algorithm),
+            sphincs_signature=sphincs_signature,
+            derived_keys=derived_keys,
+            hkdf_salt=hkdf_salt,
+            hkdf_master_secret=master_secret,
+            hkdf_info=hkdf_info,
+            timestamp=timestamp_token,
+            kem_ciphertext=kem_ciphertext,
+            kem_shared_secret=kem_shared_secret,
+            keypairs=keypairs,
+            metadata=metadata,
+        )
+        signed_transcript = package_transcript(package, _precomputed_hash)
         _t0 = time.perf_counter_ns()
-        encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
-        _encaps_ns = time.perf_counter_ns() - _t0
+        package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
+        _sign_ns = time.perf_counter_ns() - _t0
         _monitor.monitor_crypto_operation(
-            "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+            "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
         )
+        # INVARIANT-30 companion signal.  Wired at the sites that are already
+        # instrumented rather than pushed down into the providers, so no new call
+        # path acquires a lock and the hot primitives stay untouched.  The
+        # fingerprint is a slice of the PUBLIC key — it lets the detector tell
+        # ephemeral-identity-per-artifact churn from a hot loop over one key.
         _monitor.record_operation_event(
-            "kyber_encaps",
-            key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
+            f"{config.signature_algorithm.name.lower()}_sign",
+            key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
         )
-        kem_ciphertext = encapsulated.ciphertext
-        kem_shared_secret = encapsulated.shared_secret
-        kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
-        keypairs["KYBER_1024"] = kyber_keypair
-
-    # ========================================================================
-    # OPTIONAL ADD-ON: RFC 3161 Timestamp
-    # ========================================================================
-    timestamp_token = _acquire_timestamp(content, config)
-
-    # Build metadata
-    metadata: Dict[str, Any] = {
-        "signature_algorithm": config.signature_algorithm.name,
-        "sphincs_enabled": config.use_sphincs,
-        "kyber_enabled": config.use_kyber and config.include_kem,
-        "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
-        "num_derived_keys": len(derived_keys),
-        "pqc_status": get_pqc_capabilities()["status"],
-        "defense_layers": 4,
-        "multi_layer_defense": True,
-        # Signed stand-in for the KEM shared secret; None without the add-on.
-        "kem_shared_secret_commitment": kem_commitment,
-        # Signed stand-in for the Layer-4 derived keys (and, through them, the
-        # master secret): the keys are secrets the redacted form strips.
-        "derived_keys_commitment": _derived_keys_commitment(derived_keys),
-    }
-
-    # ========================================================================
-    # LAYER 3, completed: sign the finished package's transcript
-    # ========================================================================
-    # The package is assembled first with a placeholder signature, the
-    # transcript is taken from THE SAME function the verifier will call, and
-    # the real signature replaces the placeholder.  `package_transcript` never
-    # reads `primary_signature`, so the placeholder cannot influence what is
-    # signed; `test_crypto_package_transcript.py` pins that independently.
-    #
-    # Assembling the object rather than passing a dozen locals to a parallel
-    # builder is deliberate: a second construction site is a second thing that
-    # can drift out of step with the verifier, and the two agreeing is the
-    # entire property being bought here.
-    package = CryptoPackageResult(
-        content_hash=content_hash,
-        hmac_key=hmac_key,
-        hmac_tag=hmac_tag,
-        primary_signature=_unsigned_placeholder(config.signature_algorithm),
-        sphincs_signature=sphincs_signature,
-        derived_keys=derived_keys,
-        hkdf_salt=hkdf_salt,
-        hkdf_master_secret=master_secret,
-        hkdf_info=hkdf_info,
-        timestamp=timestamp_token,
-        kem_ciphertext=kem_ciphertext,
-        kem_shared_secret=kem_shared_secret,
-        keypairs=keypairs,
-        metadata=metadata,
-    )
-    signed_transcript = package_transcript(package, _precomputed_hash)
-    _t0 = time.perf_counter_ns()
-    package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
-    _sign_ns = time.perf_counter_ns() - _t0
-    _monitor.monitor_crypto_operation(
-        "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
-    )
-    # INVARIANT-30 companion signal.  Wired at the sites that are already
-    # instrumented rather than pushed down into the providers, so no new call
-    # path acquires a lock and the hot primitives stay untouched.  The
-    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
-    # ephemeral-identity-per-artifact churn from a hot loop over one key.
-    _monitor.record_operation_event(
-        f"{config.signature_algorithm.name.lower()}_sign",
-        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
-    )
-    return package
+        return package
 
 
 def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:

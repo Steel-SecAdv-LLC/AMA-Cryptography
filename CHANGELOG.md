@@ -36,10 +36,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Review round on `8f61a789`: an out-of-band verifier blind below the top level, secrets dropped on refused imports — 2026-10-08
 
-Nine Copilot findings and two CodeQL alerts on `8f61a789`, then Copilot's
-review of `6cc56f09`: two new findings and three it had missed earlier. Each
-was reproduced before it was fixed; every guard below is PIN by mutation
-unless marked otherwise.
+Nine Copilot findings and two CodeQL alerts on `8f61a789`; Copilot's review
+of `6cc56f09` (two new findings, three it had missed earlier); and its review
+of `f300f6f7`, four findings of one class, which was then swept for the
+rest. Each was reproduced before it was fixed; every guard below is PIN by
+mutation unless marked otherwise.
 
 - **`tools/verify_install_oob.py` passed a tree with a planted subdirectory
   module** (High: a gate that cannot detect what it claims). Its package
@@ -93,6 +94,34 @@ unless marked otherwise.
 - **Ascon keys were immutable.** `ascon.generate_key()` returned `bytes`, and
   both AEAD wrappers copied a `bytearray` key into `bytes` before calling C.
   The key is now drawn into a `bytearray` and borrowed in place.
+- **Secrets minted on a path that then raised were dropped intact**
+  (INVARIANT-6, every exit path). Copilot found four such paths. A sweep of
+  every `secure_token_bytearray` call site (the Python layer's own secret
+  draws) and of the pairwise-test guard found one more. The thirteen native
+  wrappers that hand back a secret (`_secret_out`/`_take_secret` sites) were
+  read too: each already zeroes its output buffer on every exit, in a
+  `finally` or an exception handler (checked by inspection, not mutation):
+  - `secure_random_fill` looked up the error state, the entropy source and
+    the digest kernel before its zeroing guard, so a refused draw left the
+    caller's buffer as it was. All three now run inside the guard.
+  - The pairwise-test guard zeroed one buffer, but a FROST dealer's shares
+    are a list; it now zeroes each one. The dealer's own round trip also
+    zeroes nonce pairs committed before a later step fails.
+  - The BIP32 master and child pairwise tests zeroed the key, not the chain
+    code minted with it.
+  - `create_crypto_package` drew its HMAC key and master secret before
+    refusing `num_derived_keys < 1` or a missing SLH-DSA/ML-KEM backend.
+    Those refusals now come first, and every secret the call mints (HMAC
+    key, master secret, derived keys, generated keypairs, the KEM shared
+    secret) is zeroed if anything later raises. A caller-supplied signing
+    key is not touched (PIN against over-scrubbing).
+  - The sweep's find: `generate_key_management_system` kept derived key 0
+    and dropped keys 1 (the Ed25519 seed, which the keypair copies) and 2
+    (never used) intact on every successful call. They are now zeroed, and
+    a failure after the root draw zeroes everything minted so far.
+
+  One mechanism serves all of these: `_secret_material.ScrubOnRaise`, which
+  `key_formats` already used. Thirteen mutants, all killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.

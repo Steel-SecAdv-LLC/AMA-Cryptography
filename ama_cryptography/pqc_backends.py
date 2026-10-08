@@ -68,6 +68,7 @@ from ama_cryptography._module_state import (
 # at module scope and reaches this module lazily from inside the KAT functions,
 # so this top-level import does not close a cycle.
 from ama_cryptography._secret_material import (
+    ScrubOnRaise,
     SecretMaterial,
     constant_time_equality,
     finalize_secret,
@@ -9858,34 +9859,45 @@ def frost_keygen_trusted_dealer(
     def _frost_roundtrip_sign(message: bytes, dealt_shares: list) -> bytes:
         signer_shares = dealt_shares[:threshold]
         indices = bytes(range(1, threshold + 1))
-        nonces = []
+        nonces: list = []
         commitment_list = []
-        for share in signer_shares:
-            nonce, commitment = frost_round1_commit(share)
-            nonces.append(nonce)
-            commitment_list.append(commitment)
-        commitments = b"".join(commitment_list)
-        # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
-        # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
-        # loop consumes each exactly once and none survives the closure.
-        sig_shares = b"".join(
-            frost_round2_sign(
-                message, signer_shares[i], i + 1, nonces[i], commitments, indices, threshold, gpk
+        # Round 2 consumes each nonce pair; one committed before a later
+        # commit or signing step fails would otherwise be dropped intact.
+        with ScrubOnRaise() as held:
+            held(nonces)
+            for share in signer_shares:
+                nonce, commitment = frost_round1_commit(share)
+                nonces.append(nonce)
+                commitment_list.append(commitment)
+            commitments = b"".join(commitment_list)
+            # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
+            # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
+            # loop consumes each exactly once and none survives the closure.
+            sig_shares = b"".join(
+                frost_round2_sign(
+                    message,
+                    signer_shares[i],
+                    i + 1,
+                    nonces[i],
+                    commitments,
+                    indices,
+                    threshold,
+                    gpk,
+                )
+                for i in range(threshold)
             )
-            for i in range(threshold)
-        )
-        # INVARIANT-49: aggregation verifies every share against the RFC 9591
-        # section 5.3 relation, which needs each signer's PUBLIC key share —
-        # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
-        # That makes the pairwise consistency test strictly stronger than it
-        # was: a dealer that mints a secret half not matching the public half
-        # it publishes now fails at aggregation with the culprit named,
-        # instead of producing a signature that only the final Ed25519 verify
-        # rejects.
-        public_shares = b"".join(share[32:64] for share in signer_shares)
-        return frost_aggregate(
-            sig_shares, commitments, public_shares, indices, threshold, message, gpk
-        )
+            # INVARIANT-49: aggregation verifies every share against the RFC 9591
+            # section 5.3 relation, which needs each signer's PUBLIC key share —
+            # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
+            # That makes the pairwise consistency test strictly stronger than it
+            # was: a dealer that mints a secret half not matching the public half
+            # it publishes now fails at aggregation with the culprit named,
+            # instead of producing a signature that only the final Ed25519 verify
+            # rejects.
+            public_shares = b"".join(share[32:64] for share in signer_shares)
+            return frost_aggregate(
+                sig_shares, commitments, public_shares, indices, threshold, message, gpk
+            )
 
     pairwise_test_signature(
         _frost_roundtrip_sign,

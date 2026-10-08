@@ -489,12 +489,15 @@ def secure_random_fill(buf: Union[bytearray, memoryview]) -> None:
     if view.readonly or not view.c_contiguous:
         raise TypeError("secure_random_fill needs a writable, contiguous buffer")
     view = view.cast("B")
-    check_crypto_permitted()
-    fill = entropy_source()
-    digest_fn = _resolve_native("native_sha256", _health_digest, "health-digest kernel")
     n = view.nbytes
     scratch: Optional[bytearray] = None
     try:
+        # Inside the guard: an error-state refusal, a missing entropy source
+        # or a missing digest kernel would otherwise raise with the caller's
+        # buffer still holding whatever it held before (PR #415 review).
+        check_crypto_permitted()
+        fill = entropy_source()
+        digest_fn = _resolve_native("native_sha256", _health_digest, "health-digest kernel")
         if n >= _RNG_HEALTH_SIZE:
             # A bytearray goes to the source as itself, which borrows it
             # without the cast view; ``view`` stays for the zeroing below.
@@ -602,7 +605,8 @@ class _KeyReleasedOnlyIfConsistent:
     (INVARIANT-6, every exit path; INVARIANT-41).  Until 2026-10-08 such a key
     was dropped intact at all twenty call sites; this is the one place they
     share.  A ``bytearray``, a writable ``memoryview`` or a ctypes buffer is
-    zeroed; ``bytes`` cannot be, and is left to its holder.
+    zeroed, and so is each one in a list or tuple; ``bytes`` cannot be, and
+    is left to its holder.
     """
 
     __slots__ = ("_key",)
@@ -616,13 +620,21 @@ class _KeyReleasedOnlyIfConsistent:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         if exc_type is None:
             return
-        key = self._key
-        if isinstance(key, bytearray):
-            _zero(memoryview(key))
-        elif isinstance(key, memoryview) and not key.readonly:
-            _zero(key.cast("B"))
-        elif isinstance(key, ctypes.Array):
-            ctypes.memset(key, 0, ctypes.sizeof(key))
+        _zero_released_key(self._key)
+
+
+def _zero_released_key(key: Any) -> None:
+    """Zero ``key`` in place, or each element of a list or tuple of them (a
+    FROST dealer's shares are a list: PR #415 review)."""
+    if isinstance(key, bytearray):
+        _zero(memoryview(key))
+    elif isinstance(key, memoryview) and not key.readonly:
+        _zero(key.cast("B"))
+    elif isinstance(key, ctypes.Array):
+        ctypes.memset(key, 0, ctypes.sizeof(key))
+    elif isinstance(key, (list, tuple)):
+        for item in key:
+            _zero_released_key(item)
 
 
 def pairwise_test_signature(

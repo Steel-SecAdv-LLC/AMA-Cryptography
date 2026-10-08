@@ -67,6 +67,7 @@ if TYPE_CHECKING:
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
 from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography._secret_material import (
+    ScrubOnRaise,
     SecretBytes,
     SecretMaterial,
     constant_time_equality,
@@ -790,49 +791,60 @@ def generate_key_management_system(
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
-    # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
-    master_secret = secure_token_bytearray(32)
+    # Every secret minted below is zeroed if a later step raises; on success
+    # the returned system owns them (PR #415 review).
+    with ScrubOnRaise() as held:
+        # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
+        master_secret = held(secure_token_bytearray(32))
 
-    derived_keys, hkdf_salt = derive_keys(
-        master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
-    )
-    hmac_key = derived_keys[0]
-    ed25519_seed = derived_keys[1]
+        derived_keys, hkdf_salt = derive_keys(
+            master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
+        )
+        held(derived_keys)
+        hmac_key = derived_keys[0]
+        ed25519_seed = derived_keys[1]
 
-    ed25519_keypair = generate_ed25519_keypair(ed25519_seed)
+        ed25519_keypair = held(generate_ed25519_keypair(ed25519_seed))
 
-    dilithium_keypair = None
-    quantum_signatures_enabled = False
-    if DILITHIUM_AVAILABLE:
-        try:
-            dilithium_keypair = generate_dilithium_keypair()
-            quantum_signatures_enabled = True
-        except QuantumSignatureUnavailableError:
+        dilithium_keypair = None
+        quantum_signatures_enabled = False
+        if DILITHIUM_AVAILABLE:
+            try:
+                dilithium_keypair = held(generate_dilithium_keypair())
+                quantum_signatures_enabled = True
+            except QuantumSignatureUnavailableError:
+                _logger.warning(
+                    "Quantum-resistant signatures disabled. "
+                    "System will use Ed25519 classical signatures only. "
+                    "To enable quantum resistance, build native C library."
+                )
+        else:
             _logger.warning(
                 "Quantum-resistant signatures disabled. "
                 "System will use Ed25519 classical signatures only. "
-                "To enable quantum resistance, build native C library."
+                "To enable quantum resistance, build native C library: "
+                "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
-    else:
-        _logger.warning(
-            "Quantum-resistant signatures disabled. "
-            "System will use Ed25519 classical signatures only. "
-            "To enable quantum resistance, build native C library: "
-            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-        )
 
-    return KeyManagementSystem(
-        master_secret=master_secret,
-        hmac_key=hmac_key,
-        hkdf_salt=hkdf_salt,
-        ed25519_keypair=ed25519_keypair,
-        dilithium_keypair=dilithium_keypair,
-        creation_date=datetime.now(timezone.utc).isoformat(),
-        rotation_schedule="quarterly",
-        version="2.1",
-        ethical_vector=ethical_vector,
-        quantum_signatures_enabled=quantum_signatures_enabled,
-    )
+        kms = KeyManagementSystem(
+            master_secret=master_secret,
+            hmac_key=hmac_key,
+            hkdf_salt=hkdf_salt,
+            ed25519_keypair=ed25519_keypair,
+            dilithium_keypair=dilithium_keypair,
+            creation_date=datetime.now(timezone.utc).isoformat(),
+            rotation_schedule="quarterly",
+            version="2.1",
+            ethical_vector=ethical_vector,
+            quantum_signatures_enabled=quantum_signatures_enabled,
+        )
+    # The system adopts derived key 0 as its HMAC key.  Key 1 was the Ed25519
+    # seed, which the keypair copied; key 2 is derived and never used.  Both
+    # were dropped intact on every successful call (found by the PR #415
+    # review sweep); nothing else holds them, so they are zeroed here.
+    for unused in derived_keys[1:]:
+        secure_memzero(unused)
+    return kms
 
 
 def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:

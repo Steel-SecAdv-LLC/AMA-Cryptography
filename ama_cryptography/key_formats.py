@@ -121,6 +121,9 @@ from ama_cryptography._asn1 import (
 )
 from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography._secret_material import (
+    ScrubOnRaise as _ScrubOnRaise,
+)
+from ama_cryptography._secret_material import (
     SecretBytes,
     SecretMaterial,
     constant_time_equality,
@@ -603,35 +606,6 @@ def _unhashable(cls: type[_T]) -> type[_T]:
     attribute = "__hash__"
     setattr(cls, attribute, None)
     return cls
-
-
-class _ScrubOnRaise:
-    """Zero every secret buffer an import has minted if the import raises.
-
-    A key file is refused after its secret has been sliced out of it: a bad
-    length, a mismatched public half, a seed that does not expand to the
-    expanded key.  Each slice is an independent ``bytearray`` copy of the
-    secret, and an exception drops it intact (INVARIANT-6).  Buffers are
-    registered as they are minted (``secret = held(...)``); on a clean exit
-    they are left alone, because the returned ``PrivateKey`` has adopted them.
-    """
-
-    __slots__ = ("_held",)
-
-    def __init__(self) -> None:
-        self._held: list[Any] = []
-
-    def __call__(self, buf: _T) -> _T:
-        self._held.append(buf)
-        return buf
-
-    def __enter__(self) -> _ScrubOnRaise:
-        return self
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        if exc_type is not None:
-            for buf in self._held:
-                _zero(buf)
 
 
 @_unhashable

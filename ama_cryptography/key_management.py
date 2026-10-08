@@ -34,7 +34,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, cast
 from ama_cryptography import _owner_only
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
-from ama_cryptography._secret_material import SecretBytes, SecretMaterial
+from ama_cryptography._secret_material import ScrubOnRaise, SecretBytes, SecretMaterial
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
@@ -391,8 +391,12 @@ class HDKeyDerivation(SecretMaterial):
             )
 
         # FIPS 140-3 pairwise consistency test — the master key is the root
-        # secp256k1 keypair this hierarchy mints (INVARIANT-41).
-        self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
+        # secp256k1 keypair this hierarchy mints (INVARIANT-41).  The test's
+        # own guard zeroes the key on failure; the chain code is zeroed here
+        # (PR #415 review: it was dropped intact).
+        with ScrubOnRaise() as held:
+            held(chain_code)
+            self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
 
         return master_key, chain_code
 
@@ -541,7 +545,9 @@ class HDKeyDerivation(SecretMaterial):
         # still caught before release (INVARIANT-41).  The label deliberately
         # omits the derivation index: a failure writes the label into
         # operator logs, and wallet-structure metadata does not belong there.
-        self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
+        with ScrubOnRaise() as held:
+            held(child_chain)
+            self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
 
         return child_key, child_chain
 

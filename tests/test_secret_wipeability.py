@@ -704,9 +704,17 @@ def test_every_secret_container_compares_in_constant_time(cls: type) -> None:
 
 @pytest.fixture
 def zeroed_values(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
-    """The contents of every bytearray ``key_formats`` zeroes, just before."""
+    """The contents of every bytearray ``key_formats`` zeroes, just before:
+    directly (its ``_zero``) and through ``ScrubOnRaise``.
+
+    Only those.  ``_secret_material``'s ``_zero`` also serves every
+    finalizer, and a test's own throwaway key built from the same seed is
+    wiped by its finalizer when it dies -- recording that made a test pass
+    with the guard under test removed (measured: three mutants survived).
+    """
     seen: list[bytes] = []
-    real = sm.zeroize  # key_formats imports it as _zero
+    _record_scrubs_only(monkeypatch, seen)
+    real = sm.zeroize
 
     def recording(value: Any) -> None:
         if isinstance(value, bytearray):
@@ -715,6 +723,28 @@ def zeroed_values(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
 
     monkeypatch.setattr(kf, "_zero", recording)
     return seen
+
+
+def _record_scrubs_only(monkeypatch: pytest.MonkeyPatch, seen: list[bytes]) -> None:
+    """Record what ``ScrubOnRaise`` zeroes, and nothing a finalizer does."""
+    scrubbing = [False]
+    real_exit = sm.ScrubOnRaise.__exit__
+    real_zero = sm.zeroize
+
+    def exiting(self: Any, *exc: Any) -> None:
+        scrubbing[0] = True
+        try:
+            real_exit(self, *exc)
+        finally:
+            scrubbing[0] = False
+
+    def zeroing(value: Any) -> None:
+        if scrubbing[0] and isinstance(value, bytearray):
+            seen.append(bytes(value))
+        real_zero(value)
+
+    monkeypatch.setattr(sm.ScrubOnRaise, "__exit__", exiting)
+    monkeypatch.setattr(sm, "_zero", zeroing)
 
 
 def _two_p256() -> tuple[Any, Any]:
@@ -977,3 +1007,262 @@ def test_a_signing_key_changed_in_place_is_not_served_from_the_memo() -> None:
     seed[:] = memoryview(other_expanded)[:32]
     with pytest.raises(ValueError, match="signing_keypair mismatch"):
         create_crypto_package(b"after the change", config)
+
+
+# ---------------------------------------------------------------------------
+# Secrets minted on a path that later raises (PR #415, review of f300f6f7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sm_zeroed_values(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """The contents of every bytearray ``ScrubOnRaise`` zeroes, recorded just
+    before (finalizer wipes excluded: see ``zeroed_values``)."""
+    seen: list[bytes] = []
+    _record_scrubs_only(monkeypatch, seen)
+    return seen
+
+
+@pytest.mark.parametrize("step", ["check_crypto_permitted", "entropy_source", "_resolve_native"])
+def test_a_draw_refused_before_it_starts_still_zeroes_the_buffer(
+    monkeypatch: pytest.MonkeyPatch, restore_rng_state: Any, step: str
+) -> None:
+    """PIN.  The error-state check, the source lookup and the digest-kernel
+    lookup ran before the zeroing guard, so a refusal left whatever the
+    caller's buffer held.  Moving any of them back out fails its row."""
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise CryptoModuleError(f"{step} refused")
+
+    monkeypatch.setattr(ms, step, refuse)
+    buf = bytearray(b"\x5a" * 32)
+    with pytest.raises(CryptoModuleError):
+        ms.secure_random_fill(buf)
+    assert buf == bytearray(32)
+
+
+def test_the_pairwise_guard_zeroes_a_list_of_shares() -> None:
+    """PIN.  A FROST dealer's shares are a list; the guard zeroed only a
+    single buffer, so a failed test dropped every share intact.  Removing
+    the list arm of ``_zero_released_key`` fails this."""
+    shares = [bytearray(b"\x11" * 64), bytearray(b"\x22" * 64)]
+    with pytest.raises(RuntimeError):
+        with ms._KeyReleasedOnlyIfConsistent(shares):
+            raise RuntimeError("pairwise test failed")
+    assert shares == [bytearray(64), bytearray(64)]
+
+
+def test_frost_nonces_committed_before_a_failure_are_zeroed(
+    monkeypatch: pytest.MonkeyPatch, restore_rng_state: Any
+) -> None:
+    """PIN.  The dealer's round trip commits every signer's nonce pair before
+    round 2 consumes them; a failure in between dropped the unconsumed
+    pairs intact.  Removing the ``ScrubOnRaise`` from the round trip fails
+    this.  (The failure also fails the pairwise test, which zeroes the
+    shares and enters the error state -- restored by the fixture.)"""
+    committed: list[bytearray] = []
+    real_commit = pb.frost_round1_commit
+
+    def recording_commit(share: Any) -> Any:
+        nonce, commitment = real_commit(share)
+        committed.append(nonce)
+        return nonce, commitment
+
+    def failing_round2(*_args: Any, **_kwargs: Any) -> bytes:
+        raise RuntimeError("round 2 failed")
+
+    monkeypatch.setattr(pb, "frost_round1_commit", recording_commit)
+    monkeypatch.setattr(pb, "frost_round2_sign", failing_round2)
+    with pytest.raises(CryptoModuleError, match="Pairwise test failed for FROST"):
+        pb.frost_keygen_trusted_dealer(2, 3)
+    assert committed and all(not any(nonce) for nonce in committed)
+
+
+def _hd_class() -> Any:
+    return importlib.import_module("ama_cryptography.key_management").HDKeyDerivation
+
+
+def test_a_master_chain_code_is_zeroed_when_its_pairwise_test_fails(
+    monkeypatch: pytest.MonkeyPatch, sm_zeroed_values: list[bytes]
+) -> None:
+    """PIN.  The pairwise guard zeroed the master key but not the chain code
+    minted beside it.  Removing ``held(chain_code)`` fails this."""
+    hd_cls = _hd_class()
+    seed = bytes(range(64))
+    chain = bytes(pb.native_hmac_sha512_prf(b"AMA Cryptography Master Key", seed))[32:]
+
+    def failing(_key: Any, _label: str) -> None:
+        raise CryptoModuleError("pairwise test failed")
+
+    monkeypatch.setattr(hd_cls, "_pairwise_consistency_test", staticmethod(failing))
+    with pytest.raises(CryptoModuleError):
+        hd_cls(seed=seed)
+    assert chain in sm_zeroed_values
+
+
+def test_a_child_chain_code_is_zeroed_when_its_pairwise_test_fails(
+    monkeypatch: pytest.MonkeyPatch, sm_zeroed_values: list[bytes]
+) -> None:
+    """PIN, likewise for a derived child (hardened, so the HMAC input is
+    ``0x00 || k_par || ser32(i)``).  Removing ``held(child_chain)`` fails
+    this."""
+    hd_cls = _hd_class()
+    hd = hd_cls(seed=bytes(range(64)))
+    index = 0x80000000
+    data = b"\x00" + bytes(hd.master_key) + index.to_bytes(4, "big")
+    child_chain = bytes(pb.native_hmac_sha512_prf(bytes(hd.master_chain_code), data))[32:]
+
+    def failing(_key: Any, _label: str) -> None:
+        raise CryptoModuleError("pairwise test failed")
+
+    monkeypatch.setattr(hd_cls, "_pairwise_consistency_test", staticmethod(failing))
+    with pytest.raises(CryptoModuleError):
+        hd.derive_path("m/0'")
+    assert child_chain in sm_zeroed_values
+
+
+def _crypto_api() -> Any:
+    return importlib.import_module("ama_cryptography.crypto_api")
+
+
+def test_a_package_refused_by_its_configuration_draws_no_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  ``num_derived_keys < 1`` was refused after the HMAC key and the
+    master secret had been drawn.  Moving the refusal back below the draws
+    fails this."""
+    api = _crypto_api()
+    draws: list[int] = []
+    real = api.secure_token_bytearray
+
+    def counting(n: int) -> bytearray:
+        draws.append(n)
+        return bytearray(real(n))
+
+    monkeypatch.setattr(api, "secure_token_bytearray", counting)
+    with pytest.raises(ValueError, match="num_derived_keys"):
+        api.create_crypto_package(b"content", api.CryptoPackageConfig(num_derived_keys=0))
+    assert draws == []
+
+
+def test_a_package_that_fails_late_zeroes_every_secret_it_minted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  A failure after the draws -- here the timestamp step -- dropped
+    the HMAC key, the HKDF master secret, the derived keys and the generated
+    signing key intact.  Removing the ``ScrubOnRaise`` (or any registration)
+    fails this."""
+    api = _crypto_api()
+    minted: list[Any] = []
+    real_draw = api.secure_token_bytearray
+    real_hkdf = api._hkdf_sha3_256
+    real_keygen = api.AmaCryptography.generate_keypair
+
+    def drawing(n: int) -> bytearray:
+        out: bytearray = real_draw(n)
+        minted.append(out)
+        return out
+
+    def deriving(*args: Any, **kwargs: Any) -> Any:
+        out = real_hkdf(*args, **kwargs)
+        minted.append(out)
+        return out
+
+    def generating(self: Any) -> Any:
+        keypair = real_keygen(self)
+        minted.append(keypair.secret_key)
+        return keypair
+
+    def failing_timestamp(*_args: Any) -> Any:
+        raise RuntimeError("timestamp authority unreachable")
+
+    monkeypatch.setattr(api, "secure_token_bytearray", drawing)
+    monkeypatch.setattr(api, "_hkdf_sha3_256", deriving)
+    monkeypatch.setattr(api.AmaCryptography, "generate_keypair", generating)
+    monkeypatch.setattr(api, "_acquire_timestamp", failing_timestamp)
+    with pytest.raises(RuntimeError, match="timestamp"):
+        api.create_crypto_package(b"content")
+    assert len(minted) >= 5
+    assert all(isinstance(secret, bytearray) and not any(secret) for secret in minted)
+
+
+def test_a_failed_package_leaves_the_callers_signing_key_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN against over-scrubbing: a signing key the caller supplied is the
+    caller's.  Registering the pre-generated keypair fails this."""
+    api = _crypto_api()
+    public, expanded = pb.native_ed25519_keypair()
+    seed = bytearray(memoryview(expanded)[:32])
+    config = api.CryptoPackageConfig(
+        signature_algorithm=api.AlgorithmType.ED25519, signing_keypair=(public, seed)
+    )
+
+    def failing_timestamp(*_args: Any) -> Any:
+        raise RuntimeError("timestamp authority unreachable")
+
+    monkeypatch.setattr(api, "_acquire_timestamp", failing_timestamp)
+    with pytest.raises(RuntimeError):
+        api.create_crypto_package(b"content", config)
+    assert seed == bytes(expanded[:32])
+
+
+def _legacy() -> Any:
+    return importlib.import_module("ama_cryptography.legacy_compat")
+
+
+def test_a_key_management_system_zeroes_the_derived_keys_it_does_not_keep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  Of three derived keys the system keeps the first as its HMAC
+    key; the Ed25519 seed (copied by the keypair) and the unused third were
+    dropped intact on every successful call.  Removing the loop that zeroes
+    them fails this."""
+    legacy = _legacy()
+    captured: list[list[bytearray]] = []
+    real = legacy.derive_keys
+
+    def capturing(*args: Any, **kwargs: Any) -> Any:
+        keys, salt = real(*args, **kwargs)
+        captured.append(keys)
+        return keys, salt
+
+    monkeypatch.setattr(legacy, "derive_keys", capturing)
+    kms = legacy.generate_key_management_system("wipe-test")
+    keys = captured[0]
+    assert keys[0] is kms.hmac_key and any(kms.hmac_key)
+    assert not any(keys[1]) and not any(keys[2])
+
+
+def test_a_key_management_system_that_fails_late_zeroes_its_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  A failure after the root draw dropped the master secret, the
+    derived keys and the Ed25519 keypair intact.  Removing the
+    ``ScrubOnRaise`` fails this."""
+    legacy = _legacy()
+    minted: list[Any] = []
+    real_draw = legacy.secure_token_bytearray
+    real_ed = legacy.generate_ed25519_keypair
+
+    def drawing(n: int) -> bytearray:
+        out: bytearray = real_draw(n)
+        minted.append(out)
+        return out
+
+    def generating_ed(seed: Any = None) -> Any:
+        keypair = real_ed(seed)
+        minted.append(keypair.private_key)
+        return keypair
+
+    def failing_dilithium() -> Any:
+        raise RuntimeError("ML-DSA keygen failed")
+
+    monkeypatch.setattr(legacy, "secure_token_bytearray", drawing)
+    monkeypatch.setattr(legacy, "generate_ed25519_keypair", generating_ed)
+    monkeypatch.setattr(legacy, "generate_dilithium_keypair", failing_dilithium)
+    monkeypatch.setattr(legacy, "DILITHIUM_AVAILABLE", True)
+    with pytest.raises(RuntimeError, match="ML-DSA"):
+        legacy.generate_key_management_system("wipe-test")
+    assert len(minted) == 2
+    assert all(not any(secret) for secret in minted)
