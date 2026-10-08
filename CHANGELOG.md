@@ -76,6 +76,23 @@ changes compiled code.
   pull-request template's standards checklist predated most of the shipped
   primitives and now lists FIPS 203/204/205, SP 800-232, SP 800-38D and
   RFC 7748, 8439 and 9591.
+- **The regression record and its renders re-measured.**
+  `benchmarks/dashboard.html` was still the 2026-07-29 render of a v3.4.0
+  run, and `benchmark-results.json` / `benchmark-report.md` measured
+  `7836cc8`, before #407 and #412. All three are now one pass at `1d8dab6`
+  (clean tree; the documented `benchmark_runner.py` command and a
+  `benchmark_c_raw` capture taken back to back on one host), and
+  `tools/update_docs.py` carried the record into `ARCHITECTURE.md` and
+  `wiki/Performance-Benchmarks.md`. The host differs from the previous
+  record's: a 2.80 GHz Xeon with AVX-512F, BMI2 and ADX but no VAES,
+  VPCLMULQDQ or SHA-NI, so the record's dispatch line no longer selects the
+  VAES AES-GCM path and most rows read 5–15% below the 2026-09-28 figures.
+  That is a change of host, not a like-for-like comparison, so the
+  difference says nothing about code speed in either direction; the
+  regression gate passes all 20 rows. The
+  new render embeds its data payload once, so `benchmarks/README.md` and a
+  `test_dashboard_provenance.py` docstring that described the old page as
+  current are corrected.
 - **Verified current, unchanged.** Every `docs/api` module page resolves; the
   Ascon ADR's named artifacts all exist; the wiki sidebar links every page;
   the six C examples compile clean against `include/`; the five Cython

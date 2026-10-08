@@ -285,7 +285,7 @@ python3 benchmarks/benchmark_runner.py -v
 >   `benchmarks/benchmark_suite.py`, measured on the 2026-04-25 canonical bench
 >   host.
 > - The committed regression record on a 1 KB message:
->   <!-- AUTO-RECORD-OPS:hmac_sha3_256 -->262,657<!-- /AUTO-RECORD-OPS --> ops/sec on the host that record's
+>   <!-- AUTO-RECORD-OPS:hmac_sha3_256 -->237,834<!-- /AUTO-RECORD-OPS --> ops/sec on the host that record's
 >   provenance names (`benchmarks/benchmark_runner.py` →
 >   `benchmarks/benchmark-results.json`). `hmac_authenticate` takes the Cython
 >   binding when it is built and ctypes otherwise, and that record's provenance
@@ -328,31 +328,31 @@ python3 tools/update_docs.py        # regenerates the table below
 ```
 
 <!-- AUTO-BENCHMARK-TABLE-START -->
-<!-- Throughput numbers below were written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-09-28, on the host that record names (Linux-6.18.44-fc-v42-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)).  They describe THAT host: compare rows within the table, not against a different machine.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
-_Headline source: `benchmarks/benchmark-results.json` (run 2026-09-28 on Linux-6.18.44-fc-v42-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s); built with `GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)`). Regression floor: `benchmarks/baseline.json`, measured on the CI runner class named there — a floor and a throughput figure are different machines on purpose, so the gap between the columns is not headroom unless both were measured on the same host.  CI fails when measured falls more than `tolerance_percent` below floor._
+<!-- Throughput numbers below were written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-10-08, on the host that record names (Linux-6.18.44-fc-v80-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)).  They describe THAT host: compare rows within the table, not against a different machine.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
+_Headline source: `benchmarks/benchmark-results.json` (run 2026-10-08 on Linux-6.18.44-fc-v80-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s); built with `GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)`). Regression floor: `benchmarks/baseline.json`, measured on the CI runner class named there — a floor and a throughput figure are different machines on purpose, so the gap between the columns is not headroom unless both were measured on the same host.  CI fails when measured falls more than `tolerance_percent` below floor._
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Ama Sha3 256 Hash | 381,128 | 327,222 | ±45% | microbenchmark |
-| Hmac Sha3 256 | 262,657 | 215,299 | ±45% | microbenchmark |
-| Ed25519 Keygen | 12,682 | 12,368 | ±45% | microbenchmark |
-| Ed25519 Sign | 39,054 | 38,811 | ±45% | microbenchmark |
-| Ed25519 Sign Expanded | 62,709 | 61,671 | ±45% | microbenchmark |
-| Ed25519 Verify | 30,127 | 27,934 | ±45% | microbenchmark |
-| Hkdf Derive | 172,643 | 131,341 | ±45% | microbenchmark |
-| Full Package Create | 1,857.4 | 1,856 | ±45% | complex_operation |
-| Full Package Verify | 2,429.7 | 2,807 | ±45% | complex_operation |
-| Secp256K1 Ecdsa Sign | 9,301.4 | 8,068 | ±45% | microbenchmark |
-| Secp256K1 Ecdsa Verify | 3,814.7 | 3,302 | ±45% | microbenchmark |
-| Dilithium Keygen | 1,519.1 | 1,312 | ±45% | microbenchmark |
-| Dilithium Sign | 3,186.9 | 2,636 | ±45% | microbenchmark |
-| Dilithium Verify | 10,495 | 8,897 | ±45% | microbenchmark |
-| Kyber Keygen | 3,519.3 | 2,726 | ±45% | microbenchmark |
-| Kyber Encapsulate | 17,020 | 11,994 | ±45% | microbenchmark |
-| Aes 256 Gcm Encrypt | 279,062 | 224,406 | ±45% | microbenchmark |
-| Chacha20Poly1305 Encrypt | 263,653 | 227,521 | ±45% | microbenchmark |
-| X25519 Scalarmult | 19,514 | 16,876 | ±45% | microbenchmark |
-| X25519 Scalarmult Batch4 | 4,673.3 | 4,074 | ±45% | microbenchmark |
+| Ama Sha3 256 Hash | 330,310 | 327,222 | ±45% | microbenchmark |
+| Hmac Sha3 256 | 237,834 | 215,299 | ±45% | microbenchmark |
+| Ed25519 Keygen | 11,834 | 12,368 | ±45% | microbenchmark |
+| Ed25519 Sign | 36,871 | 38,811 | ±45% | microbenchmark |
+| Ed25519 Sign Expanded | 58,351 | 61,671 | ±45% | microbenchmark |
+| Ed25519 Verify | 27,214 | 27,934 | ±45% | microbenchmark |
+| Hkdf Derive | 153,696 | 131,341 | ±45% | microbenchmark |
+| Full Package Create | 1,749.3 | 1,856 | ±45% | complex_operation |
+| Full Package Verify | 1,801.5 | 2,807 | ±45% | complex_operation |
+| Secp256K1 Ecdsa Sign | 8,295.5 | 8,068 | ±45% | microbenchmark |
+| Secp256K1 Ecdsa Verify | 3,567.2 | 3,302 | ±45% | microbenchmark |
+| Dilithium Keygen | 1,367.2 | 1,312 | ±45% | microbenchmark |
+| Dilithium Sign | 2,776.5 | 2,636 | ±45% | microbenchmark |
+| Dilithium Verify | 9,584.9 | 8,897 | ±45% | microbenchmark |
+| Kyber Keygen | 3,101.5 | 2,726 | ±45% | microbenchmark |
+| Kyber Encapsulate | 15,477 | 11,994 | ±45% | microbenchmark |
+| Aes 256 Gcm Encrypt | 257,712 | 224,406 | ±45% | microbenchmark |
+| Chacha20Poly1305 Encrypt | 208,471 | 227,521 | ±45% | microbenchmark |
+| X25519 Scalarmult | 14,663 | 16,876 | ±45% | microbenchmark |
+| X25519 Scalarmult Batch4 | 3,511.8 | 4,074 | ±45% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*

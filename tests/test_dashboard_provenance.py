@@ -128,7 +128,8 @@ class TestThePayloadIsEmbeddedOnceAndStaysInItsScript:
 
     ``str.replace`` substitutes every occurrence, so each render carried a
     second copy of the whole data payload inside that ``<!-- -->`` comment
-    (the committed ``benchmarks/dashboard.html`` shows it on line 2), where a
+    (the 2026-07-29 render of ``benchmarks/dashboard.html`` showed it on line
+    2; the 2026-10-08 render carries the payload once), where a
     ``-->`` in any change-log string would have closed the comment and
     printed the rest of the JSON as page text.  The remaining copy had the
     same exposure to ``</script>``, and the chained substitutions would have

@@ -640,24 +640,24 @@ Every number below is **derived from one record** —
 
 | Operation | Target latency | Measured latency (ms/op) | Measured throughput (ops/sec) |
 |-----------|---------------:|-------------------------:|------------------------------:|
-| Package Creation (multi-layer) | < 5 ms | 0.538 | 1,857.4 |
-| Package Verification (multi-layer) | < 5 ms | 0.412 | 2,429.7 |
-| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.314 | 3,186.9 |
-| Ed25519 Sign | < 1 ms | 0.026 | 39,054 |
-| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0038 | 262,657 |
-| SHA3-256 Hash (1 KB) | < 1 ms | 0.0026 | 381,128 |
-| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0058 | 172,643 |
+| Package Creation (multi-layer) | < 5 ms | 0.572 | 1,749.3 |
+| Package Verification (multi-layer) | < 5 ms | 0.555 | 1,801.5 |
+| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.360 | 2,776.5 |
+| Ed25519 Sign | < 1 ms | 0.027 | 36,871 |
+| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0042 | 237,834 |
+| SHA3-256 Hash (1 KB) | < 1 ms | 0.0030 | 330,310 |
+| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0065 | 153,696 |
 
-**Bottleneck.** ML-DSA-65 signing costs 0.314 ms against 0.538 ms for a whole multi-layer package creation — 58% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
+**Bottleneck.** ML-DSA-65 signing costs 0.360 ms against 0.572 ms for a whole multi-layer package creation — 63% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
 
 **Provenance — everything needed to reproduce these numbers:**
 
 - **Benchmark command:** `python benchmarks/benchmark_runner.py --verbose --baseline benchmarks/baseline.json --require-runner-class x86_64 --require-populated-baseline --output benchmarks/benchmark-results.json --markdown benchmark-report.md`
-- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-28
-- **Platform:** Linux-6.18.44-fc-v42-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
+- **Source record:** `benchmarks/benchmark-results.json`, run 2026-10-08
+- **Platform:** Linux-6.18.44-fc-v80-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
 - **Build:** v5.0.0 · digest 76a4afbba5a7308b… · libama_cryptography.so
 - **Build configuration:** `GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)`
-- **Commit:** `7836cc8957d5` — clean
+- **Commit:** `1d8dab6a7164` — clean
 - **Python bindings:** 6 of 6 compiled bindings imported: dilithium_binding, ed25519_binding, hkdf_binding, hmac_binding, math_engine, sha3_binding
 - **Scope:** one run on the host named above. These are not the canonical-host figures (README, Performance Metrics) and not the CI regression floors.
 - **Units:** milliseconds per operation, computed as `1000 / ops_per_second`; the throughput column is the record's own `ops_per_second` field.
