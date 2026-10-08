@@ -537,6 +537,19 @@ def _plant_shadow(pkg: Path, case: str) -> None:
         target.mkdir()
         (target / "__init__.py").write_text("", encoding="utf-8")
         (pkg / "planted_pkg").symlink_to(target, target_is_directory=True)
+    elif case == "symlinked_namespace_dir":
+        target = pkg.parent / "elsewhere"
+        target.mkdir()
+        (target / "mod.py").write_text("", encoding="utf-8")
+        (pkg / "planted_ns").symlink_to(target, target_is_directory=True)
+    elif case in ("pycache_source", "pycache_tagless_bytecode", "pycache_extension"):
+        name = {"pycache_source": "evil.py", "pycache_tagless_bytecode": "evil.pyc"}.get(
+            case, f"evil{ext}"
+        )
+        (pkg / "__pycache__").mkdir(exist_ok=True)
+        (pkg / "__pycache__" / name).write_bytes(pyc)
+    elif case == "pycache_subdirectory":
+        (pkg / "__pycache__" / "sub").mkdir(parents=True)
     else:
         raise AssertionError(case)
 
@@ -548,6 +561,11 @@ _SHADOW_CASES = (
     "extension_below_top_level",
     "extension_over_source",
     "symlinked_package_dir",
+    "symlinked_namespace_dir",
+    "pycache_source",
+    "pycache_tagless_bytecode",
+    "pycache_extension",
+    "pycache_subdirectory",
 )
 
 
@@ -577,7 +595,7 @@ class TestImportShadowingMirrorsTheInProcessCheck:
     def test_both_copies_return_the_same_faults(self, tmp_path: Path, case: str) -> None:
         from ama_cryptography import _find_import_shadowing
 
-        if case == "symlinked_package_dir" and not hasattr(os, "symlink"):
+        if case.startswith("symlinked_") and not hasattr(os, "symlink"):
             pytest.skip("platform cannot create symlinks")
         pkg = self._minimal_tree(tmp_path)
         try:
@@ -610,10 +628,47 @@ class TestCliRefusesImportShadowing:
         assert "crypto_api/__init__.pyc: package directory shadows crypto_api.py" in result.stdout
         assert "RESULT: FAIL" in result.stdout
 
+    @pytest.mark.parametrize("planted", ["unsigned/__init__.py", "unsigned/mod.py"])
+    def test_a_planted_subdirectory_module_fails_the_run(
+        self, installed_tree: Path, planted: str
+    ) -> None:
+        """PIN.  A subpackage, or a namespace directory, holding a module the
+        signature never covered.  The out-of-band digest walked the top level
+        only, so it still equalled the signed digest and this reported PASS
+        (PR #415 review); it now walks every depth, as the signer does.
+        Reverting ``compute_package_digest`` to ``glob("*.py")`` fails this."""
+        assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
+        target = installed_tree / planted
+        target.parent.mkdir()
+        target.write_text("PLANTED = True\n", encoding="utf-8")
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
+        assert result.returncode != 0, f"stdout:\n{result.stdout}"
+        assert "MISMATCH" in result.stdout, result.stdout
+        assert "RESULT: FAIL" in result.stdout
+
 
 # ---------------------------------------------------------------------------
 # (e) tamper detection on a copied tree
 # ---------------------------------------------------------------------------
+
+
+def test_the_bytecode_pass_reaches_every_depth(tmp_path: Path) -> None:
+    """PIN.  The pass walked the top-level ``*.py`` only, like the digest; a
+    poisoned cache for a subdirectory module was never compared.  It walks
+    every depth now, as ``_self_test``'s execution-integrity stage does.
+    Reverting ``_verify_all_bytecode_caches`` to ``glob("*.py")`` fails this.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    nested = pkg / "sub" / "mod.py"
+    nested.write_text("VALUE = 1\n", encoding="utf-8")
+    _write_pyc(nested, "VALUE = 2\n")
+    failures, verified, _skipped = oob._verify_all_bytecode_caches(pkg)
+    assert verified == 0
+    assert len(failures) == 1 and "mod.py" in failures[0], failures
 
 
 def _ensure_cache(py_path: Path) -> Path:

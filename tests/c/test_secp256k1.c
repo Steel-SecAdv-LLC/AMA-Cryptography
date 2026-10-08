@@ -316,6 +316,16 @@ static int test_seckey_arithmetic(void) {
                     ama_secp256k1_seckey_tweak_add(out, NULL, one) == AMA_ERROR_INVALID_PARAM &&
                     ama_secp256k1_seckey_tweak_add(out, one, NULL) == AMA_ERROR_INVALID_PARAM,
                 "tweak_add refuses NULL arguments");
+    /* A NULL input still zeroes a non-NULL out (PR #415 review): out may hold
+     * an earlier key, and the contract is "refused => out zeroed". */
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, NULL, one) == AMA_ERROR_INVALID_PARAM &&
+                    all_zero(out, 32),
+                "NULL seckey: out zeroed");
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, one, NULL) == AMA_ERROR_INVALID_PARAM &&
+                    all_zero(out, 32),
+                "NULL tweak: out zeroed");
 
     /* Differential: 20,000 uniform pairs below n, and 2,000 pairs straddling
      * the wrap (k near n, tweak near n), against the plain reference. */

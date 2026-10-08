@@ -2420,7 +2420,8 @@ AMA_API ama_error_t ama_secp256k1_seckey_verify(const uint8_t seckey[32]);
  * @param out    Output: 32-byte big-endian sum
  * @param seckey 32-byte big-endian secret key
  * @param tweak  32-byte big-endian tweak
- * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM (out zeroed)
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM (out zeroed unless it is
+ *         NULL, including when seckey or tweak is NULL)
  */
 AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(
     uint8_t out[32],

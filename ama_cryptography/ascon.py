@@ -71,7 +71,11 @@ from typing import Any, Optional, Tuple, Union
 
 # FIPS 140-3 §4.9.2 output inhibition — see ``_require_native`` below —
 # and the health-tested CSPRNG draw for key/nonce generation.
-from ama_cryptography._module_state import check_crypto_permitted, secure_token_bytes
+from ama_cryptography._module_state import (
+    check_crypto_permitted,
+    secure_token_bytearray,
+    secure_token_bytes,
+)
 from ama_cryptography.exceptions import AmaCryptographyError
 
 __all__ = [
@@ -204,16 +208,37 @@ def _as_bytes(name: str, value: _BufferInput, expected: Optional[int] = None) ->
     return data
 
 
-def generate_key() -> bytes:
-    """Return a fresh 16-byte Ascon-AEAD128 key from the health-tested CSPRNG.
+def _as_key(key: _BufferInput) -> Any:
+    """Validate the 16-byte key and pass it to C in place, uncopied.
+
+    ``_as_bytes`` copies, and for a key that copy is an immutable ``bytes`` no
+    caller can wipe (INVARIANT-6): a ``bytearray`` key handed in so it could be
+    zeroed afterwards left a second copy behind on every call.  The key is
+    borrowed through ``pqc_backends._borrow``, the rule the other AEAD
+    wrappers follow.
+    """
+    from ama_cryptography.pqc_backends import _borrow
+
+    if not isinstance(key, (bytes, bytearray, memoryview)):
+        raise TypeError(f"key must be bytes, bytearray or memoryview, not {type(key).__name__}")
+    size = memoryview(key).nbytes
+    if size != AEAD128_KEY_BYTES:
+        raise ValueError(f"key must be exactly {AEAD128_KEY_BYTES} bytes, got {size}")
+    return _borrow(key)
+
+
+def generate_key() -> bytearray:
+    """Return a fresh 16-byte Ascon-AEAD128 key from the health-tested CSPRNG,
+    in a ``bytearray`` the caller can zero (INVARIANT-6).
 
     Gated separately from ``_require_native``: key generation touches no native
     symbol, so it would otherwise keep minting keys for a module in the FIPS
-    error state.  Drawn through ``secure_token_bytes`` (FIPS 140-3 §4.9.2
-    continuous health test), not a bare ``os.urandom`` — this is key material.
+    error state.  Drawn in place through ``secure_token_bytearray`` (FIPS 140-3
+    §4.9.2 continuous health test), not a bare ``os.urandom`` — this is key
+    material.  It returned immutable ``bytes`` until PR #415's review.
     """
     check_crypto_permitted()
-    return secure_token_bytes(AEAD128_KEY_BYTES)
+    return secure_token_bytearray(AEAD128_KEY_BYTES)
 
 
 def generate_nonce() -> bytes:
@@ -271,7 +296,7 @@ def aead128_encrypt(
     :raises AsconError: if the native library is unavailable or refuses.
     """
     lib = _require_native()
-    k = _as_bytes("key", key, AEAD128_KEY_BYTES)
+    k = _as_key(key)
     n = _as_bytes("nonce", nonce, AEAD128_NONCE_BYTES)
     pt = _as_bytes("plaintext", plaintext)
     ad = _as_bytes("aad", aad)
@@ -280,7 +305,7 @@ def aead128_encrypt(
     tag = ctypes.create_string_buffer(AEAD128_TAG_BYTES)
 
     rc = lib.ama_ascon_aead128_encrypt(
-        ctypes.c_char_p(k),
+        k,
         ctypes.c_char_p(n),
         ctypes.c_char_p(pt) if pt else None,
         ctypes.c_size_t(len(pt)),
@@ -320,7 +345,7 @@ def aead128_decrypt(
     :raises AsconError: if the native library is unavailable or refuses.
     """
     lib = _require_native()
-    k = _as_bytes("key", key, AEAD128_KEY_BYTES)
+    k = _as_key(key)
     n = _as_bytes("nonce", nonce, AEAD128_NONCE_BYTES)
     ct = _as_bytes("ciphertext", ciphertext)
     t = _as_bytes("tag", tag, AEAD128_TAG_BYTES)
@@ -329,7 +354,7 @@ def aead128_decrypt(
     pt = ctypes.create_string_buffer(len(ct)) if ct else None
 
     rc = lib.ama_ascon_aead128_decrypt(
-        ctypes.c_char_p(k),
+        k,
         ctypes.c_char_p(n),
         ctypes.c_char_p(ct) if ct else None,
         ctypes.c_size_t(len(ct)),

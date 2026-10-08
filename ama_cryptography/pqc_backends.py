@@ -67,7 +67,12 @@ from ama_cryptography._module_state import (
 # Import-order note: ``_self_test`` imports only ``ama_cryptography.exceptions``
 # at module scope and reaches this module lazily from inside the KAT functions,
 # so this top-level import does not close a cycle.
-from ama_cryptography._secret_material import SecretMaterial, finalize_secret, zeroize
+from ama_cryptography._secret_material import (
+    SecretMaterial,
+    constant_time_equality,
+    finalize_secret,
+    zeroize,
+)
 from ama_cryptography.exceptions import (
     CryptoModuleError,
     NativeBackendUnavailableError,
@@ -4178,6 +4183,7 @@ def _secure_memzero(buf: bytearray) -> None:
         buf[i] = 0
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class DilithiumKeyPair:
     """
@@ -4215,6 +4221,7 @@ class DilithiumKeyPair:
         finalize_secret(self, "secret_key", "DilithiumKeyPair")
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class KyberKeyPair:
     """
@@ -4253,6 +4260,7 @@ class KyberKeyPair:
         finalize_secret(self, "secret_key", "KyberKeyPair")
 
 
+@constant_time_equality()
 @dataclass
 class KyberEncapsulation(SecretMaterial):
     """
@@ -4270,6 +4278,7 @@ class KyberEncapsulation(SecretMaterial):
         self._adopt_secrets()
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class SphincsKeyPair:
     """

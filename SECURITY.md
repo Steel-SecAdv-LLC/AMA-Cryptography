@@ -365,7 +365,9 @@ poisoning required. The package now refuses, in `__init__.py` before any
 submodule is imported and again in the `execution-integrity` stage, any
 tree holding a `.pyc` outside `__pycache__`, an extension below the top
 level, an extension beside a same-named `.py`, a package directory beside
-a same-named module, or a symlinked package directory
+a same-named module, a symlinked directory (with or without an
+`__init__`: one without still imports, as a namespace package), or
+anything inside a `__pycache__` that imports as a module of it
 (`ama_cryptography._find_import_shadowing`). The check reads the file
 system, not the loaded module, because planted code can rewrite its own
 `__file__`.
@@ -417,7 +419,8 @@ signature, verifies the native-library and binding-extension digests,
 refuses any file the import system would load in place of or outside the
 signed sources (sourceless `.pyc` outside `__pycache__`, an extension below
 the top level or beside a same-named `.py`, a package directory shadowing a
-module, a symlinked package directory — the rule the in-process import
+module, a symlinked directory, a module inside `__pycache__` — the rule
+the in-process import
 guard applies, re-stated outside the tree and pinned to it by test), and
 compares every cached `__pycache__/*.pyc` for the invoking interpreter
 against a fresh compile of its on-disk source using the same

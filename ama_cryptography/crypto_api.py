@@ -42,7 +42,11 @@ from ama_cryptography._module_state import check_operational as _check_operation
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
 from ama_cryptography._package_transcript import canonical as _canonical
 from ama_cryptography._package_transcript import transcript as _transcript
-from ama_cryptography._secret_material import SecretBytes, SecretMaterial
+from ama_cryptography._secret_material import (
+    SecretBytes,
+    SecretMaterial,
+    constant_time_equality,
+)
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection.
@@ -283,6 +287,7 @@ class CryptoBackend(Enum):
     PURE_PYTHON = auto()  # Pure Python (fallback)
 
 
+@constant_time_equality()
 @dataclass
 class KeyPair(SecretMaterial):
     """
@@ -324,6 +329,7 @@ class Signature:
     metadata: Dict[str, Any]
 
 
+@constant_time_equality()
 @dataclass
 class EncapsulatedSecret(SecretMaterial):
     """
@@ -2391,6 +2397,7 @@ class CryptoPackageConfig:
     """
 
 
+@constant_time_equality()
 @dataclass
 class CryptoPackageResult(SecretMaterial):
     """
@@ -2468,13 +2475,15 @@ class CryptoPackageResult(SecretMaterial):
     keypairs: Dict[str, KeyPair]
     metadata: Dict[str, Any]
 
-    # Held wipeable (INVARIANT-6); `keypairs` wipe their own private halves.
+    # Held wipeable (INVARIANT-6).  wipe() cascades to every keypair the
+    # result owns; their finalizers stay their own.
     _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = (
         "hmac_key",
         "hkdf_master_secret",
         "derived_keys",
         "kem_shared_secret",
     )
+    _SECRET_CHILDREN: ClassVar[Tuple[str, ...]] = ("keypairs",)
 
     def __post_init__(self) -> None:
         self._adopt_secrets()

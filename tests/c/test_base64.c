@@ -499,6 +499,28 @@ static void test_argument_refusals(void) {
               n == 0u, "decode: unknown variant, empty input");
     CHECK(ama_base64_encoded_len(SIZE_MAX, AMA_BASE64_STANDARD_PADDED) == 0u,
           "encoded_len: overflow refused");
+    /* The boundary, exactly (PR #415 review).  F = SIZE_MAX / 4 full groups
+     * is the most that fit: padded, 3F octets encode to 4F characters and
+     * 3F + 1 do not fit; unpadded, 3F + 2 octets encode to 4F + 3 = SIZE_MAX
+     * and 3F + 3 do not fit.  The former cutoff refused everything above
+     * 3F - 3, which fails the first, second and fourth rows (PIN), and no
+     * check at all fails the overflow row above (PIN).  The `- tail` term is
+     * not separately pinned: with it dropped, the padded 3F + 1 case computes
+     * 4F + 4 = SIZE_MAX + 1, which wraps to exactly 0 for every size_t
+     * (SIZE_MAX % 4 == 3), so that mutant is equivalent (AGENTS.md 6.3). */
+    {
+        const size_t f = SIZE_MAX / 4u;
+        CHECK(ama_base64_encoded_len(3u * f, AMA_BASE64_STANDARD_PADDED) == 4u * f,
+              "encoded_len: padded, largest representable");
+        CHECK(ama_base64_encoded_len(3u * f - 1u, AMA_BASE64_STANDARD_PADDED) == 4u * f,
+              "encoded_len: padded, partial last group at the boundary");
+        CHECK(ama_base64_encoded_len(3u * f + 1u, AMA_BASE64_STANDARD_PADDED) == 0u,
+              "encoded_len: padded, first unrepresentable");
+        CHECK(ama_base64_encoded_len(3u * f + 2u, AMA_BASE64_URL_UNPADDED) == SIZE_MAX,
+              "encoded_len: unpadded, largest representable");
+        CHECK(ama_base64_encoded_len(3u * f + 3u, AMA_BASE64_URL_UNPADDED) == 0u,
+              "encoded_len: unpadded, first unrepresentable");
+    }
     /* Empty in, empty out, with NULL buffers: nothing to read or write. */
     n = 99;
     CHECK(ama_base64_encode(NULL, 0, NULL, 0, AMA_BASE64_STANDARD_PADDED, &n) == AMA_SUCCESS &&

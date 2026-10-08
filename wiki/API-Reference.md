@@ -326,7 +326,7 @@ enc = kyber_encapsulate(public_key: bytes)
 
 # Decapsulate (receiver side) -> 32-byte shared secret, in a bytearray the
 # caller can zero (INVARIANT-6).  .secret_key above is a bytearray too.
-ss: bytearray = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytearray
+ss: bytearray = kyber_decapsulate(ciphertext: bytes, secret_key: bytes | bytearray | memoryview) -> bytearray
 ```
 
 #### SPHINCS+-SHA2-256f

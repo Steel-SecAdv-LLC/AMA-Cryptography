@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import dataclasses
 import importlib
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import pytest
 
@@ -129,6 +130,69 @@ def test_release_if_unshared_zeroes_a_sole_local_and_spares_a_shared_one(
     assert other[0] == bytearray(b"\x22" * 8), "a value someone else holds was zeroed"
 
 
+@dataclasses.dataclass
+class _Box(sm.SecretMaterial):
+    """A container holding the same buffer more than once."""
+
+    _SECRET_ATTRS: ClassVar[tuple[str, ...]] = ("a", "b", "c")
+    a: Any
+    b: Any
+    c: list[Any]
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
+
+
+def test_a_buffer_held_twice_by_one_container_is_zeroed_when_it_dies(
+    zeroed_ids: list[int],
+) -> None:
+    """PIN.  Two attributes naming one buffer: both references die with the
+    container, but each read as an owner elsewhere, so the buffer was freed
+    unwiped (PR #415 review).  Counting the container's own holdings fixes
+    it; reverting the ``own - 1`` allowance fails this."""
+    buf = bytearray(b"\x5a" * 16)
+    box = _Box(buf, buf, [])
+    ident = id(buf)
+    del buf
+    del box
+    assert ident in zeroed_ids
+
+
+def test_a_buffer_held_by_an_attribute_and_a_list_entry_is_zeroed(
+    zeroed_ids: list[int],
+) -> None:
+    """PIN by the two allowances together: the attribute's finalizer and the
+    list's each reach the buffer, so either allowance alone wipes it (6.3) --
+    reverting both fails this, reverting one does not."""
+    buf = bytearray(b"\x5b" * 16)
+    box = _Box(buf, None, [buf])
+    ident = id(buf)
+    del buf
+    del box
+    assert ident in zeroed_ids
+
+
+def test_a_buffer_held_twice_in_one_list_is_zeroed(zeroed_ids: list[int]) -> None:
+    """PIN of the list-entry allowance alone: only the list path reaches a
+    buffer no attribute names.  Reverting it fails this."""
+    buf = bytearray(b"\x5d" * 16)
+    box = _Box(None, None, [buf, buf])
+    ident = id(buf)
+    del buf
+    del box
+    assert ident in zeroed_ids
+
+
+def test_an_aliased_buffer_someone_else_holds_is_spared(zeroed_ids: list[int]) -> None:
+    """PIN, the boundary: one holder outside the container still keeps the
+    buffer.  Over-counting the container's own holdings fails this."""
+    buf = bytearray(b"\x5c" * 16)
+    box = _Box(buf, buf, [buf])
+    del box
+    assert id(buf) not in zeroed_ids
+    assert buf == bytearray(b"\x5c" * 16)
+
+
 def test_adopt_converts_bytes_to_a_wipeable_bytearray() -> None:
     kp = pb.KyberKeyPair(public_key=b"\x00" * 1568, secret_key=b"\x01" * 3168)
     assert isinstance(kp.secret_key, bytearray)
@@ -171,6 +235,7 @@ _SECRET_OUTPUTS: dict[str, Callable[[], Any]] = {
     ),
     "frost dealt share": lambda: pb.frost_keygen_trusted_dealer(2, 3)[1][0],
     "secure_token_bytearray": lambda: ms.secure_token_bytearray(32),
+    "ascon.generate_key": lambda: importlib.import_module("ama_cryptography.ascon").generate_key(),
 }
 
 
@@ -180,6 +245,32 @@ def test_every_minted_secret_is_a_bytearray(name: str) -> None:
     value = _SECRET_OUTPUTS[name]()
     assert isinstance(value, bytearray), f"{name} returned {type(value).__name__}"
     assert any(value), f"{name} returned an all-zero secret"
+
+
+@pytest.mark.parametrize("direction", ["encrypt", "decrypt"])
+def test_an_ascon_key_reaches_c_in_place(monkeypatch: pytest.MonkeyPatch, direction: str) -> None:
+    """PIN.  The AEAD wrappers copied the key into ``bytes`` (``_as_bytes``),
+    leaving an unwipeable copy of a ``bytearray`` key on every call (PR #415
+    review).  The key is now borrowed: what reaches C is the caller's own
+    buffer.  Restoring ``_as_bytes`` for the key fails this."""
+    ascon = importlib.import_module("ama_cryptography.ascon")
+    key, nonce = ascon.generate_key(), ascon.generate_nonce()
+    ciphertext, tag = ascon.aead128_encrypt(key, nonce, b"plaintext")
+    symbol = f"ama_ascon_aead128_{direction}"
+    real = getattr(ascon._lib, symbol)
+    seen: list[Any] = []
+
+    def recording(*args: Any) -> Any:
+        seen.append(args[0])
+        return real(*args)
+
+    monkeypatch.setattr(ascon._lib, symbol, recording)
+    if direction == "encrypt":
+        ascon.aead128_encrypt(key, nonce, b"plaintext")
+    else:
+        assert ascon.aead128_decrypt(key, nonce, ciphertext, tag) == b"plaintext"
+    address = ctypes.addressof((ctypes.c_char * len(key)).from_buffer(key))
+    assert isinstance(seen[0], ctypes.Array) and ctypes.addressof(seen[0]) == address
 
 
 def test_a_mac_tag_stays_bytes() -> None:
@@ -534,13 +625,330 @@ def test_derive_path_returns_fresh_buffers_not_the_masters() -> None:
 
 
 def test_a_private_key_is_unhashable_by_decision() -> None:
-    """PIN.  A frozen dataclass over a bytearray would raise an incidental
-    ``unhashable type: 'bytearray'``; the refusal is explicit and says what
-    to key on.  Equality still works."""
+    """PIN.  ``__hash__`` is None, as for any unhashable type, so ``hash()``
+    refuses and ``collections.abc.Hashable`` says so too -- the former
+    raising ``__hash__`` method left ``Hashable`` reporting True (CodeQL).
+    Without ``_unhashable`` the frozen dataclass generates a field hash, which
+    ``isinstance(key, Hashable)`` reports as hashable.  Equality still works,
+    and a key built from ``bytes`` is unhashable too."""
+    import collections.abc
+
     _public, key = _p256()
-    with pytest.raises(TypeError, match="not hashable"):
+    assert kf.PrivateKey.__hash__ is None
+    assert not isinstance(key, collections.abc.Hashable)
+    with pytest.raises(TypeError, match="unhashable"):
         hash(key)
-    assert key == kf.PrivateKey(key.algorithm, bytes(key.key), key.public_key, None)
+    from_bytes = kf.PrivateKey(key.algorithm, bytes(key.key), key.public_key, None)
+    assert not isinstance(from_bytes, collections.abc.Hashable)
+    assert key == from_bytes
+
+
+def test_private_key_equality_compares_the_secrets_in_constant_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The dataclass-generated ``__eq__`` compared the key with
+    ``bytearray.__eq__`` -- ``memcmp``, which stops at the first difference
+    -- so comparing a candidate with a held key leaked where they differ
+    (INVARIANT-12; PR #415 review).  Equality now goes through the native
+    constant-time comparison for ``key`` and ``seed``, and every field is
+    compared whichever differs.  Removing ``@constant_time_equality()`` from
+    ``PrivateKey`` fails this."""
+    from ama_cryptography import secure_memory
+
+    calls: list[tuple[bytes, bytes]] = []
+    real = secure_memory.constant_time_compare
+
+    def recording(a: Any, b: Any) -> bool:
+        calls.append((bytes(a), bytes(b)))
+        return real(a, b)
+
+    monkeypatch.setattr(secure_memory, "constant_time_compare", recording)
+    _public, key = _p256()
+    same = kf.PrivateKey(key.algorithm, bytes(key.key), key.public_key, None)
+    other = kf.PrivateKey(key.algorithm, bytes(_p256()[1].key), key.public_key, None)
+    assert key == same
+    assert key != other
+    assert (bytes(key.key), bytes(same.key)) in calls
+    assert (bytes(key.key), bytes(other.key)) in calls
+
+
+def _secret_containers() -> list[type]:
+    # Importing a module defines its containers, which registers them as
+    # subclasses.
+    for module in ("crypto_api", "hybrid_combiner", "key_formats", "legacy_compat"):
+        importlib.import_module(f"ama_cryptography.{module}")
+
+    found: list[type] = []
+    pending = list(sm.SecretMaterial.__subclasses__())
+    while pending:
+        cls = pending.pop()
+        pending.extend(cls.__subclasses__())
+        if dataclasses.is_dataclass(cls) and cls.__module__.startswith("ama_cryptography."):
+            found.append(cls)
+    return [*found, pb.DilithiumKeyPair, pb.KyberKeyPair, pb.SphincsKeyPair]
+
+
+@pytest.mark.parametrize("cls", _secret_containers(), ids=lambda c: c.__qualname__)
+def test_every_secret_container_compares_in_constant_time(cls: type) -> None:
+    """RANGE (an inventory): every dataclass holding secrets carries the
+    constant-time ``__eq__``, so a new container that forgets it fails here.
+    Removing the decorator from any one of them fails its row."""
+    fields = getattr(cls.__eq__, "constant_time_secret_fields", None)
+    assert fields, f"{cls.__qualname__} compares its secrets with the generated __eq__"
+
+
+# ---------------------------------------------------------------------------
+# A refused key import zeroes the secret it had already sliced out
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def zeroed_values(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """The contents of every bytearray ``key_formats`` zeroes, just before."""
+    seen: list[bytes] = []
+    real = sm.zeroize  # key_formats imports it as _zero
+
+    def recording(value: Any) -> None:
+        if isinstance(value, bytearray):
+            seen.append(bytes(value))
+        real(value)
+
+    monkeypatch.setattr(kf, "_zero", recording)
+    return seen
+
+
+def _two_p256() -> tuple[Any, Any]:
+    return _p256()[1], _p256()[1]
+
+
+def _ml_dsa(seed: bytes) -> Any:
+    alg = kf._lookup("ML-DSA-65")
+    public, secret = pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
+    return kf.PrivateKey("ML-DSA-65", secret, public, seed)
+
+
+_SEED_A, _SEED_B = bytes(range(32)), bytes(range(32, 64))
+
+
+def test_a_refused_ec_pkcs8_zeroes_its_secret(zeroed_values: list[bytes]) -> None:
+    """PIN.  The public half names another key, so the import is refused after
+    the scalar was sliced out.  Removing ``held(secret)`` from the EC arm of
+    ``_pkcs8_private_key_checked`` fails this."""
+    a, b = _two_p256()
+    der = kf.PrivateKey("P-256", bytes(a.key), b.public().key).to_pkcs8(include_public_key=True)
+    with pytest.raises(KeyFormatError, match="inconsistent"):
+        kf.load_pkcs8(der)
+    assert bytes(a.key) in zeroed_values
+
+
+def test_a_refused_ec_private_key_body_zeroes_its_secret(zeroed_values: list[bytes]) -> None:
+    """PIN.  An ECPrivateKey field tag [2] is refused inside the RFC 5915
+    parser, after the scalar was sliced.  Removing ``held(...)`` from
+    ``_parse_ec_private_key`` fails this."""
+    a, _ = _two_p256()
+    der = a.to_pkcs8(include_public_key=True)
+    tampered = der.replace(bytes.fromhex("a144"), bytes.fromhex("a244"), 1)
+    assert tampered != der
+    with pytest.raises(KeyFormatError, match="unexpected ECPrivateKey field tag 0xA2"):
+        kf.load_pkcs8(tampered)
+    assert bytes(a.key) in zeroed_values
+
+
+def test_a_refused_okp_pkcs8_zeroes_its_secret(zeroed_values: list[bytes]) -> None:
+    """PIN.  Removing ``held(...)`` from the OKP arm fails this."""
+    seed_a, seed_b = bytes(range(32)), bytes(range(1, 33))
+    public_b = kf.PrivateKey("Ed25519", seed_b).public().key
+    der = kf.PrivateKey("Ed25519", seed_a, public_b).to_pkcs8(include_public_key=True)
+    with pytest.raises(KeyFormatError, match="inconsistent"):
+        kf.load_pkcs8(der)
+    assert seed_a in zeroed_values
+
+
+def test_an_inconsistent_both_form_zeroes_all_three_secrets(zeroed_values: list[bytes]) -> None:
+    """PIN.  The seed of key B with the expanded key of key A: refused under
+    RFC 9881 8.2.  The seed, the supplied expanded key and the expansion of
+    the seed (B's expanded key, minted only to be compared) are all zeroed.
+    Removing ``held`` from the both arm, or the ``_zero(from_seed)``, fails
+    this."""
+    a, b = _ml_dsa(_SEED_A), _ml_dsa(_SEED_B)
+    der = a.to_pkcs8(pq_format="both", include_public_key=False).replace(_SEED_A, _SEED_B, 1)
+    with pytest.raises(KeyFormatError, match="'both' private key is inconsistent"):
+        kf.load_pkcs8(der, verify_pq_consistency=True)
+    assert _SEED_B in zeroed_values
+    assert bytes(a.key) in zeroed_values
+    assert bytes(b.key) in zeroed_values
+
+
+def test_a_consistent_both_form_zeroes_only_the_comparison_copy(
+    zeroed_values: list[bytes],
+) -> None:
+    """PIN.  On success the seed's expansion is still zeroed (it was minted
+    only to be compared) and the key keeps its own copy.  Removing the
+    ``_zero(from_seed)`` fails this."""
+    a = _ml_dsa(_SEED_A)
+    loaded = kf.load_pkcs8(
+        a.to_pkcs8(pq_format="both", include_public_key=False), verify_pq_consistency=True
+    )
+    assert bytes(a.key) in zeroed_values
+    assert loaded.key == a.key and loaded.seed == _SEED_A
+
+
+@pytest.mark.parametrize("pq_format", ["seed", "expandedKey"])
+def test_a_refused_pq_pkcs8_zeroes_its_secret_and_seed(
+    zeroed_values: list[bytes], pq_format: str
+) -> None:
+    """PIN.  The outer publicKey is key B's: refused in ``_finish_pq_import``,
+    after the parse returned.  Removing ``held(secret)`` / ``held(seed)`` from
+    the PQ arm of ``_pkcs8_private_key_checked`` fails this."""
+    a, b = _ml_dsa(_SEED_A), _ml_dsa(_SEED_B)
+    seed = _SEED_A if pq_format == "seed" else None
+    mixed = kf.PrivateKey("ML-DSA-65", bytes(a.key), b.public_key, seed)
+    der = mixed.to_pkcs8(pq_format=pq_format, include_public_key=True)
+    with pytest.raises(KeyFormatError, match="inconsistent"):
+        kf.load_pkcs8(der, verify_pq_consistency=True)
+    assert bytes(a.key) in zeroed_values
+    if seed is not None:
+        assert _SEED_A in zeroed_values
+
+
+def _ml_dsa_pkcs8(inner: bytes) -> bytes:
+    """A PKCS#8 for ML-DSA-65 whose privateKey OCTET STRING holds ``inner``."""
+    from ama_cryptography._asn1 import der_integer, der_octet_string, der_sequence
+
+    valid = _ml_dsa(_SEED_A).to_pkcs8(pq_format="seed", include_public_key=False)
+    assert valid[5:7] == b"\x30\x0b"  # the 13-octet AlgorithmIdentifier
+    return der_sequence(der_integer(0), valid[5:18], der_octet_string(inner))
+
+
+def test_a_refused_seed_arm_zeroes_its_seed(zeroed_values: list[bytes]) -> None:
+    """PIN.  A 31-octet seed is sliced out, then refused by the expansion.
+    Removing ``held(...)`` from the seed arm of ``_parse_pq_private_key``
+    fails this."""
+    from ama_cryptography._asn1 import der_tagged
+
+    short = _SEED_B[:31]
+    with pytest.raises(KeyFormatError, match="seed must be 32 bytes"):
+        kf.load_pkcs8(_ml_dsa_pkcs8(der_tagged(0, short, constructed=False)))
+    assert short in zeroed_values
+
+
+def test_a_refused_expanded_key_arm_zeroes_its_key(zeroed_values: list[bytes]) -> None:
+    """PIN.  Trailing data after the expandedKey is refused once it has been
+    sliced.  Removing ``held(...)`` from the expandedKey arm fails this."""
+    from ama_cryptography._asn1 import der_octet_string
+
+    a = _ml_dsa(_SEED_A)
+    with pytest.raises(KeyFormatError):
+        kf.load_pkcs8(_ml_dsa_pkcs8(der_octet_string(bytes(a.key)) + b"\x05\x00"))
+    assert bytes(a.key) in zeroed_values
+
+
+def test_a_refused_jwk_zeroes_its_decoded_d(zeroed_values: list[bytes]) -> None:
+    """PIN.  ``d`` decodes into a fresh bytearray; ``x``/``y`` name another
+    key.  Removing ``held(...)`` from ``jwk_to_private_key`` fails this."""
+    a, b = _two_p256()
+    jwk = kf.private_key_to_jwk(a)
+    jwk.update({k: v for k, v in kf.public_key_to_jwk(b.public()).items() if k in "xy"})
+    with pytest.raises(KeyFormatError, match="inconsistent"):
+        kf.jwk_to_private_key(jwk)
+    assert bytes(a.key) in zeroed_values
+
+
+def test_a_refused_cose_key_zeroes_its_d(zeroed_values: list[bytes]) -> None:
+    """PIN.  ``d`` is decoded from a bytearray copy, so it is a wipeable
+    slice; ``x``/``y`` name another key.  Removing ``held(...)`` from
+    ``cose_to_private_key``, or decoding from ``bytes`` again, fails this."""
+    a, b = _two_p256()
+    other = kf.PublicKey("P-256", b.public().key)
+    mixed = kf.PrivateKey("P-256", bytes(a.key), other.key)
+    with pytest.raises(KeyFormatError, match="inconsistent"):
+        kf.cose_to_private_key(mixed.to_cose())
+    assert bytes(a.key) in zeroed_values
+
+
+def test_an_accepted_cose_key_zeroes_its_working_copy(zeroed_values: list[bytes]) -> None:
+    """PIN.  The whole COSE_Key (which contains ``d``) is copied once to
+    decode from; that copy is zeroed, and the key holds a bytearray.
+    Removing the ``_zero(buf)`` from ``_load_cose`` fails this."""
+    a, _ = _two_p256()
+    encoded = a.to_cose()
+    loaded = kf.cose_to_private_key(encoded)
+    assert encoded in zeroed_values
+    assert isinstance(loaded.key, bytearray) and loaded.key == a.key
+
+
+def test_a_private_cose_key_with_a_byte_string_label_still_parses() -> None:
+    """PIN.  Decoding from a bytearray makes every byte string a bytearray,
+    and a bytearray map key is unhashable: ``mapping[key] = ...`` raised
+    TypeError past the KeyFormatError boundary.  A COSE_Key is an open map,
+    so an unknown label -- a byte string included -- must not make it
+    unparseable.  Removing the map-key ``bytes(key)`` in ``_CborReader``
+    fails this."""
+    from ama_cryptography._asn1 import cbor_decode_canonical, cbor_encode_canonical
+
+    a, _ = _two_p256()
+    decoded = cbor_decode_canonical(a.to_cose())
+    decoded[b"label"] = 0
+    loaded = kf.cose_to_private_key(cbor_encode_canonical(decoded))
+    assert loaded.key == a.key
+
+
+def test_deriving_an_ed25519_public_key_zeroes_the_expanded_secret(
+    zeroed_values: list[bytes],
+) -> None:
+    """PIN.  The keygen returns the 64-octet ``seed || pk`` alongside the
+    public half; it is zeroed.  Restoring ``public, _ = ...`` fails this."""
+    seed = bytes(range(7, 39))
+    public = kf.PrivateKey("Ed25519", seed).derive_public_key().key
+    assert seed + public in zeroed_values
+
+
+def test_wiping_a_package_result_wipes_every_keypair_it_owns() -> None:
+    """PIN.  ``CryptoPackageResult`` owns and exposes its keypairs; an
+    explicit ``wipe()`` zeroes their private halves too.  Removing
+    ``_SECRET_CHILDREN`` from the class, or the cascade from
+    ``SecretMaterial.wipe``, fails this."""
+    from ama_cryptography.crypto_api import (
+        AlgorithmType,
+        CryptoPackageConfig,
+        create_crypto_package,
+    )
+
+    result = create_crypto_package(
+        b"cascade", CryptoPackageConfig(signature_algorithm=AlgorithmType.HYBRID_SIG)
+    )
+    secrets = [kp.secret_key for kp in result.keypairs.values()]
+    assert len(secrets) >= 1 and all(any(sk) for sk in secrets)
+    result.wipe()
+    assert not any(any(sk) for sk in secrets)
+    assert not any(result.hmac_key)
+
+
+def test_wiping_a_key_management_system_wipes_both_signing_keys() -> None:
+    """PIN.  ``KeyManagementSystem.wipe()`` reaches the Ed25519 and ML-DSA
+    keypairs it holds.  Removing ``_SECRET_CHILDREN`` fails this."""
+    from ama_cryptography.legacy_compat import generate_key_management_system
+
+    kms = generate_key_management_system("cascade")
+    ed_secret = kms.ed25519_keypair.private_key
+    assert kms.dilithium_keypair is not None
+    ml_secret = kms.dilithium_keypair.secret_key
+    assert any(ed_secret) and any(ml_secret)
+    kms.wipe()
+    assert not any(ed_secret) and not any(ml_secret) and not any(kms.master_secret)
+
+
+def test_a_dying_parent_does_not_wipe_a_child_its_caller_kept() -> None:
+    """PIN.  Only the explicit wipe cascades.  A caller that keeps a keypair
+    from a result it drops keeps a usable key -- the extract-from-a-temporary
+    rule.  Cascading from ``__del__`` fails this."""
+    import gc
+
+    from ama_cryptography.crypto_api import create_crypto_package
+
+    keypair = next(iter(create_crypto_package(b"kept").keypairs.values()))
+    gc.collect()
+    assert any(keypair.secret_key)
 
 
 def test_a_signing_key_changed_in_place_is_not_served_from_the_memo() -> None:

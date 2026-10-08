@@ -2666,7 +2666,13 @@ AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(uint8_t out[32],
     secp256k1_sc k, t, r;
     int ok;
 
-    if (!out || !seckey || !tweak) {
+    if (!out) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!seckey || !tweak) {
+        /* Refused, so `out` is zeroed: the contract holds for every invalid
+         * input, and `out` may hold an earlier key. */
+        ama_secure_memzero(out, 32);
         return AMA_ERROR_INVALID_PARAM;
     }
     /* seckey in [1, n-1]; tweak in [0, n-1] (BIP32: parse256(I_L) < n);

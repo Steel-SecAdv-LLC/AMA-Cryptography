@@ -54,7 +54,11 @@ from ama_cryptography._module_state import check_crypto_permitted
 
 # FIPS 140-3 §4.9.2 output inhibition — combine()/encapsulate_hybrid()/
 # decapsulate_hybrid() derive shared secrets and must refuse in the error state.
-from ama_cryptography._secret_material import SecretMaterial, release_if_unshared
+from ama_cryptography._secret_material import (
+    SecretMaterial,
+    constant_time_equality,
+    release_if_unshared,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,7 @@ _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
 _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
 
 
+@constant_time_equality()
 @dataclass
 class HybridEncapsulation(SecretMaterial):
     """

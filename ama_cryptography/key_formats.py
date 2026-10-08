@@ -105,7 +105,7 @@ import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Union
+from typing import Any, Callable, ClassVar, TypeVar, Union
 
 import ama_cryptography.pqc_backends as _pb
 from ama_cryptography._asn1 import (
@@ -120,7 +120,11 @@ from ama_cryptography._asn1 import (
     oid_from_string,
 )
 from ama_cryptography._module_state import check_crypto_permitted
-from ama_cryptography._secret_material import SecretBytes, SecretMaterial
+from ama_cryptography._secret_material import (
+    SecretBytes,
+    SecretMaterial,
+    constant_time_equality,
+)
 from ama_cryptography._secret_material import zeroize as _zero
 from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatError
 from ama_cryptography.secure_memory import constant_time_compare
@@ -582,6 +586,56 @@ class PublicKey:
         return public_key_to_cose(self)
 
 
+_T = TypeVar("_T")
+
+
+def _unhashable(cls: type[_T]) -> type[_T]:
+    """Mark ``cls`` unhashable the way Python marks any unhashable type.
+
+    Its ``__hash__`` becomes None, so ``hash()`` raises TypeError and
+    ``isinstance(obj, collections.abc.Hashable)`` is False.  Applied above
+    ``@dataclass`` because a frozen dataclass generates a field hash, which a
+    ``bytes`` key would satisfy; done here because the class-body spelling
+    ``__hash__ = None`` needs a type-check suppression.  ``PrivateKey`` used
+    to raise TypeError from a ``__hash__`` method, which left ``Hashable``
+    reporting True for an object that could not be hashed (CodeQL, PR #415).
+    """
+    attribute = "__hash__"
+    setattr(cls, attribute, None)
+    return cls
+
+
+class _ScrubOnRaise:
+    """Zero every secret buffer an import has minted if the import raises.
+
+    A key file is refused after its secret has been sliced out of it: a bad
+    length, a mismatched public half, a seed that does not expand to the
+    expanded key.  Each slice is an independent ``bytearray`` copy of the
+    secret, and an exception drops it intact (INVARIANT-6).  Buffers are
+    registered as they are minted (``secret = held(...)``); on a clean exit
+    they are left alone, because the returned ``PrivateKey`` has adopted them.
+    """
+
+    __slots__ = ("_held",)
+
+    def __init__(self) -> None:
+        self._held: list[Any] = []
+
+    def __call__(self, buf: _T) -> _T:
+        self._held.append(buf)
+        return buf
+
+    def __enter__(self) -> _ScrubOnRaise:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc_type is not None:
+            for buf in self._held:
+                _zero(buf)
+
+
+@_unhashable
+@constant_time_equality()
 @dataclass(frozen=True)
 class PrivateKey(SecretMaterial):
     """A private key in AMA's native representation, tagged with its algorithm.
@@ -606,6 +660,11 @@ class PrivateKey(SecretMaterial):
     write, irreversibly —
     so a key that arrives with a seed keeps it, and re-encodes in the form it
     arrived in.
+
+    Not hashable, by decision (``_unhashable``): the key is held in a mutable,
+    wipeable ``bytearray`` (INVARIANT-6), hashing it would need an immutable
+    copy on every call, and a hash that changes when the key is wiped breaks
+    every set or dict it was put in.  Key collections on ``.public()``.
     """
 
     _SECRET_ATTRS: ClassVar[tuple[str, ...]] = ("key", "seed")
@@ -628,19 +687,6 @@ class PrivateKey(SecretMaterial):
             f"key=<{len(self.key)} octets redacted>, "
             f"public_key={'set' if self.public_key is not None else 'absent'}, "
             f"seed={'<redacted>' if self.seed is not None else 'absent'})"
-        )
-
-    def __hash__(self) -> int:
-        """Not hashable, by decision.
-
-        The key is held in a mutable, wipeable ``bytearray`` (INVARIANT-6).
-        Hashing it would need an immutable copy of the key on every call,
-        and a hash that changes when the key is wiped breaks every set or
-        dict it was put in.  Key a collection on the public key instead.
-        """
-        raise TypeError(
-            "PrivateKey is not hashable: its key is wipeable (INVARIANT-6); "
-            "key collections on .public() instead"
         )
 
     def __post_init__(self) -> None:
@@ -765,7 +811,10 @@ def _derive_public(alg: _Alg, secret: bytes | bytearray) -> bytes:
         # that validates the seed harder — not a reproduced escape.
         try:
             if alg.name == "Ed25519":
-                public, _ = _pb.native_ed25519_keypair_from_seed(secret)
+                # The keygen also returns the 64-octet expanded secret
+                # (seed || pk); only the public half is wanted here.
+                public, expanded = _pb.native_ed25519_keypair_from_seed(secret)
+                _zero(expanded)
                 return bytes(public)
             # X25519(k, 9) is the PUBLIC key: returned as bytes.
             return bytes(_pb.native_x25519_key_exchange(secret, bytes([9]) + b"\x00" * 31))
@@ -1330,13 +1379,33 @@ def load_pkcs8(data: Union[bytes, str], *, verify_pq_consistency: bool | None = 
 def _pkcs8_private_key(
     alg: _Alg, inner_bytes: Any, outer_public: bytes | None, verify_pq_consistency: bool
 ) -> PrivateKey:
-    """The PrivateKey a PKCS#8 privateKey OCTET STRING encodes for ``alg``."""
+    """The PrivateKey a PKCS#8 privateKey OCTET STRING encodes for ``alg``.
+
+    The secret (and an ML-DSA/ML-KEM seed) is zeroed if any later check
+    refuses the file; on success the returned key has adopted it.
+    """
+    with _ScrubOnRaise() as held:
+        return _pkcs8_private_key_checked(
+            alg, inner_bytes, outer_public, verify_pq_consistency, held
+        )
+
+
+def _pkcs8_private_key_checked(
+    alg: _Alg,
+    inner_bytes: Any,
+    outer_public: bytes | None,
+    verify_pq_consistency: bool,
+    held: _ScrubOnRaise,
+) -> PrivateKey:
     if alg.kind == "pq":
         secret, derived, seed = _parse_pq_private_key(inner_bytes, alg, verify_pq_consistency)
+        held(secret)
+        held(seed)
         return _finish_pq_import(alg, secret, derived, seed, outer_public, verify_pq_consistency)
 
     if alg.kind == "ec":
         secret, embedded = _parse_ec_private_key(inner_bytes, alg)
+        held(secret)
         # An EC key can carry a public half in two places: inside RFC 5915
         # `ECPrivateKey [1]`, and in the outer RFC 5958 `[1] publicKey`. When
         # both are present they must be the same key. Preferring the embedded
@@ -1356,7 +1425,7 @@ def _pkcs8_private_key(
         public = bytes(embedded) if embedded is not None else outer_public
     else:
         reader = DerReader(inner_bytes)
-        secret = reader.read_octet_string()
+        secret = held(reader.read_octet_string())
         reader.finish()
         if len(secret) != alg.private_bytes:
             raise KeyFormatError(
@@ -1501,10 +1570,17 @@ def _parse_ec_private_key(inner: bytes, alg: _Alg) -> tuple[bytes, bytes | None]
 
     if seq.read_integer() != 1:
         raise KeyFormatError("ECPrivateKey version must be 1 (RFC 5915 §3)")
-    secret = seq.read_octet_string()
-    if len(secret) != alg.field_bytes:
+    with _ScrubOnRaise() as held:
+        secret = held(seq.read_octet_string())
+        public = _parse_ec_private_key_tail(seq, alg, len(secret))
+    return secret, public
+
+
+def _parse_ec_private_key_tail(seq: DerReader[Any], alg: _Alg, secret_len: int) -> bytes | None:
+    """The fields of an RFC 5915 ECPrivateKey after ``privateKey``."""
+    if secret_len != alg.field_bytes:
         raise KeyFormatError(
-            f"{alg.name} private key must be {alg.field_bytes} bytes, got {len(secret)}"
+            f"{alg.name} private key must be {alg.field_bytes} bytes, got {secret_len}"
         )
 
     # RFC 5915 §3 declares `parameters [0]` before `publicKey [1]`, and each is
@@ -1531,7 +1607,7 @@ def _parse_ec_private_key(inner: bytes, alg: _Alg) -> tuple[bytes, bytes | None]
     elif tag is not None:
         raise KeyFormatError(f"unexpected ECPrivateKey field tag 0x{tag:02X}")
     seq.finish()
-    return secret, public
+    return public
 
 
 def _parse_pq_private_key(
@@ -1558,55 +1634,62 @@ def _parse_pq_private_key(
     malformed. That one *is* governed by ``verify_consistency``, because the
     ``expandedKey`` is usable on its own.
     """
-    reader = DerReader(inner)
-    tag = reader.peek_tag()
-    if tag is None:
-        raise KeyFormatError(f"empty {alg.name} private key")
+    with _ScrubOnRaise() as held:
+        reader = DerReader(inner)
+        tag = reader.peek_tag()
+        if tag is None:
+            raise KeyFormatError(f"empty {alg.name} private key")
 
-    if tag == 0x80:  # [0] IMPLICIT seed — the tag replaces the OCTET STRING's
-        body = reader.read_tagged(0, constructed=False)
-        # IMPLICIT [0] OCTET STRING carries no inner header (KF-002).
-        seed = body._buf[body._pos : body._end]
-        reader.finish()
-        expanded, public = _expand_pq_seed(alg, seed)
-        return expanded, public, seed
+        if tag == 0x80:  # [0] IMPLICIT seed — the tag replaces the OCTET STRING's
+            body = reader.read_tagged(0, constructed=False)
+            # IMPLICIT [0] OCTET STRING carries no inner header (KF-002).
+            seed = held(body._buf[body._pos : body._end])
+            reader.finish()
+            expanded, public = _expand_pq_seed(alg, seed)
+            return expanded, public, seed
 
-    if tag == 0x04:  # expandedKey
-        expanded = reader.read_octet_string()
-        reader.finish()
-        if len(expanded) != alg.private_bytes:
-            raise KeyFormatError(
-                f"{alg.name} expanded key must be {alg.private_bytes} bytes, "
-                f"got {len(expanded)}"
-            )
-        return expanded, None, None
+        if tag == 0x04:  # expandedKey
+            expanded = held(reader.read_octet_string())
+            reader.finish()
+            if len(expanded) != alg.private_bytes:
+                raise KeyFormatError(
+                    f"{alg.name} expanded key must be {alg.private_bytes} bytes, "
+                    f"got {len(expanded)}"
+                )
+            return expanded, None, None
 
-    if tag == 0x30:  # both
-        seq = reader.read_sequence()
-        reader.finish()
-        seed = seq.read_octet_string()
-        expanded = seq.read_octet_string()
-        seq.finish()
-        if len(seed) != alg.pq_seed_bytes:
-            raise KeyFormatError(
-                f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}"
-            )
-        if len(expanded) != alg.private_bytes:
-            raise KeyFormatError(
-                f"{alg.name} expanded key must be {alg.private_bytes} bytes, "
-                f"got {len(expanded)}"
-            )
-        if not verify_consistency:
-            return expanded, None, seed
-        from_seed, public = _expand_pq_seed(alg, seed)
-        if not constant_time_compare(from_seed, expanded):
-            raise KeyFormatError(
-                f"{alg.name} 'both' private key is inconsistent: the seed does "
-                "not expand to the supplied expandedKey (RFC 9881 §8.2)"
-            )
-        return expanded, public, seed
+        if tag == 0x30:  # both
+            seq = reader.read_sequence()
+            reader.finish()
+            seed = held(seq.read_octet_string())
+            expanded = held(seq.read_octet_string())
+            seq.finish()
+            if len(seed) != alg.pq_seed_bytes:
+                raise KeyFormatError(
+                    f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}"
+                )
+            if len(expanded) != alg.private_bytes:
+                raise KeyFormatError(
+                    f"{alg.name} expanded key must be {alg.private_bytes} bytes, "
+                    f"got {len(expanded)}"
+                )
+            if not verify_consistency:
+                return expanded, None, seed
+            # `from_seed` is a second expanded secret, minted only to be compared:
+            # it is zeroed whichever way the comparison goes.
+            from_seed, public = _expand_pq_seed(alg, seed)
+            try:
+                consistent = constant_time_compare(from_seed, expanded)
+            finally:
+                _zero(from_seed)
+            if not consistent:
+                raise KeyFormatError(
+                    f"{alg.name} 'both' private key is inconsistent: the seed does "
+                    "not expand to the supplied expandedKey (RFC 9881 §8.2)"
+                )
+            return expanded, public, seed
 
-    raise KeyFormatError(f"unrecognised {alg.name} private-key CHOICE tag 0x{tag:02X}")
+        raise KeyFormatError(f"unrecognised {alg.name} private-key CHOICE tag 0x{tag:02X}")
 
 
 def _expand_pq_seed(alg: _Alg, seed: bytes) -> tuple[bytes, bytes]:
@@ -1760,13 +1843,15 @@ def jwk_to_private_key(jwk: Union[dict[str, Any], str]) -> PrivateKey:
     if "d" not in obj:
         raise KeyFormatError("JWK has no private key member 'd'")
     alg, members = _jwk_algorithm(obj)
-    secret = _unb64u(obj["d"], "d")
-    expected = alg.private_bytes if alg.kind == "okp" else alg.field_bytes
-    if len(secret) != expected:
-        raise KeyFormatError(f"{alg.name} JWK 'd' must be {expected} bytes, got {len(secret)}")
-    public = _jwk_public_bytes(alg, obj, members)
-    _check_public_matches(alg, secret, public)
-    return PrivateKey(alg.name, secret, public)
+    # `d` decodes into a fresh bytearray: zeroed if anything below refuses it.
+    with _ScrubOnRaise() as held:
+        secret = held(_unb64u(obj["d"], "d"))
+        expected = alg.private_bytes if alg.kind == "okp" else alg.field_bytes
+        if len(secret) != expected:
+            raise KeyFormatError(f"{alg.name} JWK 'd' must be {expected} bytes, got {len(secret)}")
+        public = _jwk_public_bytes(alg, obj, members)
+        _check_public_matches(alg, secret, public)
+        return PrivateKey(alg.name, secret, public)
 
 
 def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -2000,31 +2085,47 @@ def cose_to_public_key(data: bytes) -> PublicKey:
 
 def cose_to_private_key(data: bytes) -> PrivateKey:
     """Parse a COSE_Key private key."""
-    obj = _load_cose(data)
-    if _COSE_LBL_D not in obj:
-        raise KeyFormatError("COSE_Key has no private key member (-4)")
-    alg = _cose_algorithm(obj)
-    secret = obj[_COSE_LBL_D]
-    if not isinstance(secret, bytes):
-        raise KeyFormatError("COSE_Key member -4 must be a byte string")
-    expected = alg.private_bytes if alg.kind == "okp" else alg.field_bytes
-    if len(secret) != expected:
-        raise KeyFormatError(
-            f"{alg.name} COSE_Key member -4 must be {expected} bytes, got {len(secret)}"
-        )
-    public = _cose_public_bytes(alg, obj)
-    _check_public_matches(alg, secret, public)
-    return PrivateKey(alg.name, secret, public)
+    obj = _load_cose(data, wipeable=True)
+    # Every byte string in `obj` is a bytearray slice; `d` is the secret.  It
+    # is zeroed if anything below refuses it, and adopted by the key if not.
+    with _ScrubOnRaise() as held:
+        secret = held(obj.get(_COSE_LBL_D))
+        if secret is None:
+            raise KeyFormatError("COSE_Key has no private key member (-4)")
+        alg = _cose_algorithm(obj)
+        if not isinstance(secret, bytearray):
+            raise KeyFormatError("COSE_Key member -4 must be a byte string")
+        expected = alg.private_bytes if alg.kind == "okp" else alg.field_bytes
+        if len(secret) != expected:
+            raise KeyFormatError(
+                f"{alg.name} COSE_Key member -4 must be {expected} bytes, got {len(secret)}"
+            )
+        public = _cose_public_bytes(alg, obj)
+        _check_public_matches(alg, secret, public)
+        return PrivateKey(alg.name, secret, public)
 
 
-def _load_cose(data: bytes) -> dict[Any, Any]:
+def _load_cose(data: bytes, *, wipeable: bool = False) -> dict[Any, Any]:
     # A COSE_Key is octets, not text. `_asn1`'s reader slices and compares the
     # buffer directly, so a `str` argument reaches it and fails with a TypeError
     # from inside the CBOR head parser — outside this module's contract. Same
     # guard, and the same reason, as `_as_der`'s.
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise KeyFormatError(f"a COSE_Key must be bytes, got {type(data).__name__}")
-    obj = cbor_decode_canonical(bytes(data))
+    if not wipeable:
+        return _cose_map(bytes(data))
+    # A private COSE_Key: decode from a bytearray copy, so its byte strings --
+    # ``d`` among them -- come back as independent bytearray slices the caller
+    # can zero, and zero the copy itself here, whatever the decode decided.
+    buf = bytearray(data)
+    try:
+        return _cose_map(buf)
+    finally:
+        _zero(buf)
+
+
+def _cose_map(data: bytes | bytearray) -> dict[Any, Any]:
+    obj = cbor_decode_canonical(data)
     if not isinstance(obj, dict):
         raise KeyFormatError("a COSE_Key must be a CBOR map")
     return obj
@@ -2064,13 +2165,13 @@ def _cose_public_bytes(alg: _Alg, obj: dict[Any, Any]) -> bytes:
         if label not in obj:
             raise KeyFormatError(f"COSE_Key is missing required member {label}")
         raw = obj[label]
-        if not isinstance(raw, bytes):
+        if not isinstance(raw, (bytes, bytearray)):
             raise KeyFormatError(f"COSE_Key member {label} must be a byte string")
         if len(raw) != width:
             raise KeyFormatError(
                 f"{alg.name} COSE_Key member {label} must be {width} bytes, got {len(raw)}"
             )
-        return raw
+        return bytes(raw)
 
     if alg.kind == "okp":
         # A COSE_Key is an open map and a label this module does not consume —

@@ -287,6 +287,18 @@ class TestAllThreeDigestMirrorsAgree:
         # exclusion is exercised rather than assumed.
         (pkg / "_integrity_signature.py").write_text("SIGNATURE = 'x'\n", encoding="utf-8")
         (pkg / "_post_kats" / "one.json").write_text('{"v": 1}\n', encoding="utf-8")
+        # Below the top level: a subpackage, a namespace directory, a module
+        # that shares a top-level name, and the artefact's name (excluded only
+        # at the top).  The out-of-band copy walked the top level alone, so a
+        # planted subdirectory .py left its digest equal to the signed one
+        # (PR #415 review); without these entries this test could not see it.
+        # PIN: reverting the copy to ``glob("*.py")`` fails here.  __pycache__
+        # is excluded by all three.
+        for rel in ("sub/__init__.py", "sub/a.py", "ns/deep/c.py", "ns/_integrity_signature.py"):
+            (pkg / rel).parent.mkdir(parents=True, exist_ok=True)
+            (pkg / rel).write_text(f"# {rel}\n", encoding="utf-8")
+        (pkg / "__pycache__").mkdir()
+        (pkg / "__pycache__" / "skipped.py").write_text("ignored = 1\n", encoding="utf-8")
 
         oob = self._oob()
         signer = _build_sign._compute_package_digest(pkg)

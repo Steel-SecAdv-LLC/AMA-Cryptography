@@ -111,17 +111,23 @@ static int variant_ok(ama_base64_variant_t variant) {
 }
 
 AMA_API size_t ama_base64_encoded_len(size_t bin_len, ama_base64_variant_t variant) {
-    /* Largest bin_len whose padded encoding, (bin_len / 3 + 1) * 4, fits in
-     * size_t; the unpadded encoding is never longer. */
-    if (!variant_ok(variant) || bin_len > (SIZE_MAX / 4u) * 3u - 3u) {
+    if (!variant_ok(variant)) {
         return 0;
     }
+    /* The encoding is 4 characters per full group plus a tail: 4 for a
+     * padded partial group, rem + 1 unpadded.  Refuse exactly the lengths
+     * whose total does not fit in size_t; the former single cutoff,
+     * (SIZE_MAX / 4) * 3 - 3, also refused the three largest that do. */
     size_t full = bin_len / 3u;
     size_t rem = bin_len % 3u;
-    if (variant == AMA_BASE64_URL_UNPADDED) {
-        return full * 4u + (rem == 0u ? 0u : rem + 1u);
+    size_t tail = 0u;
+    if (rem != 0u) {
+        tail = variant == AMA_BASE64_URL_UNPADDED ? rem + 1u : 4u;
     }
-    return (full + (rem != 0u ? 1u : 0u)) * 4u;
+    if (full > (SIZE_MAX - tail) / 4u) {
+        return 0;
+    }
+    return full * 4u + tail;
 }
 
 AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,

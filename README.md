@@ -234,7 +234,7 @@ NIST-standardized post-quantum algorithms:
 
 Top-level `src/c/*.c` — 29 translation units:
 
-`ama_aes_bitsliced.c`, `ama_aes_gcm.c`, `ama_agent_binding.c`, `ama_argon2.c`, `ama_ascon.c`, `ama_chacha20poly1305.c`, `ama_consttime.c`, `ama_core.c`, `ama_cpuid.c`, `ama_dilithium.c`, `ama_ed25519.c`, `ama_frost.c`, `ama_hkdf.c`, `ama_hmac_sha256.c`, `ama_hmac_sha384.c`, `ama_kyber.c`, `ama_lms.c`, `ama_nistp.c`, `ama_pbkdf2.c`, `ama_platform_rand.c`, `ama_secp256k1.c`, `ama_secure_memory.c`, `ama_sha256.c`, `ama_sha256_ni.c`, `ama_sha3.c`, `ama_sha512.c`, `ama_slhdsa.c`, `ama_x25519.c`.
+`ama_aes_bitsliced.c`, `ama_aes_gcm.c`, `ama_agent_binding.c`, `ama_argon2.c`, `ama_ascon.c`, `ama_base64.c`, `ama_chacha20poly1305.c`, `ama_consttime.c`, `ama_core.c`, `ama_cpuid.c`, `ama_dilithium.c`, `ama_ed25519.c`, `ama_frost.c`, `ama_hkdf.c`, `ama_hmac_sha256.c`, `ama_hmac_sha384.c`, `ama_kyber.c`, `ama_lms.c`, `ama_nistp.c`, `ama_pbkdf2.c`, `ama_platform_rand.c`, `ama_secp256k1.c`, `ama_secure_memory.c`, `ama_sha256.c`, `ama_sha256_ni.c`, `ama_sha3.c`, `ama_sha512.c`, `ama_slhdsa.c`, `ama_x25519.c`.
 
 Public headers under `include/` — 4: `ama_cryptography.h` (top-level API), `ama_cpuid.h`, `ama_dispatch.h`, `ama_uint128.h`.
 
@@ -262,7 +262,7 @@ Additional C sources:
 
 ### Python package (`ama_cryptography/`, 29 modules + `__init__` + `__main__`)
 
-`crypto_api` (algorithm-agnostic top-level API + `AlgorithmType`), `pqc_backends` (native C bindings for every primitive), `key_formats` (PKCS#8 / SPKI / PEM / JWK / COSE_Key across 12 algorithms), `key_management`, `hybrid_combiner`, `adaptive_posture`, `agent_binding`, `session`, `secure_channel`, `secure_memory`, `integrity`, `equations`, `double_helix_engine`, `monitor`, `monitoring`, `ascon`, `rfc3161_timestamp`, `legacy_compat`, `exceptions`, `_self_test`, `_asn1`, `_artefact_source`, `_build_sign`, `_finalizer_health`, `_module_state`, `_numeric`, `_owner_only` (owner-only file and directory access: `chmod` on POSIX, a protected owner-only DACL on Windows), `_package_transcript` (the canonical transcript a package signature covers, INVARIANT-52), `__main__`. The build also writes `_integrity_signature.py`, the per-build signed integrity artefact; it is not tracked.
+`crypto_api` (algorithm-agnostic top-level API + `AlgorithmType`), `pqc_backends` (native C bindings for every primitive), `key_formats` (PKCS#8 / SPKI / PEM / JWK / COSE_Key across 12 algorithms), `key_management`, `hybrid_combiner`, `adaptive_posture`, `agent_binding`, `session`, `secure_channel`, `secure_memory`, `integrity`, `equations`, `double_helix_engine`, `monitor`, `monitoring`, `ascon`, `rfc3161_timestamp`, `legacy_compat`, `exceptions`, `_self_test`, `_asn1`, `_artefact_source`, `_build_sign`, `_finalizer_health`, `_module_state`, `_numeric`, `_owner_only` (owner-only file and directory access: `chmod` on POSIX, a protected owner-only DACL on Windows), `_package_transcript` (the canonical transcript a package signature covers, INVARIANT-52), `_secret_material` (wipeable secret storage and the containers' zeroing rules, INVARIANT-6), `__main__`. The build also writes `_integrity_signature.py`, the per-build signed integrity artefact; it is not tracked.
 
 </details>
 
@@ -927,7 +927,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*6,918 test functions across 276 Python test files plus 96 C test suites (98 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*6,951 test functions across 276 Python test files plus 96 C test suites (98 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1486,7 +1486,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on the standards in [CSRC_STANDARDS.md](CSRC_STANDARDS.md) — not custom cryptography
 - **Quantified claims:** Every published figure names its host, command and record ([docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md), `benchmarks/canonical-host.json`)
-- **Rigorous testing:** 6,918 test functions across 276 Python files plus 96 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
+- **Rigorous testing:** 6,951 test functions across 276 Python files plus 96 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
 - **Regression detection:** Benchmark floors measured on each CI runner class (x86_64 45% tolerance; aarch64 15–25%)
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by the weakest layer (~128-bit classical), not inflated aggregate claims

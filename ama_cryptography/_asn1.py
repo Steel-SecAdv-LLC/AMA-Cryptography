@@ -499,9 +499,17 @@ def cbor_encode_canonical(value: Any) -> bytes:
 
 
 class _CborReader:
+    """Reads one CBOR item from ``data``.
+
+    A byte string comes back as a slice of ``data``: ``bytes`` from a
+    ``bytes`` buffer, a wipeable ``bytearray`` from a ``bytearray`` one (a
+    COSE private key's ``d``, INVARIANT-6).  Map keys are always ``bytes``,
+    so a byte-string key stays hashable either way.
+    """
+
     __slots__ = ("_buf", "_pos")
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes | bytearray) -> None:
         self._buf = data
         self._pos = 0
 
@@ -588,7 +596,9 @@ class _CborReader:
             for _ in range(value):
                 key_start = self._pos
                 key = self.decode(depth + 1)
-                key_bytes = self._buf[key_start : self._pos]
+                if isinstance(key, bytearray):
+                    key = bytes(key)
+                key_bytes = bytes(self._buf[key_start : self._pos])
                 if previous is not None and key_bytes <= previous:
                     raise KeyFormatError(
                         "CBOR map keys are not in canonical order (or are duplicated)"
@@ -601,8 +611,12 @@ class _CborReader:
         raise KeyFormatError(f"unsupported CBOR major type {major}")
 
 
-def cbor_decode_canonical(data: bytes) -> Any:
-    """Decode one canonically-encoded CBOR item, rejecting trailing data."""
+def cbor_decode_canonical(data: bytes | bytearray) -> Any:
+    """Decode one canonically-encoded CBOR item, rejecting trailing data.
+
+    Byte strings are slices of ``data``, so a ``bytearray`` ``data`` yields
+    ``bytearray`` byte strings the caller can zero (see ``_CborReader``).
+    """
     reader = _CborReader(data)
     value = reader.decode()
     if reader.pos != len(data):

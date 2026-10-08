@@ -66,7 +66,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
 from ama_cryptography._package_transcript import transcript as _transcript
-from ama_cryptography._secret_material import SecretBytes, SecretMaterial
+from ama_cryptography._secret_material import (
+    SecretBytes,
+    SecretMaterial,
+    constant_time_equality,
+)
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -407,6 +411,7 @@ def hmac_verify(message: bytes, tag: bytes, key: SecretBytes) -> bool:
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
 class Ed25519KeyPair(SecretMaterial):
     """Ed25519 elliptic curve key pair (RFC 8032).
@@ -753,11 +758,14 @@ def derive_keys(
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
 class KeyManagementSystem(SecretMaterial):
     """Secure key storage and management system."""
 
     _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("master_secret", "hmac_key")
+    # wipe() cascades to both signing keypairs.
+    _SECRET_CHILDREN: ClassVar[Tuple[str, ...]] = ("ed25519_keypair", "dilithium_keypair")
 
     master_secret: Union[bytes, bytearray] = field(repr=False)
     hmac_key: Union[bytes, bytearray] = field(repr=False)

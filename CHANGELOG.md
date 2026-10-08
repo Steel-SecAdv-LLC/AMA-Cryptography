@@ -34,6 +34,88 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Review round on `8f61a789`: an out-of-band verifier blind below the top level, secrets dropped on refused imports — 2026-10-08
+
+Nine Copilot findings and two CodeQL alerts on `8f61a789`, then Copilot's
+review of `6cc56f09`: two new findings and three it had missed earlier. Each
+was reproduced before it was fixed; every guard below is PIN by mutation
+unless marked otherwise.
+
+- **`tools/verify_install_oob.py` passed a tree with a planted subdirectory
+  module** (High: a gate that cannot detect what it claims). Its package
+  digest walked the top-level `*.py` only, while the signer and the
+  in-process check walk every depth, so `unsigned/__init__.py` or a
+  namespace `unsigned/mod.py` left the out-of-band digest equal to the signed
+  one. It now walks every depth, byte-for-byte with the signer (a flat tree
+  hashes as before), and so does its bytecode pass. The three-copies digest
+  test's staged tree had no subdirectory `.py`, which is why it could not see
+  the drift; it now has four.
+- **Two importable shapes no layer refused**, reproduced in both copies of
+  the import-shadowing rule: a symlinked directory with no `__init__`
+  (`<pkg>.<link>.mod` imports, and neither the digest's walk nor the rule's
+  enters it), and anything in `__pycache__` that imports as a module of it (a
+  `.py`, a tagless `.pyc`, an extension, a subdirectory). Every symlinked
+  directory is now refused, and `__pycache__` may hold only PEP 3147 caches,
+  whose dotted names are not import names. The parity test covers all five
+  new cases.
+- **A refused key import dropped the secret it had already sliced out**
+  (INVARIANT-6). PKCS#8 (EC, OKP, and ML-DSA/ML-KEM in all three RFC 9881
+  arms), JWK and COSE imports now zero the secret, and any seed, when a later
+  check refuses the file. The `both` arm also zeroes the second expanded key
+  it mints only to compare, on success as well. Deriving an Ed25519 public
+  key zeroes the 64-octet `seed || pk` the keygen returns alongside it.
+- **The COSE decoder held private keys in `bytes`.** `cose_to_private_key`
+  now decodes from a `bytearray` copy, which it zeroes, so `d` arrives as a
+  wipeable slice. The CBOR reader keeps byte-string map keys as `bytes`, so
+  an open map with a byte-string label still parses (PIN: a `bytearray` key
+  raised `TypeError` past the format boundary).
+- **`wipe()` did not reach owned keypairs.** `CryptoPackageResult.wipe()` and
+  `KeyManagementSystem.wipe()` zeroed their own buffers but left every
+  private key in their keypairs intact. `SecretMaterial` gains
+  `_SECRET_CHILDREN`, which the explicit `wipe()` cascades to. Finalizers do
+  not cascade, so a keypair the caller kept survives its parent's collection
+  (PIN, both directions).
+- **Every secret container compared its secrets with `memcmp`.** The
+  dataclass-generated `__eq__` compares fields with `==` and stops at the
+  first difference, and `bytearray.__eq__` returns at the first differing
+  octet. So comparing a candidate with a held key leaked where they differed
+  (INVARIANT-12). Copilot named `PrivateKey`; the same held for all eleven
+  containers. `constant_time_equality` replaces `__eq__` on every one: secret
+  fields go through the native constant-time comparison, and every field is
+  compared whichever differs. An inventory test requires it on every secret
+  dataclass.
+- **A buffer a container held twice was freed unwiped.** The finalizer's
+  sole-owner test counted references. Two attributes, or an attribute and a
+  list entry, naming one `bytearray` read as an owner elsewhere. The
+  container's own holdings are now counted first. The attribute and list
+  allowances are each PIN; a buffer reached through both is protected
+  redundantly, and only reverting both fails its test (AGENTS.md 6.3).
+- **Ascon keys were immutable.** `ascon.generate_key()` returned `bytes`, and
+  both AEAD wrappers copied a `bytearray` key into `bytes` before calling C.
+  The key is now drawn into a `bytearray` and borrowed in place.
+- **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
+  raised `TypeError`, so `collections.abc.Hashable` still said True. It is
+  now `None`, as for any unhashable type.
+- **`ama_base64_encoded_len` refused three representable lengths** at the
+  top of `size_t`. The bound is now exact for each variant, and the five
+  boundary rows are tested. Dropping the `- tail` term is an equivalent
+  mutant, because the padded overflow wraps to exactly 0 (AGENTS.md 6.3).
+- **`ama_secp256k1_seckey_tweak_add` left `out` unzeroed** when `seckey` or
+  `tweak` was NULL, against its header's "refused => out zeroed".
+- **The wiki's ML-KEM example typed the secret key as `bytes`**; it takes
+  `bytes | bytearray | memoryview`.
+- **README's inventories named 28 translation units under a heading of 29,
+  and omitted `_secret_material` from the module list**, past a gate that
+  checked only the counts. Where a count is followed by its list, the
+  documented-counts gate now checks the list name for name (PIN on the
+  pre-fix README and on synthetic trees).
+- **CI on `6cc56f09`:** one red, Python 3.14 on ubuntu-latest. All three
+  apt attempts stalled on the Azure mirror (about 1 MB/s, 10.8 MB and
+  21.1 MB `.deb` files), and the job's 600 s apt budget ran out before any
+  test ran. It is the same mirror stall recorded on this PR earlier, and it
+  names no service this branch touches. The AArch64 cross compiler it was
+  fetching is required, by the BTI probe and INVARIANT-47.
+
 ### CI on `90c8d19`, and what proving its fix found — 2026-10-08
 
 `90c8d19` failed every test lane on one test and the docs build on one
@@ -2160,7 +2242,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
 | 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported, nor are the 24 undeclared helpers the export map now localises (the `ama_has_*` / `ama_cpuid_has_*` CPU probes and three raw Keccak permutations), none of which any installed header ever declared | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
-| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output, FROST dealt shares and nonces, HD-derived keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (it raises `TypeError` saying so). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
+| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output, FROST dealt shares and nonces, HD-derived keys, Ascon-AEAD128 keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (its `__hash__` is `None`: `hash()` raises `TypeError` and `collections.abc.Hashable` reports False). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —
