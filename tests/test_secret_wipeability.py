@@ -1046,9 +1046,12 @@ def test_the_pairwise_guard_zeroes_a_list_of_shares() -> None:
     single buffer, so a failed test dropped every share intact.  Removing
     the list arm of ``_zero_released_key`` fails this."""
     shares = [bytearray(b"\x11" * 64), bytearray(b"\x22" * 64)]
-    with pytest.raises(RuntimeError):
-        with ms._KeyReleasedOnlyIfConsistent(shares):
-            raise RuntimeError("pairwise test failed")
+    # The guard's exit path driven directly, as a ``with`` block whose body
+    # raises would drive it: no statement follows an unconditional raise.
+    guard = ms._KeyReleasedOnlyIfConsistent(shares)
+    guard.__enter__()
+    failure = RuntimeError("pairwise test failed")
+    guard.__exit__(type(failure), failure, None)
     assert shares == [bytearray(64), bytearray(64)]
 
 
