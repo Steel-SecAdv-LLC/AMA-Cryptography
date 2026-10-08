@@ -817,7 +817,7 @@ pairwise consistency test — stated on the page, not netted out. The
 Python-plane rows also moved materially across the four runs (ML-DSA
 sign 2.3x–3.6x ahead), so read every committed figure as a run.
 
-**The provenance mechanisms hardened with the re-measure.****The provenance mechanisms hardened with the re-measure.** The PQC harness
+**The provenance mechanisms hardened with the re-measure.** The PQC harness
 hardcoded "OpenSSL 4.0.1" into every peer row; it now labels rows from
 `openssl_version_text()` of the library it actually linked (this run:
 OpenSSL 4.0.3, via the cryptography 50.0.2 wheel) and records both in

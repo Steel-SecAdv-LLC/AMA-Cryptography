@@ -199,6 +199,7 @@ class TestTheNativeArtifactIsPinned:
         results.write_text(
             json.dumps(
                 {
+                    "harness_source_sha3": cb.harness_source_digest(),
                     "loaded_library": {
                         "path": "/opt/run/libama_cryptography.so",
                         "sha3_256": digest,
@@ -232,6 +233,7 @@ class TestTheNativeArtifactIsPinned:
         results.write_text(
             json.dumps(
                 {
+                    "harness_source_sha3": cb.harness_source_digest(),
                     "loaded_library": {
                         "path": "/opt/stale/libama_cryptography.so",
                         "sha3_256": native_sha3_256(b"a stale build").hex(),
@@ -247,6 +249,40 @@ class TestTheNativeArtifactIsPinned:
         assert block["attributable"] is False
         assert block["ama_commit"] == "unknown"
         assert any("byte-identical" in r for r in block["unattributable_because"])
+
+    def test_a_stale_or_unbound_harness_binary_is_disowned(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """PIN (review finding on 0bc915a, mutation-earned): a clean
+        checkout can still run a stale multibench built from an older
+        revision, and the loaded-library digest proves only the AMA
+        object.  The binary now attests the source it was compiled from
+        (AMA_HARNESS_SOURCE_SHA3), and the stamp requires that digest to
+        equal the tree's multi_library_bench.cpp — absent (an unbound
+        binary) or mismatched (a stale one), the record is disowned.
+        Mutation: dropping harness_bound from the pinned conjunction
+        fails exactly this test while the bound case still passes."""
+        from ama_cryptography.pqc_backends import native_sha3_256
+
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        digest = native_sha3_256(b"synthetic backend bytes").hex()
+        loaded = {
+            "path": "/opt/run/libama_cryptography.so",
+            "sha3_256": digest,
+            "method": "dladdr(ama_sha3_256); self-hash",
+        }
+        for recorded in ("00" * 32, None):
+            payload: dict[str, object] = {"loaded_library": loaded, "results": []}
+            if recorded is not None:
+                payload["harness_source_sha3"] = recorded
+            results = tmp_path / "multi_library_results.json"
+            results.write_text(json.dumps(payload), encoding="utf-8")
+            block = cb.stamp_c_harness_provenance(results)
+            assert block["harness_source"]["binary_matches_tree"] is False
+            assert block["attributable"] is False
+            assert block["ama_commit"] == "unknown"
+            assert any("harness binary" in r for r in block["unattributable_because"])
 
     def test_a_record_without_the_harness_block_is_disowned(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

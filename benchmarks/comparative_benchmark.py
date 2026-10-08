@@ -993,6 +993,23 @@ def _attach_native_artifact(block: "Dict[str, Any]") -> None:
         block["native_build"] = unpinned
 
 
+def harness_source_digest() -> str:
+    """SHA3-256 of the C harness source, by the package's own kernel.
+
+    The documented compile line injects this as AMA_HARNESS_SOURCE_SHA3 so
+    the binary carries the digest of the source it was compiled from, and
+    the stamper requires the binary's recorded digest to equal the tree's
+    file — the executed-matches-source rule (INVARIANT-40) on the C plane
+    (review finding on 0bc915a: a clean checkout can still run a stale
+    multibench built from an older revision, and the loaded-library digest
+    proves only the AMA object, not the harness).
+    """
+    from ama_cryptography.pqc_backends import native_sha3_256
+
+    source = Path(__file__).resolve().parent / "multi_library_bench.cpp"
+    return native_sha3_256(source.read_bytes()).hex()
+
+
 def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
     """Stamp the C harness's result file with this checkout's provenance.
 
@@ -1022,8 +1039,19 @@ def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
     ):
         loaded = None
     artifact = provenance.get("native_artifact")
+    expected_harness = harness_source_digest()
+    recorded_harness = data.get("harness_source_sha3")
+    harness_bound = isinstance(recorded_harness, str) and recorded_harness == expected_harness
+    provenance["harness_source"] = {
+        "tree_sha3_256": expected_harness,
+        "binary_recorded_sha3_256": (
+            recorded_harness if isinstance(recorded_harness, str) else "absent"
+        ),
+        "binary_matches_tree": harness_bound,
+    }
     pinned = (
-        loaded is not None
+        harness_bound
+        and loaded is not None
         and isinstance(artifact, dict)
         and artifact.get("sha3_256") == loaded["sha3_256"]
     )
@@ -1044,14 +1072,26 @@ def stamp_c_harness_provenance(results_json: Path) -> "Dict[str, Any]":
         provenance["attributable"] = False
         provenance["ama_commit"] = "unknown"
         reasons = list(provenance.get("unattributable_because", []))
-        reasons.append(
-            "the object the C harness process resolved is not pinned "
-            "byte-identical to the attested loaded backend, so neither the "
-            "commit nor the build configuration is evidence of what it ran"
-            if loaded is not None
-            else "the harness recorded no loaded_library block, so the object "
-            "its process resolved cannot be tied to the attested backend"
-        )
+        if not harness_bound:
+            reasons.append(
+                "the harness binary does not attest the tree's source: its "
+                "recorded harness_source_sha3 is "
+                + (recorded_harness if isinstance(recorded_harness, str) else "absent")
+                + ", the tree's multi_library_bench.cpp digests to "
+                + expected_harness
+                + " — a stale or unbound binary cannot be attributed to this commit"
+            )
+        if loaded is None:
+            reasons.append(
+                "the harness recorded no loaded_library block, so the object "
+                "its process resolved cannot be tied to the attested backend"
+            )
+        elif isinstance(artifact, dict) and artifact.get("sha3_256") != loaded["sha3_256"]:
+            reasons.append(
+                "the object the C harness process resolved is not pinned "
+                "byte-identical to the attested loaded backend, so neither the "
+                "commit nor the build configuration is evidence of what it ran"
+            )
         provenance["unattributable_because"] = reasons
     data.pop("provenance", None)
     merged: Dict[str, Any] = {"provenance": provenance}
@@ -1117,7 +1157,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--stamp-multibench":
+    if len(sys.argv) > 1 and sys.argv[1] == "--harness-source-digest":
+        print(harness_source_digest())
+    elif len(sys.argv) > 1 and sys.argv[1] == "--stamp-multibench":
         _repo = Path(__file__).resolve().parent.parent
         _results = (
             Path(sys.argv[2])

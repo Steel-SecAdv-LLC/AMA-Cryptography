@@ -870,6 +870,16 @@ int main(int argc, char** argv) {
         fprintf(j, "    \"avx2\": %d, \"avx512f\": %d, \"sha_ni\": %d, \"bmi2\": %d, \"adx\": %d\n",
                 h.avx2, h.avx512f, h.sha_ni, h.bmi2, h.adx);
         fprintf(j, "  },\n");
+#ifdef AMA_HARNESS_SOURCE_SHA3
+        // The digest of the source this binary was compiled from, injected
+        // by the documented compile line.  The stamper requires it to equal
+        // the tree's multi_library_bench.cpp, so a stale binary built from
+        // an older revision cannot be attributed to the current commit —
+        // the executed-matches-source rule (INVARIANT-40) on the C plane
+        // (review finding on 0bc915a).  A binary compiled without the
+        // define emits nothing and the stamper disowns the record.
+        fprintf(j, "  \"harness_source_sha3\": \"%s\",\n", AMA_HARNESS_SOURCE_SHA3);
+#endif
         if (!loaded_path.empty() && !loaded_digest.empty()) {
             fprintf(j,
                     "  \"loaded_library\": {\"path\": \"%s\", \"sha3_256\": \"%s\", "
