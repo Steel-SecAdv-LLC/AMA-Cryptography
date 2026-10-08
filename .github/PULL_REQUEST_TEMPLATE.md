@@ -46,12 +46,19 @@ Relates to #
 <!-- Which cryptographic standards does this PR affect? -->
 
 - [ ] NIST FIPS 202 (SHA-3)
-- [ ] NIST FIPS 204 (Dilithium)
+- [ ] NIST FIPS 203 (ML-KEM)
+- [ ] NIST FIPS 204 (ML-DSA)
+- [ ] NIST FIPS 205 (SLH-DSA)
+- [ ] NIST SP 800-232 (Ascon)
+- [ ] NIST SP 800-38D (AES-GCM)
 - [ ] NIST SP 800-108 (Key Derivation)
 - [ ] RFC 2104 (HMAC)
 - [ ] RFC 5869 (HKDF)
+- [ ] RFC 7748 (X25519)
+- [ ] RFC 8439 (ChaCha20-Poly1305)
 - [ ] RFC 8032 (Ed25519)
 - [ ] RFC 3161 (Timestamps)
+- [ ] RFC 9591 (FROST)
 - [ ] No standards affected
 
 ### Academic References

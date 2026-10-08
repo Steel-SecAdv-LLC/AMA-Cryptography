@@ -34,6 +34,58 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Staleness audit: every file untouched for four weeks re-verified against the tree — 2026-10-08
+
+All 228 tracked files whose last commit predates 2026-09-10 were checked
+against the implementation: named paths, symbols, callers, tests, gates,
+counts, contact routes and invariant titles. Each is either verified current
+with evidence or corrected at source here; none proved deletable, because
+every one is referenced. All findings are Low (documentation drift); none
+changes compiled code.
+
+- **Claims that no longer resolved, corrected.** `setup.cfg` still said ruff
+  had replaced flake8 outright; #407 reinstated flake8 as an agreement check
+  configured in `.flake8`, and the comment now says so.
+  `src/c/ama_hmac_sha256.h` named a caller, "SPHINCS+ `spx_prf_msg()`", that
+  exists nowhere — SLH-DSA's SHA-2 `prf_msg` uses `ama_hmac_sha512_3` — and
+  now names the real consumers (HKDF, the RFC 6979 nonce derivations in
+  `ama_nistp.c` and `ama_secp256k1.c`, the ctypes binding); the include it
+  left behind in `ama_slhdsa.c` is removed, and that file compiles clean under
+  the strict-warning flags on gcc and clang. `include/ama_uint128.h` claimed
+  Ed25519's fe51 path as a consumer; only Poly1305 uses it (`fe51.h` carries
+  its own wide type). `ama_cryptography/monitor.py` described the top-level
+  `ama_cryptography_monitor` as the source of truth and cited an "audit 2e /
+  v2.1.5" review that no document contains; both names are aliases of
+  `ama_cryptography.monitoring`, and the docstring now says that.
+  `tests/test_basic.py` said the version gate checks "all ten" declaration
+  sites; it checks fourteen single sites plus aggregate scans, and the
+  sentence no longer carries a count that can drift.
+- **Contact and claim routes.** `oss-fuzz/project.yaml` named two
+  `steelsecadv.com` addresses that appear nowhere else in the tree; it now
+  names the security contact `SECURITY.md` and `.well-known/security.txt`
+  publish. The issue-template chooser named email as the private reporting
+  route, where `SECURITY.md` makes GitHub private vulnerability reporting the
+  preferred one. `feature_request.yml` asked reporters twice about an "A+
+  security grade" that no document defines or substantiates (INVARIANT-16);
+  it now refers to the documented security posture.
+- **Documentation coverage.** `docs/api/index.rst` instructs that every
+  public module gets a page; `ascon` (added in the same commit that last
+  touched the index) and `key_formats` had none, and now do.
+  `docs/_intersphinx/README.md` said `docs/conf.py` loads any `.inv` file
+  placed there; it loads only the three candidates its mapping names. The
+  pull-request template's standards checklist predated most of the shipped
+  primitives and now lists FIPS 203/204/205, SP 800-232, SP 800-38D and
+  RFC 7748, 8439 and 9591.
+- **Verified current, unchanged.** Every `docs/api` module page resolves; the
+  Ascon ADR's named artifacts all exist; the wiki sidebar links every page;
+  the six C examples compile clean against `include/`; the five Cython
+  sources, `sha3_binding.pyi`, the three pinned POST KATs, the aarch64
+  toolchain file and the vendored corpora match their consumers;
+  `check_line_endings.py`, `check_fuzz_target_registration.py` (17 C and 1
+  Python harness, every lane) and `tools/sanity_check.py` pass; every
+  `tests/c/test_*.c` is registered with CTest; every `INVARIANT-N` reference
+  in the 138 stale test and fuzz files names one of the 53 invariants.
+
 ### The competitive record re-measured on the 5.0.0 tree; INVARIANT-36 retitled to what it governs — 2026-10-08
 
 - **`benchmarks/multi_library_results.json`, `pqc_results.json` and

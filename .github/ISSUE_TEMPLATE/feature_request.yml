@@ -131,7 +131,7 @@ body:
     id: security-analysis
     attributes:
       label: Security Analysis
-      description: What is the security impact and how does it maintain/improve the A+ security grade?
+      description: What is the security impact on the library's documented security posture (see SECURITY.md)?
       placeholder: |
         Discuss:
         - Classical security level
@@ -190,5 +190,5 @@ body:
           required: true
         - label: I am willing to help implement or test this feature
           required: false
-        - label: This feature maintains or improves the current A+ security grade
+        - label: This feature maintains or improves the library's documented security posture
           required: false

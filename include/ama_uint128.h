@@ -8,8 +8,10 @@
  * MSVC x64:  {lo, hi} struct with _umul128 / __shiftright128 intrinsics.
  *
  * Provides a single type `ama_uint128` and inline helpers so that
- * cryptographic field arithmetic (Ed25519 fe51, Poly1305) compiles
- * identically on all three major compilers.
+ * cryptographic field arithmetic (Poly1305, ama_chacha20poly1305.c)
+ * compiles identically on all three major compilers.  Ed25519's fe51
+ * path carries its own `fe51_wide` in src/c/fe51.h and does not use
+ * this header.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */

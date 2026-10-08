@@ -18,8 +18,8 @@ def test_version() -> None:
     was meant to catch.  Deriving it keeps the real property (``__init__.py``
     must not drift from the packaging metadata) while costing nothing per
     release.  ``tools/check_version_consistency.py`` enforces agreement across
-    all ten declaration sites; this is the fast in-suite check of the pair
-    that matters most at import time.
+    every declaration site it inventories; this is the fast in-suite check of
+    the pair that matters most at import time.
 
     Parsed with a regex rather than ``tomllib`` so the test also runs on the
     project's Python 3.10 floor, where ``tomllib`` is unavailable.
