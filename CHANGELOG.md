@@ -38,24 +38,36 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **`benchmarks/multi_library_results.json`, `pqc_results.json` and
   `competitive.html` are a single-host, single-commit measurement of the
-  5.0.0 tree** (`a35078d`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
-  SHA-NI, the canonical-host class; method, full data and the four
-  same-day passes' spans in `docs/BENCHMARK_HISTORY.md`). They replace
-  the 2026-07-29 record of the 3.4.0 tree, measured on a host without
-  those ISA extensions. AMA leads outright on this run's draw of
-  SHA3-256 (28.2% over libgcrypt), Ed25519 verify (1.87x libsodium),
-  both secp256k1 ECDSA sides and ML-DSA-65 sign/verify (2.3x/2.0x
-  OpenSSL 4.0.3); three rows race within this host's run-to-run
-  variance and are stated as spans, not facts (SHA3 from 12.6% behind to
-  28.2% ahead of libgcrypt across the four runs; HMAC-SHA3-256 2nd of 4
-  here, 1st on the other three; Ed25519 sign 2nd of 6 here behind
-  peers that skip INVARIANT-51's per-signature derivation); it trails
-  where the page says and why (OpenSSL's VAES AES-GCM pipeline 7.6x on
-  this run against the INVARIANT-20 constant-time default, the known
-  ML-KEM vectorisation-breadth gap, PQC keygens carrying INVARIANT-41's
-  pairwise test at the measured plane). The page's NOTES prose is
-  reconciled to the committed ranks, which
-  `tests/test_competitive_page.py` enforces against the rendered table.
+  5.0.0 tree** (`c43c110`, 4-vCPU Xeon @ 2.10 GHz with VAES + VPCLMULQDQ +
+  SHA-NI, the canonical-host class; method, the same-day passes' spans,
+  and the two passes discarded for a named structural cause in
+  `docs/BENCHMARK_HISTORY.md`). They replace the 2026-07-29 record of
+  the 3.4.0 tree, measured on a host without those ISA extensions.
+  Close races are stated at span granularity because single-pass rows
+  on this host carry per-row contention windows: leads on every settled
+  pass — Ed25519 verify (1.55x libsodium here), secp256k1 ECDSA sign
+  (1.21x Botan, 4.4x OpenSSL), ML-DSA-65 sign/verify (3.1x/1.8x OpenSSL
+  4.0.3); races — SHA3-256 1st of 6 here at 38% over libgcrypt (span:
+  12.6% behind to 38% ahead), HMAC-SHA3-256 and secp256k1 verify 2nd/3rd
+  on this draw but 1st on most settled passes, Ed25519 sign 3rd behind
+  peers that skip INVARIANT-51's per-signature derivation; stable
+  trails with named reasons — AES-GCM 5th of 8 under the 8.6x VAES
+  pipeline against INVARIANT-20's constant-time default, ML-KEM
+  2.1x/1.7x, PQC keygens carrying INVARIANT-41's pairwise test at the
+  measured plane. NOTES prose reconciled to the committed ranks,
+  enforced by `tests/test_competitive_page.py`.
+- **The harness binary attests the source it was compiled from**
+  (review finding on `0bc915a`, Medium — the chain's last link): a
+  clean checkout can still run a stale `multibench` built from an older
+  revision, and the loaded-library digest proves only the AMA object.
+  The documented compile line injects `AMA_HARNESS_SOURCE_SHA3` (the
+  file's SHA3-256 by the package's own kernel), the binary emits it
+  beside its results, and the stamper refuses attribution unless the
+  recorded digest equals the tree's `multi_library_bench.cpp` — the
+  executed-matches-source rule (INVARIANT-40) on the C plane. PIN
+  `test_a_stale_or_unbound_harness_binary_is_disowned`,
+  mutation-earned, both arms (absent and mismatched). The duplicated
+  history heading from the same review (Low) is deduplicated.
 - **The provenance chain's last gaps closed** (four review findings on
   `f0582cf`, all Medium, each the same evidence rule one level deeper,
   every refusal mutation-pinned). The C harness's `loaded_library`

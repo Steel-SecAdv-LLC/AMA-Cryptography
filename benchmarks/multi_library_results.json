@@ -1,19 +1,25 @@
 {
  "provenance": {
   "ama_version": "5.0.0",
-  "ama_commit": "a35078d32d7b8f60fe6bbf1e8ff7c4d694583306",
+  "ama_commit": "c43c1103611c8ade486eedf56db58b2a212536e9",
   "attributable": true,
   "tree_dirty": true,
   "dirty_paths": [
-   "benchmarks/multi_library_results.json"
+   "benchmarks/multi_library_results.json",
+   "benchmarks/pqc_results.json"
   ],
-  "measured_at": "2026-10-08T06:59:43.314364+00:00",
+  "measured_at": "2026-10-08T07:31:15.269480+00:00",
   "note": "written by the harness before measuring",
   "native_artifact": {
    "file": "libama_cryptography.so",
    "sha3_256": "76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a"
   },
   "native_build": "GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)",
+  "harness_source": {
+   "tree_sha3_256": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
+   "binary_recorded_sha3_256": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
+   "binary_matches_tree": true
+  },
   "linked_library": {
    "file": "libama_cryptography.so.5",
    "path": "/home/user/AMA-Cryptography/build/lib/libama_cryptography.so.5",
@@ -22,7 +28,7 @@
    "byte_identical_to_loaded_backend": true
   }
  },
- "freq_hz": 2100512580.1,
+ "freq_hz": 2100445672.7,
  "message_bytes": 65536,
  "host": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
@@ -37,6 +43,7 @@
   "bmi2": 1,
   "adx": 1
  },
+ "harness_source_sha3": "96f6388717dc9d74b2016660022b2b394e2b294b3de60e3fa57ea72228f9dde5",
  "loaded_library": {
   "path": "/home/user/AMA-Cryptography/build/lib/libama_cryptography.so.5",
   "sha3_256": "76a4afbba5a7308bd6760cfeb7647fcbae1b659feb03914025ea036894feb53a",
@@ -56,396 +63,396 @@
   {
    "primitive": "SHA3-256",
    "library": "AMA",
-   "us_per_op": 113.18156,
-   "ops_per_sec": 8835.36,
-   "mb_per_sec": 579.034,
-   "cycles_per_byte": 3.6276
+   "us_per_op": 116.021885,
+   "ops_per_sec": 8619.06,
+   "mb_per_sec": 564.859,
+   "cycles_per_byte": 3.7185
   },
   {
    "primitive": "SHA3-256",
    "library": "OpenSSL",
-   "us_per_op": 164.47241,
-   "ops_per_sec": 6080.05,
-   "mb_per_sec": 398.462,
-   "cycles_per_byte": 5.2716
+   "us_per_op": 150.382545,
+   "ops_per_sec": 6649.71,
+   "mb_per_sec": 435.795,
+   "cycles_per_byte": 4.8198
   },
   {
    "primitive": "SHA3-256",
    "library": "wolfSSL",
-   "us_per_op": 177.2278,
-   "ops_per_sec": 5642.46,
-   "mb_per_sec": 369.784,
-   "cycles_per_byte": 5.6804
+   "us_per_op": 182.32063,
+   "ops_per_sec": 5484.84,
+   "mb_per_sec": 359.455,
+   "cycles_per_byte": 5.8434
   },
   {
    "primitive": "SHA3-256",
    "library": "Botan",
-   "us_per_op": 174.83995,
-   "ops_per_sec": 5719.52,
-   "mb_per_sec": 374.834,
-   "cycles_per_byte": 5.6038
+   "us_per_op": 162.273205,
+   "ops_per_sec": 6162.45,
+   "mb_per_sec": 403.862,
+   "cycles_per_byte": 5.2009
   },
   {
    "primitive": "SHA3-256",
    "library": "Nettle",
-   "us_per_op": 213.410455,
-   "ops_per_sec": 4685.81,
-   "mb_per_sec": 307.089,
-   "cycles_per_byte": 6.8401
+   "us_per_op": 216.260135,
+   "ops_per_sec": 4624.06,
+   "mb_per_sec": 303.042,
+   "cycles_per_byte": 6.9312
   },
   {
    "primitive": "SHA3-256",
    "library": "libgcrypt",
-   "us_per_op": 145.138135,
-   "ops_per_sec": 6889.99,
-   "mb_per_sec": 451.542,
-   "cycles_per_byte": 4.6519
+   "us_per_op": 159.86571,
+   "ops_per_sec": 6255.25,
+   "mb_per_sec": 409.944,
+   "cycles_per_byte": 5.1237
   },
   {
    "primitive": "HMAC-SHA3-256",
    "library": "AMA",
-   "us_per_op": 136.03719,
-   "ops_per_sec": 7350.93,
-   "mb_per_sec": 481.751,
-   "cycles_per_byte": 4.3602
+   "us_per_op": 128.89843,
+   "ops_per_sec": 7758.05,
+   "mb_per_sec": 508.431,
+   "cycles_per_byte": 4.1312
   },
   {
    "primitive": "HMAC-SHA3-256",
    "library": "OpenSSL",
-   "us_per_op": 164.47186,
-   "ops_per_sec": 6080.07,
-   "mb_per_sec": 398.463,
-   "cycles_per_byte": 5.2715
+   "us_per_op": 116.62492,
+   "ops_per_sec": 8574.5,
+   "mb_per_sec": 561.938,
+   "cycles_per_byte": 3.7379
   },
   {
    "primitive": "HMAC-SHA3-256",
    "library": "Botan",
-   "us_per_op": 175.79299,
-   "ops_per_sec": 5688.51,
-   "mb_per_sec": 372.802,
-   "cycles_per_byte": 5.6344
+   "us_per_op": 232.09064,
+   "ops_per_sec": 4308.66,
+   "mb_per_sec": 282.372,
+   "cycles_per_byte": 7.4386
   },
   {
    "primitive": "HMAC-SHA3-256",
    "library": "libgcrypt",
-   "us_per_op": 131.91715,
-   "ops_per_sec": 7580.52,
-   "mb_per_sec": 496.797,
-   "cycles_per_byte": 4.2281
+   "us_per_op": 217.504645,
+   "ops_per_sec": 4597.6,
+   "mb_per_sec": 301.309,
+   "cycles_per_byte": 6.9711
   },
   {
    "primitive": "AES-256-GCM",
    "library": "AMA",
-   "us_per_op": 60.22061,
-   "ops_per_sec": 16605.61,
-   "mb_per_sec": 1088.265,
-   "cycles_per_byte": 1.9301
+   "us_per_op": 63.164445,
+   "ops_per_sec": 15831.69,
+   "mb_per_sec": 1037.546,
+   "cycles_per_byte": 2.0244
   },
   {
    "primitive": "AES-256-GCM",
    "library": "OpenSSL",
-   "us_per_op": 7.926485,
-   "ops_per_sec": 126159.33,
-   "mb_per_sec": 8267.978,
-   "cycles_per_byte": 0.2541
+   "us_per_op": 7.38655,
+   "ops_per_sec": 135381.2,
+   "mb_per_sec": 8872.342,
+   "cycles_per_byte": 0.2367
   },
   {
    "primitive": "AES-256-GCM",
    "library": "libsodium",
-   "us_per_op": 33.251505,
-   "ops_per_sec": 30073.83,
-   "mb_per_sec": 1970.918,
-   "cycles_per_byte": 1.0658
+   "us_per_op": 39.01667,
+   "ops_per_sec": 25630.07,
+   "mb_per_sec": 1679.692,
+   "cycles_per_byte": 1.2505
   },
   {
    "primitive": "AES-256-GCM",
    "library": "wolfSSL",
-   "us_per_op": 506.90281,
-   "ops_per_sec": 1972.76,
-   "mb_per_sec": 129.287,
-   "cycles_per_byte": 16.2469
+   "us_per_op": 550.6366,
+   "ops_per_sec": 1816.08,
+   "mb_per_sec": 119.019,
+   "cycles_per_byte": 17.648
   },
   {
    "primitive": "AES-256-GCM",
    "library": "Botan",
-   "us_per_op": 110.90071,
-   "ops_per_sec": 9017.07,
-   "mb_per_sec": 590.943,
-   "cycles_per_byte": 3.5545
+   "us_per_op": 109.588245,
+   "ops_per_sec": 9125.07,
+   "mb_per_sec": 598.02,
+   "cycles_per_byte": 3.5123
   },
   {
    "primitive": "AES-256-GCM",
    "library": "Nettle",
-   "us_per_op": 24.024445,
-   "ops_per_sec": 41624.27,
-   "mb_per_sec": 2727.888,
-   "cycles_per_byte": 0.77
+   "us_per_op": 21.20713,
+   "ops_per_sec": 47153.95,
+   "mb_per_sec": 3090.281,
+   "cycles_per_byte": 0.6797
   },
   {
    "primitive": "AES-256-GCM",
    "library": "libgcrypt",
-   "us_per_op": 14.98519,
-   "ops_per_sec": 66732.55,
-   "mb_per_sec": 4373.385,
-   "cycles_per_byte": 0.4803
+   "us_per_op": 11.500145,
+   "ops_per_sec": 86955.43,
+   "mb_per_sec": 5698.711,
+   "cycles_per_byte": 0.3686
   },
   {
    "primitive": "AES-256-GCM",
    "library": "mbedTLS",
-   "us_per_op": 306.038035,
-   "ops_per_sec": 3267.57,
-   "mb_per_sec": 214.143,
-   "cycles_per_byte": 9.8089
+   "us_per_op": 275.0612,
+   "ops_per_sec": 3635.55,
+   "mb_per_sec": 238.26,
+   "cycles_per_byte": 8.8158
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "AMA",
-   "us_per_op": 67.014285,
-   "ops_per_sec": 14922.19,
-   "mb_per_sec": 977.941,
-   "cycles_per_byte": 2.1479
+   "us_per_op": 65.252905,
+   "ops_per_sec": 15324.99,
+   "mb_per_sec": 1004.338,
+   "cycles_per_byte": 2.0914
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "OpenSSL",
-   "us_per_op": 21.0414,
-   "ops_per_sec": 47525.35,
-   "mb_per_sec": 3114.622,
-   "cycles_per_byte": 0.6744
+   "us_per_op": 20.356105,
+   "ops_per_sec": 49125.31,
+   "mb_per_sec": 3219.476,
+   "cycles_per_byte": 0.6524
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "libsodium",
-   "us_per_op": 45.18726,
-   "ops_per_sec": 22130.13,
-   "mb_per_sec": 1450.32,
-   "cycles_per_byte": 1.4483
+   "us_per_op": 44.461755,
+   "ops_per_sec": 22491.24,
+   "mb_per_sec": 1473.986,
+   "cycles_per_byte": 1.425
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "wolfSSL",
-   "us_per_op": 163.633755,
-   "ops_per_sec": 6111.21,
-   "mb_per_sec": 400.504,
-   "cycles_per_byte": 5.2447
+   "us_per_op": 160.49734,
+   "ops_per_sec": 6230.63,
+   "mb_per_sec": 408.331,
+   "cycles_per_byte": 5.144
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "Botan",
-   "us_per_op": 107.82802,
-   "ops_per_sec": 9274.03,
-   "mb_per_sec": 607.783,
-   "cycles_per_byte": 3.456
+   "us_per_op": 129.13519,
+   "ops_per_sec": 7743.82,
+   "mb_per_sec": 507.499,
+   "cycles_per_byte": 4.1388
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "Nettle",
-   "us_per_op": 106.794305,
-   "ops_per_sec": 9363.8,
-   "mb_per_sec": 613.666,
-   "cycles_per_byte": 3.4229
+   "us_per_op": 126.706115,
+   "ops_per_sec": 7892.28,
+   "mb_per_sec": 517.228,
+   "cycles_per_byte": 4.061
   },
   {
    "primitive": "ChaCha20-Poly1305",
    "library": "mbedTLS",
-   "us_per_op": 175.18923,
-   "ops_per_sec": 5708.11,
-   "mb_per_sec": 374.087,
-   "cycles_per_byte": 5.615
+   "us_per_op": 199.987085,
+   "ops_per_sec": 5000.32,
+   "mb_per_sec": 327.701,
+   "cycles_per_byte": 6.4096
   },
   {
    "primitive": "Ascon-128 AEAD",
    "library": "AMA",
-   "us_per_op": 147.905735,
-   "ops_per_sec": 6761.06,
-   "mb_per_sec": 443.093,
-   "cycles_per_byte": 4.7406
+   "us_per_op": 158.99683,
+   "ops_per_sec": 6289.43,
+   "mb_per_sec": 412.184,
+   "cycles_per_byte": 5.0959
   },
   {
    "primitive": "Ed25519 sign",
    "library": "AMA",
-   "us_per_op": 18.035867,
-   "ops_per_sec": 55445.08
+   "us_per_op": 20.25396,
+   "ops_per_sec": 49373.06
   },
   {
    "primitive": "Ed25519 verify",
    "library": "AMA",
-   "us_per_op": 25.8991,
-   "ops_per_sec": 38611.38
+   "us_per_op": 29.521483,
+   "ops_per_sec": 33873.64
   },
   {
    "primitive": "Ed25519 sign",
    "library": "OpenSSL",
-   "us_per_op": 40.23707,
-   "ops_per_sec": 24852.7
+   "us_per_op": 41.0121,
+   "ops_per_sec": 24383.05
   },
   {
    "primitive": "Ed25519 verify",
    "library": "OpenSSL",
-   "us_per_op": 109.54736,
-   "ops_per_sec": 9128.47
+   "us_per_op": 107.872303,
+   "ops_per_sec": 9270.22
   },
   {
    "primitive": "Ed25519 sign",
    "library": "libsodium",
-   "us_per_op": 16.52022,
-   "ops_per_sec": 60531.88
+   "us_per_op": 16.56632,
+   "ops_per_sec": 60363.44
   },
   {
    "primitive": "Ed25519 verify",
    "library": "libsodium",
-   "us_per_op": 48.32973,
-   "ops_per_sec": 20691.2
+   "us_per_op": 45.69634,
+   "ops_per_sec": 21883.59
   },
   {
    "primitive": "Ed25519 sign",
    "library": "wolfSSL",
-   "us_per_op": 22.360597,
-   "ops_per_sec": 44721.53
+   "us_per_op": 17.69765,
+   "ops_per_sec": 56504.68
   },
   {
    "primitive": "Ed25519 verify",
    "library": "wolfSSL",
-   "us_per_op": 57.90151,
-   "ops_per_sec": 17270.71
+   "us_per_op": 91.621347,
+   "ops_per_sec": 10914.49
   },
   {
    "primitive": "Ed25519 sign",
    "library": "Botan",
-   "us_per_op": 50.51955,
-   "ops_per_sec": 19794.32
+   "us_per_op": 60.910823,
+   "ops_per_sec": 16417.44
   },
   {
    "primitive": "Ed25519 verify",
    "library": "Botan",
-   "us_per_op": 149.51656,
-   "ops_per_sec": 6688.22
+   "us_per_op": 148.254707,
+   "ops_per_sec": 6745.15
   },
   {
    "primitive": "Ed25519 sign",
    "library": "Nettle",
-   "us_per_op": 25.169913,
-   "ops_per_sec": 39729.97
+   "us_per_op": 25.155403,
+   "ops_per_sec": 39752.89
   },
   {
    "primitive": "Ed25519 verify",
    "library": "Nettle",
-   "us_per_op": 92.594783,
-   "ops_per_sec": 10799.74
+   "us_per_op": 92.489313,
+   "ops_per_sec": 10812.06
   },
   {
    "primitive": "X25519 scalar-mult",
    "library": "AMA",
-   "us_per_op": 44.635107,
-   "ops_per_sec": 22403.89
+   "us_per_op": 43.486223,
+   "ops_per_sec": 22995.79
   },
   {
    "primitive": "X25519 scalar-mult",
    "library": "OpenSSL",
-   "us_per_op": 34.655407,
-   "ops_per_sec": 28855.53
+   "us_per_op": 35.391053,
+   "ops_per_sec": 28255.73
   },
   {
    "primitive": "X25519 scalar-mult",
    "library": "libsodium",
-   "us_per_op": 41.336527,
-   "ops_per_sec": 24191.68
+   "us_per_op": 39.4228,
+   "ops_per_sec": 25366.03
   },
   {
    "primitive": "X25519 scalar-mult",
    "library": "wolfSSL",
-   "us_per_op": 48.765153,
-   "ops_per_sec": 20506.45
+   "us_per_op": 51.037863,
+   "ops_per_sec": 19593.3
   },
   {
    "primitive": "X25519 scalar-mult",
    "library": "Nettle",
-   "us_per_op": 60.352493,
-   "ops_per_sec": 16569.32
+   "us_per_op": 59.767893,
+   "ops_per_sec": 16731.39
   },
   {
    "primitive": "P-256 ECDSA sign",
    "library": "AMA",
-   "us_per_op": 119.388703,
-   "ops_per_sec": 8376.0
+   "us_per_op": 128.128617,
+   "ops_per_sec": 7804.66
   },
   {
    "primitive": "P-256 ECDSA verify",
    "library": "AMA",
-   "us_per_op": 234.923633,
-   "ops_per_sec": 4256.7
+   "us_per_op": 268.344197,
+   "ops_per_sec": 3726.56
   },
   {
    "primitive": "P-256 ECDSA sign",
    "library": "OpenSSL",
-   "us_per_op": 26.03212,
-   "ops_per_sec": 38414.08
+   "us_per_op": 30.878523,
+   "ops_per_sec": 32384.97
   },
   {
    "primitive": "P-256 ECDSA verify",
    "library": "OpenSSL",
-   "us_per_op": 81.400783,
-   "ops_per_sec": 12284.89
+   "us_per_op": 92.27393,
+   "ops_per_sec": 10837.3
   },
   {
    "primitive": "P-256 ECDSA sign",
    "library": "wolfSSL",
-   "us_per_op": 93.823193,
-   "ops_per_sec": 10658.35
+   "us_per_op": 74.084343,
+   "ops_per_sec": 13498.13
   },
   {
    "primitive": "P-256 ECDSA verify",
    "library": "wolfSSL",
-   "us_per_op": 93.006107,
-   "ops_per_sec": 10751.98
+   "us_per_op": 82.720503,
+   "ops_per_sec": 12088.9
   },
   {
    "primitive": "P-256 ECDSA sign",
    "library": "Botan",
-   "us_per_op": 147.37024,
-   "ops_per_sec": 6785.63
+   "us_per_op": 143.642273,
+   "ops_per_sec": 6961.74
   },
   {
    "primitive": "P-256 ECDSA verify",
    "library": "Botan",
-   "us_per_op": 324.740717,
-   "ops_per_sec": 3079.38
+   "us_per_op": 447.474643,
+   "ops_per_sec": 2234.76
   },
   {
    "primitive": "secp256k1 ECDSA sign",
    "library": "AMA",
-   "us_per_op": 98.36838,
-   "ops_per_sec": 10165.87
+   "us_per_op": 125.113737,
+   "ops_per_sec": 7992.73
   },
   {
    "primitive": "secp256k1 ECDSA verify",
    "library": "AMA",
-   "us_per_op": 228.131083,
-   "ops_per_sec": 4383.44
+   "us_per_op": 313.808333,
+   "ops_per_sec": 3186.66
   },
   {
    "primitive": "secp256k1 ECDSA sign",
    "library": "OpenSSL",
-   "us_per_op": 292.583903,
-   "ops_per_sec": 3417.82
+   "us_per_op": 547.184883,
+   "ops_per_sec": 1827.54
   },
   {
    "primitive": "secp256k1 ECDSA verify",
    "library": "OpenSSL",
-   "us_per_op": 255.3062,
-   "ops_per_sec": 3916.87
+   "us_per_op": 300.87905,
+   "ops_per_sec": 3323.59
   },
   {
    "primitive": "secp256k1 ECDSA sign",
    "library": "Botan",
-   "us_per_op": 145.571683,
-   "ops_per_sec": 6869.47
+   "us_per_op": 151.657277,
+   "ops_per_sec": 6593.81
   },
   {
    "primitive": "secp256k1 ECDSA verify",
    "library": "Botan",
-   "us_per_op": 281.055623,
-   "ops_per_sec": 3558.01
+   "us_per_op": 253.500553,
+   "ops_per_sec": 3944.76
   }
  ]
 }

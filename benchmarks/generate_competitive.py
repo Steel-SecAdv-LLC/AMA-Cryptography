@@ -257,42 +257,44 @@ COVERAGE: dict[str, dict[str, bool]] = {
 NOTES = {
     "AES-256-GCM": (
         "AMA defaults to constant-time AES (INVARIANT-20), which never indexes "
-        "a table with key-dependent data. OpenSSL leads 7.6x through an "
+        "a table with key-dependent data. OpenSSL leads 8.6x through an "
         "AES-NI + VAES + VPCLMULQDQ pipeline tuned end-to-end for this one "
         "construction, with libgcrypt, Nettle and libsodium also ahead on this "
-        "host. AMA places 5th of 8, 1.84x ahead of Botan and ahead of "
-        "mbedTLS and wolfSSL on this build."
+        "host. AMA places 5th of 8, 1.74x ahead of Botan and ahead of mbedTLS "
+        "and wolfSSL on this build — the stable rank across every same-day "
+        "pass."
     ),
     "ChaCha20-Poly1305": (
         "OpenSSL runs an AVX-512 vectorised ChaCha20 core, 3.2x ahead here; "
-        "libsodium is 1.48x ahead. AMA's is SIMD but not vectorised to that "
-        "width. Third of seven."
+        "libsodium is 1.47x ahead. AMA's is SIMD but not vectorised to that "
+        "width. Third of seven in every same-day pass."
     ),
     "SHA3-256": (
-        "libgcrypt carries a hand-optimised Keccak permutation. AMA's "
-        "single-stream scalar permutation places first of six on this run, "
-        "28.2% ahead of libgcrypt — a pair that races within this host's "
-        "run-to-run variance (four same-day runs span AMA 12.6% behind to "
-        "28.2% ahead; the x4 AVX2 path batches four independent hashes and "
-        "does not apply to one stream)."
+        "AMA's single-stream scalar permutation places first of six on this "
+        "pass, 38% ahead of libgcrypt — a pair that races within this "
+        "shared-vCPU host's run-to-run variance (the same-day passes span "
+        "AMA 12.6% behind to 38% ahead; the x4 AVX2 path batches four "
+        "independent hashes and does not apply to one stream)."
     ),
     "HMAC-SHA3-256": (
-        "Tracks the SHA3-256 permutation race above; second of four on "
-        "this run, 3.1% behind libgcrypt, and first in three of the four "
-        "same-day runs — the same within-variance race as the hash itself."
+        "Second of four on this pass, 1.11x behind OpenSSL — whose HMAC row "
+        "outruns its own SHA3 row here, a different-provider artefact inside "
+        "OpenSSL, not a property of the hash. AMA led this table on three of "
+        "the five settled same-day passes; read it as the same "
+        "within-variance race as the permutation itself."
     ),
     "Ed25519 sign": (
-        "libsodium leads by 1.09x on this run (second of six; third, behind "
-        "wolfSSL too, on three of the four same-day runs). AMA re-derives "
-        "the public half from the scalar on every signature and refuses a "
-        "stored half the scalar does not generate (INVARIANT-51); the peers "
-        "read the cached public half out of the key."
+        "libsodium and wolfSSL lead by 1.22x and 1.14x on this pass. AMA "
+        "re-derives the public half from the scalar on every signature and "
+        "refuses a stored half the scalar does not generate (INVARIANT-51); "
+        "the peers read the cached public half out of the key. Third of six "
+        "on four of the five settled passes."
     ),
-    "Ed25519 verify": "Fastest of six, 1.87x ahead of libsodium.",
+    "Ed25519 verify": ("Fastest of six on every same-day pass; 1.55x ahead of libsodium " "here."),
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 1.29x of OpenSSL and 1.08x of libsodium. "
-        "Third of five."
+        "multiply path. AMA is within 1.23x of OpenSSL and 1.11x of "
+        "libsodium. Third of five in every same-day pass."
     ),
     "P-256 ECDSA sign": (
         "OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation "
@@ -300,30 +302,36 @@ NOTES = {
         "which serves P-256, P-384 and P-521 from one body of code."
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
+    "secp256k1 ECDSA sign": (
+        "Fastest of three on every same-day pass: 1.21x ahead of Botan and "
+        "4.4x ahead of OpenSSL here, after the fixed-base comb landed (#379)."
+    ),
     "secp256k1 ECDSA verify": (
-        "Fastest of three: 1.12x ahead of OpenSSL and 1.23x ahead of Botan. "
-        "The signing side also leads outright (1.48x Botan, 3.0x OpenSSL), "
-        "after the fixed-base comb landed (#379)."
+        "Third of three on this pass, 1.24x behind Botan — but first on four "
+        "of the five settled same-day passes (by 4.6%-11.8% over Botan): the "
+        "verify block caught this pass's contention window, and the race is "
+        "stated rather than re-rolled."
     ),
     "ML-KEM-1024 encaps": (
         f"The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
         f"scalar, AVX-512 adding a further 1.22x) but is not vectorised across "
-        f"the breadth {PQC_PEER} reaches, which is 2.2x ahead here. Closing it "
+        f"the breadth {PQC_PEER} reaches, which is 2.1x ahead here. Closing it "
         f"is a multi-week vectorisation project, not a tuning pass, and it is "
         f"not claimed as done."
     ),
-    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.6x behind.",
+    "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation; 1.7x behind.",
     "ML-KEM-1024 keygen": (
-        "2.2x behind — and at this Python plane the AMA row also carries the "
+        "2.3x behind — and at this Python plane the AMA row also carries the "
         "FIPS 140-3 pairwise consistency test (INVARIANT-41: a full "
         "encapsulate/decapsulate before any keypair is released), which the "
         "peer's keygen does not run."
     ),
     "ML-DSA-65 keygen": (
-        "3.4x behind at this plane — but the AMA row is keygen plus the "
+        "3.3x behind at this plane — but the AMA row is keygen plus the "
         "INVARIANT-41 pairwise consistency test (a full ML-DSA sign and "
         "verify before the keypair is released), which the peer row does not "
-        "perform. Signing (2.3x) and verification (2.0x) both lead outright."
+        "perform. Signing (3.1x) and verification (1.8x) both lead outright, "
+        "on every same-day pass."
     ),
 }
 
