@@ -35,6 +35,12 @@
 #ifndef _WIN32
 #include <dlfcn.h>
 #endif
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+#endif
 
 extern "C" {
 #include "ama_cryptography.h"
@@ -782,30 +788,70 @@ int main(int argc, char** argv) {
     // provenance stamper used to hash a caller-supplied path instead,
     // which the dynamic loader may never have mapped — LD_LIBRARY_PATH,
     // RPATH or ldconfig can resolve another same-named library (review
-    // finding on 8a26498).  A static link resolves to the executable and
-    // a non-matching digest, which the stamper then refuses to attribute:
-    // fail closed, never a guess.
+    // finding on 8a26498).  And a pathname alone is not the mapping: a
+    // POSIX mapping survives rename/replacement, so reopening dli_fname
+    // could hash a replacement file while the stale inode stays mapped
+    // (review finding on f0582cf).  The bytes are therefore hashed from
+    // an open descriptor whose (st_dev, st_ino) must equal the device and
+    // inode /proc/self/maps records for the mapping that contains
+    // ama_sha3_256 itself — evidence tied to the live mapping, the same
+    // rule as the Python loader's preload_digest_is_of_mapped_bytes.  Any
+    // step that cannot produce that evidence emits nothing, and a record
+    // without loaded_library is refused by the stamper: fail closed,
+    // never a guess.  A static link resolves dladdr to the executable,
+    // whose digest cannot match the attested backend, so it demotes too.
     std::string loaded_path, loaded_digest;
-#ifndef _WIN32
+#ifdef __linux__
     {
         Dl_info dli;
+        const uintptr_t sym = reinterpret_cast<uintptr_t>(&ama_sha3_256);
         if (dladdr(reinterpret_cast<void*>(&ama_sha3_256), &dli) && dli.dli_fname &&
             *dli.dli_fname && !strchr(dli.dli_fname, '"') && !strchr(dli.dli_fname, '\\')) {
-            FILE* lf = fopen(dli.dli_fname, "rb");
-            if (lf) {
-                std::vector<uint8_t> bytes;
-                uint8_t chunk[1 << 16];
-                size_t got;
-                while ((got = fread(chunk, 1, sizeof chunk, lf)) > 0)
-                    bytes.insert(bytes.end(), chunk, chunk + got);
-                fclose(lf);
-                uint8_t dig[32];
-                if (!bytes.empty() && ama_sha3_256(bytes.data(), bytes.size(), dig) == AMA_SUCCESS) {
-                    char hex[65];
-                    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dig[i]);
-                    loaded_path = dli.dli_fname;
-                    loaded_digest = hex;
+            // The mapping that contains the symbol, from /proc/self/maps:
+            // "start-end perms offset major:minor inode  path".
+            unsigned long long map_major = 0, map_minor = 0, map_inode = 0;
+            bool mapped = false;
+            FILE* maps = fopen("/proc/self/maps", "r");
+            if (maps) {
+                char line[4096];
+                while (fgets(line, sizeof line, maps)) {
+                    unsigned long long lo, hi, off, ino;
+                    unsigned int maj, min;
+                    char perms[8];
+                    if (sscanf(line, "%llx-%llx %7s %llx %x:%x %llu", &lo, &hi, perms, &off,
+                               &maj, &min, &ino) == 7 &&
+                        sym >= lo && sym < hi) {
+                        map_major = maj;
+                        map_minor = min;
+                        map_inode = ino;
+                        mapped = true;
+                        break;
+                    }
                 }
+                fclose(maps);
+            }
+            int fd = mapped ? open(dli.dli_fname, O_RDONLY) : -1;
+            if (fd >= 0) {
+                struct stat st;
+                const bool same_inode =
+                    fstat(fd, &st) == 0 && st.st_ino == static_cast<ino_t>(map_inode) &&
+                    major(st.st_dev) == map_major && minor(st.st_dev) == map_minor;
+                if (same_inode) {
+                    std::vector<uint8_t> bytes;
+                    uint8_t chunk[1 << 16];
+                    ssize_t got;
+                    while ((got = read(fd, chunk, sizeof chunk)) > 0)
+                        bytes.insert(bytes.end(), chunk, chunk + got);
+                    uint8_t dig[32];
+                    if (got == 0 && !bytes.empty() &&
+                        ama_sha3_256(bytes.data(), bytes.size(), dig) == AMA_SUCCESS) {
+                        char hex[65];
+                        for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dig[i]);
+                        loaded_path = dli.dli_fname;
+                        loaded_digest = hex;
+                    }
+                }
+                close(fd);
             }
         }
     }
@@ -827,8 +873,9 @@ int main(int argc, char** argv) {
         if (!loaded_path.empty() && !loaded_digest.empty()) {
             fprintf(j,
                     "  \"loaded_library\": {\"path\": \"%s\", \"sha3_256\": \"%s\", "
-                    "\"method\": \"dladdr(ama_sha3_256); whole-file SHA3-256 computed "
-                    "by the resolved library itself\"},\n",
+                    "\"method\": \"dladdr(ama_sha3_256); bytes hashed from an open fd "
+                    "whose dev:inode equals the live mapping's in /proc/self/maps; "
+                    "SHA3-256 computed by the resolved library itself\"},\n",
                     loaded_path.c_str(), loaded_digest.c_str());
         }
         fprintf(j, "  \"libraries_compiled\": [\"AMA\"");

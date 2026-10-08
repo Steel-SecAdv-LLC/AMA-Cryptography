@@ -818,6 +818,11 @@ _MEASURED_BUILD_PATHS = (
     "pyproject.toml",
     "benchmarks/comparative_benchmark.py",
     "benchmarks/pqc_comparative_bench.py",
+    # The C harness is measuring code too: an uncommitted edit to it can
+    # produce different rows, and the loaded-library digest proves only
+    # which AMA object ran, not which harness measured it (review finding
+    # on f0582cf).
+    "benchmarks/multi_library_bench.cpp",
 )
 
 
@@ -919,13 +924,32 @@ def _measurement_provenance() -> "Dict[str, Any]":
     # the preload digest is not of the mapped bytes (and on any attestation
     # failure), the same stale-build hole the field exists to close
     # (review finding on a3508b6).
-    if not isinstance(block.get("native_artifact"), dict):
+    artifact_unpinned = not isinstance(block.get("native_artifact"), dict)
+    build = str(block.get("native_build", ""))
+    # benchmark_runner.BUILD_CONFIGURATION_NOT_RECORDED is "not recorded";
+    # _attach_native_artifact's own refusals say "unrecorded".  Either way
+    # the record has no build flags.
+    build_unrecorded = build.startswith("unrecorded") or build.startswith("not recorded")
+    if artifact_unpinned or build_unrecorded:
+        # AGENTS.md section 8 item 7: a published figure carries its build
+        # flags.  A pinned artifact whose build no tree digest-matches is
+        # as unpublishable as an unpinned artifact (review finding on
+        # f0582cf: the not-recorded build line previously rode through
+        # under attributable: true).
         block["attributable"] = False
         block["ama_commit"] = "unknown"
         unattributable = list(block.get("unattributable_because", []))
-        unattributable.append(
-            "the executed native artifact could not be pinned: " + str(block.get("native_artifact"))
-        )
+        if artifact_unpinned:
+            unattributable.append(
+                "the executed native artifact could not be pinned: "
+                + str(block.get("native_artifact"))
+            )
+        else:
+            unattributable.append(
+                "the pinned artifact's build configuration is not recorded "
+                "(no build tree digest-matches the measured object), and a "
+                "figure does not publish without its build flags: " + build
+            )
         block["unattributable_because"] = unattributable
     return block
 

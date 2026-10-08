@@ -203,6 +203,39 @@ def step_metrics(alarms: list[bool], clean: list[bool], mid: int) -> tuple[bool,
     return bool(attributable), delay, len(before) / (mid - WINDOW), excess
 
 
+def _write_table(out: Path, body: str, provenance: str) -> None:
+    """The one write path for the table; it refuses an unpublishable trailer."""
+    _refuse_unpublishable_provenance(provenance)
+    out.write_text(body + provenance, encoding="utf-8")
+
+
+def _refuse_unpublishable_provenance(provenance: str) -> None:
+    """Refuse to publish a table whose trailer cannot pin what ran.
+
+    AGENTS.md section 8 item 7: a published figure carries its build
+    flags, and the artifact line is what ties them to the measured
+    object.  ``_provenance_lines`` stays able to DESCRIBE an unpinnable
+    state (its own test reads those lines), but a regeneration must not
+    PUBLISH one: on a loader without mapped-byte evidence, or with no
+    digest-matched build tree, the table is refused rather than written
+    with 'unrecorded' in its trailer (review finding on f0582cf).
+    """
+    unpublishable = [
+        line
+        for line in provenance.splitlines()
+        if line.startswith(
+            ("# artifact: unrecorded", "# build: unrecorded", "# build: not recorded")
+        )
+    ]
+    if unpublishable:
+        raise SystemExit(
+            "refusing to write the efficacy table: the provenance trailer "
+            "cannot pin what ran — " + "; ".join(unpublishable) + ". Re-run "
+            "on a host whose loader yields mapped-byte artifact evidence "
+            "and whose build tree digest-matches the measured object."
+        )
+
+
 def _provenance_lines(seed: int) -> str:
     """The measurement's provenance, recorded with the figures it covers.
 
@@ -352,12 +385,11 @@ def main() -> int:
                 f"\t{delay}\t1\t{excess:+.4f}"
             )
 
-    out = REPO / args.out
-    out.write_text(
+    _write_table(
+        REPO / args.out,
         "\n".join(rows)
-        + f"\n# benign_n={len(trace)} median_ms={med:.4f} mad_ms={mad:.4f} seed={args.seed}\n"
-        + _provenance_lines(args.seed),
-        encoding="utf-8",
+        + f"\n# benign_n={len(trace)} median_ms={med:.4f} mad_ms={mad:.4f} seed={args.seed}\n",
+        _provenance_lines(args.seed),
     )
     print("\n".join(rows))
     return 0

@@ -218,6 +218,51 @@ def test_provenance_records_clean_dirty_and_gitless_states(
     assert "commit=unrecorded (no git in the measuring environment)" in ev._provenance_lines(7)
 
 
+def test_an_unpublishable_trailer_refuses_the_regeneration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN (review finding on f0582cf, mutation-earned): the fallback
+    branches used to let main() write the table with artifact and build
+    'unrecorded' — a published figure without its build flags, which
+    AGENTS.md section 8 item 7 forbids.  The write site now refuses any
+    trailer whose artifact or build line cannot pin what ran, while a
+    fully pinned trailer passes.  Mutation: removing the refusal call
+    from main's write path fails exactly this test's refusal case."""
+    monkeypatch.setattr(ev, "subprocess", _GitShim(status=""))
+    monkeypatch.setattr(
+        "benchmarks.benchmark_runner._native_build_configuration",
+        lambda: "cmake -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)",
+    )
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(True))
+    ev._refuse_unpublishable_provenance(ev._provenance_lines(7))  # pinned: no raise
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(False))
+    with pytest.raises(SystemExit, match="cannot pin what ran"):
+        ev._refuse_unpublishable_provenance(ev._provenance_lines(7))
+    monkeypatch.setattr("ama_cryptography._self_test.module_attestation", lambda: _attested(True))
+    monkeypatch.setattr(
+        "benchmarks.benchmark_runner._native_build_configuration",
+        lambda: "not recorded: no build tree digest-matches the measured object",
+    )
+    with pytest.raises(SystemExit, match="cannot pin what ran"):
+        ev._refuse_unpublishable_provenance(ev._provenance_lines(7))
+
+
+def test_the_write_path_itself_refuses_an_unpublishable_trailer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PIN (mutation-earned): the refusal is wired into the one write
+    path, not just available beside it — _write_table with an
+    unpublishable trailer raises and leaves no file, and with a pinned
+    trailer writes body + trailer.  Mutation: dropping the refusal call
+    inside _write_table fails exactly the no-file assertion."""
+    out = tmp_path / "r3_efficacy.tsv"
+    with pytest.raises(SystemExit, match="cannot pin what ran"):
+        ev._write_table(out, "row\n", "# artifact: unrecorded (no attestation)\n")
+    assert not out.exists()
+    ev._write_table(out, "row\n", "# artifact: libama.so sha3_256=ab\n# build: cmake\n")
+    assert out.read_text(encoding="utf-8").startswith("row\n# artifact: libama.so")
+
+
 def test_provenance_pins_the_artifact_only_for_mapped_digests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

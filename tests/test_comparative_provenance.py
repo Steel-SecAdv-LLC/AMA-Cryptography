@@ -81,6 +81,16 @@ def _pinned_attestation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload
         }
     }
     monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
+    # The demotion rule also requires a digest-matched build configuration
+    # (review finding on f0582cf); the synthetic object matches no real
+    # build tree, so the attribution is pinned synthetically too.
+    import benchmarks.benchmark_runner as benchmark_runner
+
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_native_build_configuration",
+        lambda: "GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release (synthetic digest-match)",
+    )
     return lib
 
 
@@ -255,6 +265,52 @@ class TestTheNativeArtifactIsPinned:
         assert block["attributable"] is False
         assert block["ama_commit"] == "unknown"
         assert any("no loaded_library" in r for r in block["unattributable_because"])
+
+    def test_an_unrecorded_build_configuration_disowns_the_commit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """PIN (review finding on f0582cf, mutation-earned): a pinned
+        artifact whose build no tree digest-matches carried
+        ``native_build: "not recorded: ..."`` under ``attributable: true``,
+        so the generator would publish figures without build flags —
+        AGENTS.md section 8 item 7 forbids exactly that.  Mutation:
+        removing the build_unrecorded arm of the demotion fails exactly
+        this test while the pinned-build case above still passes."""
+        import benchmarks.benchmark_runner as benchmark_runner
+
+        _fake_git(monkeypatch, toplevel=str(REPO_ROOT))
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        monkeypatch.setattr(
+            benchmark_runner,
+            "_native_build_configuration",
+            lambda: "not recorded: no build tree digest-matches the measured object",
+        )
+        block = cb._measurement_provenance()
+        assert isinstance(block["native_artifact"], dict)
+        assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
+        assert any("build flags" in r for r in block["unattributable_because"])
+
+    def test_a_dirty_c_harness_disowns_the_commit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """PIN (review finding on f0582cf, mutation-earned with the
+        measured-path list): an uncommitted edit to
+        ``multi_library_bench.cpp`` produces different rows under a clean
+        HEAD, and the loaded-library digest proves only which AMA object
+        ran, not which harness measured it.  The C harness is a measured
+        build path.  Mutation: removing its entry from
+        ``_MEASURED_BUILD_PATHS`` fails exactly this test."""
+        _pinned_attestation(monkeypatch, tmp_path, b"synthetic backend bytes")
+        _fake_git(
+            monkeypatch,
+            toplevel=str(REPO_ROOT),
+            status=" M benchmarks/multi_library_bench.cpp\n",
+        )
+        block = cb._measurement_provenance()
+        assert block["attributable"] is False
+        assert block["ama_commit"] == "unknown"
+        assert any("multi_library_bench.cpp" in r for r in block["unattributable_because"])
 
     def test_an_unpinnable_artifact_disowns_the_commit(
         self, monkeypatch: pytest.MonkeyPatch
