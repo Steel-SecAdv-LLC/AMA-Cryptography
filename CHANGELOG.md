@@ -288,6 +288,30 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
     keypair's component secrets are also zeroed on success.
   - POST's Ed25519 pairwise draw is zeroed on every path.
   Sixteen mutants, all killed.
+- **Package transcript encoder: exact-type dispatch** (performance, no format
+  change). `canonical()` dispatches exact `bytes`, `str`, `list`, `tuple` and
+  `dict` before its `isinstance` chain. Output is byte-identical to the
+  general encoding: a fixed-seed corpus of 1,000 random nested values and the
+  exact types are compared against an independent reference, and a subclass
+  (`IntEnum`, a `UserDict`, a `str` subclass) still takes the general branch.
+  Per call, 1.17 µs before and 0.75 µs after (minimum of 7 loops of 20,000
+  over eight values). Three mutants, all killed: the bytes length prefix
+  dropped, the bytes length widened to 4 bytes, and the `str`-subclass branch
+  removed.
+  - Package create did not resolve a change on this host. Paired medians over
+    20 interleaved rounds, each process reporting the minimum of 10 blocks of
+    150 calls, one pinned core: HEAD `7a9283a8` against this tree -0.4%
+    (range -18% to +7%). The package path is dominated by the native ML-DSA
+    signature, whose cost varies per call (rejection sampling), so a saving
+    of about 3% is below the host's noise floor.
+  - Correction to the PR's earlier figures: the per-row benchmark table
+    (3 rounds, no direction stated, spreads overlapping) is withdrawn. The
+    rows it marked as gains run no code this PR changes.
+  - Against `774d050`, package create is +13.7% (median 470 µs to 538 µs,
+    paired range +3.1% to +21.4%, same method). That is the measured residual
+    cost of INVARIANT-6/-7: a 32-byte native draw with its health test costs
+    about 6 µs, and each zeroing container about 1.4 µs against 0.13 µs for a
+    plain object.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.

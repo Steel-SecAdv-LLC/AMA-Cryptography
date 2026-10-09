@@ -115,6 +115,12 @@ def canonical(value: Any) -> bytes:
     without the ordering, ``True`` and ``1`` would encode identically and the
     encoding would not be injective on the very first type it meets.
 
+    The common exact types (``bytes``, ``str``, ``int``, ``list``, ``tuple``,
+    ``dict``) are dispatched on ``type(value)`` before the ``isinstance``
+    chain.  That is a speed path only: it emits the same bytes, and a subclass
+    (``IntEnum``, a ``Mapping`` that is not a ``dict``) still takes the general
+    branch below.
+
     Raises:
         TypeError: for any other type, or for a mapping with a non-string
             key.  See the module docstring — refusing here is the point.
@@ -125,6 +131,13 @@ def canonical(value: Any) -> bytes:
         return _TAG_TRUE
     if value is False:
         return _TAG_FALSE
+    kind = type(value)
+    if kind is bytes:
+        raw_bytes: bytes = value
+        return _TAG_BYTES + len(raw_bytes).to_bytes(_LEN, "big") + raw_bytes
+    if kind is str:
+        raw: bytes = value.encode("utf-8")
+        return _TAG_STR + len(raw).to_bytes(_LEN, "big") + raw
     if isinstance(value, int):
         # Sign byte + minimal magnitude, so +0 has exactly one encoding and a
         # value of any width round-trips.  `int.to_bytes` needs an explicit
@@ -137,7 +150,7 @@ def canonical(value: Any) -> bytes:
         return _TAG_STR + _blob(value.encode("utf-8"))
     if isinstance(value, (bytes, bytearray, memoryview)):
         return _TAG_BYTES + _blob(bytes(value))
-    if isinstance(value, Mapping):
+    if kind is dict or (kind is not list and kind is not tuple and isinstance(value, Mapping)):
         items = []
         for key in value:
             if not isinstance(key, str):
@@ -146,7 +159,7 @@ def canonical(value: Any) -> bytes:
         items.sort(key=lambda kv: kv[0])
         body = b"".join(canonical(k) + canonical(v) for k, v in items)
         return _TAG_MAP + len(items).to_bytes(_LEN, "big") + body
-    if isinstance(value, Sequence):
+    if kind is list or kind is tuple or isinstance(value, Sequence):
         body = b"".join(canonical(item) for item in value)
         return _TAG_SEQ + len(value).to_bytes(_LEN, "big") + body
     raise TypeError(

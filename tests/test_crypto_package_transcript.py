@@ -27,8 +27,10 @@ Two classes here, deliberately separate:
   needs the native stack.
 """
 
+import collections
 import dataclasses
-from typing import Any, Callable
+import enum
+from typing import Any, Callable, Mapping
 
 import pytest
 
@@ -154,6 +156,118 @@ class TestTheEncodingIsInjective:
 
 
 CONTENT = b"audit A-2 tamper matrix"
+
+
+class _Lcg:
+    """A fixed-seed 64-bit LCG: reproducible inputs, no ``random`` module."""
+
+    def __init__(self, seed: int) -> None:
+        self._state = seed & (2**64 - 1)
+
+    def randrange(self, stop: int) -> int:
+        self._state = (self._state * 6364136223846793005 + 1442695040888963407) % 2**64
+        return (self._state >> 33) % stop
+
+    def random(self) -> float:
+        return self.randrange(2**30) / 2**30
+
+
+class TestTheFastPathEmitsTheGeneralEncoding:
+    """:func:`canonical` dispatches exact types before the ``isinstance`` chain.
+
+    The dispatch is a speed path, so its bytes must equal the general
+    encoding's for every input, and a subclass must keep the general branch.
+    The reference below is the encoding as the module docstring specifies it,
+    written independently of the module's helpers.
+    """
+
+    @staticmethod
+    def _reference(value: Any) -> bytes:
+        length = tx._LEN
+
+        def sized(raw: bytes) -> bytes:
+            return len(raw).to_bytes(length, "big") + raw
+
+        if value is None:
+            return b"\x00"
+        if value is False:
+            return b"\x01"
+        if value is True:
+            return b"\x02"
+        if isinstance(value, int):
+            magnitude = abs(value)
+            sign = b"\x01" if value < 0 else b"\x00"
+            return (
+                b"\x03" + sign + sized(magnitude.to_bytes((magnitude.bit_length() + 7) // 8, "big"))
+            )
+        if isinstance(value, str):
+            return b"\x04" + sized(value.encode("utf-8"))
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return b"\x05" + sized(bytes(value))
+        if isinstance(value, Mapping):
+            items = sorted(value.items(), key=lambda kv: kv[0])
+            body = b"".join(
+                TestTheFastPathEmitsTheGeneralEncoding._reference(k)
+                + TestTheFastPathEmitsTheGeneralEncoding._reference(v)
+                for k, v in items
+            )
+            return b"\x07" + len(items).to_bytes(length, "big") + body
+        body = b"".join(TestTheFastPathEmitsTheGeneralEncoding._reference(item) for item in value)
+        return b"\x06" + len(value).to_bytes(length, "big") + body
+
+    @staticmethod
+    def _random_value(rng: _Lcg, depth: int = 0) -> Any:
+        kinds = 9 if depth < 3 else 6
+        choice = rng.randrange(kinds)
+        if choice == 0:
+            return None
+        if choice == 1:
+            return rng.random() < 0.5
+        if choice == 2:
+            return rng.randrange(2 * 10**30) - 10**30
+        if choice == 3:
+            return "".join(
+                chr(0x20 + rng.randrange(0x2000 - 0x20)) for _ in range(rng.randrange(8))
+            )
+        if choice == 4:
+            return bytes(rng.randrange(256) for _ in range(rng.randrange(20)))
+        if choice == 5:
+            return bytearray(rng.randrange(256) for _ in range(rng.randrange(4)))
+        if choice == 6:
+            return [
+                TestTheFastPathEmitsTheGeneralEncoding._random_value(rng, depth + 1)
+                for _ in range(rng.randrange(4))
+            ]
+        if choice == 7:
+            return tuple(
+                TestTheFastPathEmitsTheGeneralEncoding._random_value(rng, depth + 1)
+                for _ in range(rng.randrange(4))
+            )
+        return {
+            f"k{i}": TestTheFastPathEmitsTheGeneralEncoding._random_value(rng, depth + 1)
+            for i in range(rng.randrange(4))
+        }
+
+    def test_random_nested_values_encode_identically(self) -> None:
+        rng = _Lcg(20261009)
+        for _ in range(1000):
+            value = self._random_value(rng)
+            assert tx.canonical(value) == self._reference(value), value
+
+    def test_exact_types_encode_identically(self) -> None:
+        for value in (b"", b"x" * 300, "", "é", 0, -(2**70), [], (), {}, [b"a", ("b", None)]):
+            assert tx.canonical(value) == self._reference(value), value
+
+    def test_a_subclass_keeps_the_general_branch(self) -> None:
+        class Flag(enum.IntEnum):
+            ON = 1
+
+        class Label(str):
+            pass
+
+        assert tx.canonical(Flag.ON) == self._reference(1)
+        assert tx.canonical(Label("x")) == self._reference("x")
+        assert tx.canonical(collections.UserDict(a=b"v")) == self._reference({"a": b"v"})
 
 
 def _clone(package: Any) -> Any:
