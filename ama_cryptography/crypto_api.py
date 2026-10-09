@@ -538,15 +538,17 @@ class Ed25519Provider(CryptoProvider):
         # 64-byte form (seed || public_key) is zeroed once the seed is copied
         # out of it, so the only copy of the seed is the one returned.
         try:
-            seed = sk_bytes[:32]
+            with ScrubOnRaise() as held:
+                seed = held(sk_bytes[:32])
+                keypair = KeyPair(
+                    public_key=pk_bytes,
+                    secret_key=seed,
+                    algorithm=self.algorithm,
+                    metadata={"backend": "native_c", "key_size": 32},
+                )
+            return keypair
         finally:
             _kc_secure_memzero(sk_bytes)
-        return KeyPair(
-            public_key=pk_bytes,
-            secret_key=seed,
-            algorithm=self.algorithm,
-            metadata={"backend": "native_c", "key_size": 32},
-        )
 
     def sign(
         self,
@@ -714,12 +716,12 @@ class KeypairCache:
             _kc_secure_memzero(self._sk)
             self._sk = None
 
-    def get_or_generate(self) -> Tuple[bytes, bytes]:
+    def get_or_generate(self) -> Tuple[bytes, bytearray]:
         """Return cached keypair, generating one if needed.
 
-        Returns an immutable ``bytes`` copy of the secret key.  The caller's
-        copy cannot be securely wiped by ``rotate()``/``__del__``; the cache
-        controls the only wipeable ``bytearray`` reference internally.
+        The secret key is returned as a fresh ``bytearray`` the caller owns:
+        wipe it when done, as with any secret.  The cache keeps its own copy,
+        which ``rotate()`` zeroes; the caller's copy is not affected by it.
         """
         _enforce_invariant7()
         with self._lock:
@@ -728,7 +730,7 @@ class KeypairCache:
                 kp = crypto.generate_keypair()
                 self._pk = kp.public_key
                 self._sk = bytearray(kp.secret_key)
-            return (self._pk, bytes(self._sk))
+            return (self._pk, bytearray(self._sk))
 
     def rotate(self) -> None:
         """Securely zero and discard cached keypair."""
@@ -1558,30 +1560,34 @@ class HybridKEMProvider(KEMProvider):
         from ama_cryptography.pqc_backends import native_x25519_keypair
 
         x25519_pk, x25519_sk = native_x25519_keypair()
-        kyber_kp = generate_kyber_keypair()
-
-        combined_pk: bytes = x25519_pk + kyber_kp.public_key
-        # Assembled in one bytearray; the two component secrets are zeroed
-        # once copied in, so the combined key is the only copy left.
-        combined_sk = bytearray(x25519_sk)
+        kyber_kp = None
         try:
-            combined_sk += x25519_pk
-            combined_sk += kyber_kp.secret_key
-            combined_sk += kyber_kp.public_key
+            # Every secret minted from here on is held until the KeyPair has
+            # adopted the combined key: a failure at any later step zeroes it.
+            with ScrubOnRaise() as held:
+                kyber_kp = held(generate_kyber_keypair())
+                combined_pk: bytes = x25519_pk + kyber_kp.public_key
+                # Assembled in one bytearray; the component secrets are zeroed
+                # once copied in, so the combined key is the only copy left.
+                combined_sk = held(bytearray(x25519_sk))
+                combined_sk += x25519_pk
+                combined_sk += kyber_kp.secret_key
+                combined_sk += kyber_kp.public_key
+                keypair = KeyPair(
+                    public_key=combined_pk,
+                    secret_key=combined_sk,
+                    algorithm=self.algorithm,
+                    metadata={
+                        "backend": "hybrid_kem",
+                        "pqc_backend": KYBER_BACKEND,
+                        "x25519_key_bytes": self._X25519_KEY_BYTES,
+                    },
+                )
+            return keypair
         finally:
             _kc_secure_memzero(x25519_sk)
-            kyber_kp.wipe()
-
-        return KeyPair(
-            public_key=combined_pk,
-            secret_key=combined_sk,
-            algorithm=self.algorithm,
-            metadata={
-                "backend": "hybrid_kem",
-                "pqc_backend": KYBER_BACKEND,
-                "x25519_key_bytes": self._X25519_KEY_BYTES,
-            },
-        )
+            if kyber_kp is not None:
+                kyber_kp.wipe()
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
@@ -1596,37 +1602,41 @@ class HybridKEMProvider(KEMProvider):
         kyber_pub: bytes = public_key[self._X25519_KEY_BYTES :]
 
         # X25519: generate ephemeral keypair + DH.  The ephemeral secret and
-        # the component shared secret exist only in this frame; both are
-        # zeroed once the combined secret has been derived.
+        # the component shared secrets exist only in this frame; every one is
+        # zeroed on every exit, the combined secret included until it is
+        # owned by the result.
         eph_pk, eph_sk = native_x25519_keypair()
+        x25519_ss = None
+        kyber_result = None
         try:
-            x25519_ss = native_x25519_key_exchange(eph_sk, x25519_pub)
-        finally:
-            _kc_secure_memzero(eph_sk)
-        try:
-            # Kyber encapsulation (its container wipes its own secret)
+            try:
+                x25519_ss = native_x25519_key_exchange(eph_sk, x25519_pub)
+            finally:
+                _kc_secure_memzero(eph_sk)
             kyber_result = kyber_encapsulate(kyber_pub)
-
-            # Combine via binding HKDF
-            combined_ss = self._combiner.combine(
-                classical_ss=x25519_ss,
-                pqc_ss=kyber_result.shared_secret,
-                classical_ct=eph_pk,
-                pqc_ct=kyber_result.ciphertext,
-                classical_pk=x25519_pub,
-                pqc_pk=kyber_pub,
-            )
+            with ScrubOnRaise() as held:
+                combined_ss = held(
+                    self._combiner.combine(
+                        classical_ss=x25519_ss,
+                        pqc_ss=kyber_result.shared_secret,
+                        classical_ct=eph_pk,
+                        pqc_ct=kyber_result.ciphertext,
+                        classical_pk=x25519_pub,
+                        pqc_pk=kyber_pub,
+                    )
+                )
+                encapsulated = EncapsulatedSecret(
+                    ciphertext=eph_pk + kyber_result.ciphertext,
+                    shared_secret=combined_ss,
+                    algorithm=self.algorithm,
+                    metadata={"backend": "hybrid_kem"},
+                )
+            return encapsulated
         finally:
-            _kc_secure_memzero(x25519_ss)
-
-        combined_ct: bytes = eph_pk + kyber_result.ciphertext
-
-        return EncapsulatedSecret(
-            ciphertext=combined_ct,
-            shared_secret=combined_ss,
-            algorithm=self.algorithm,
-            metadata={"backend": "hybrid_kem"},
-        )
+            if x25519_ss is not None:
+                _kc_secure_memzero(x25519_ss)
+            if kyber_result is not None:
+                kyber_result.wipe()
 
     def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
         """Split ciphertext and secret key, recover both shared secrets, combine.
@@ -1752,24 +1762,31 @@ class HybridSignatureProvider(CryptoProvider):
                 "&& cmake --build build"
             )
 
-        classical_keys = self.classical_provider.generate_keypair()
-        pqc_keys = self.pqc_provider.generate_keypair()
+        # The component keypairs and the combined secret are held until the
+        # KeyPair has adopted the combined key; a refusal zeroes all of them.
+        with ScrubOnRaise() as held:
+            classical_keys = held(self.classical_provider.generate_keypair())
+            pqc_keys = held(self.pqc_provider.generate_keypair())
 
-        # Combine keys (Ed25519 first, then Dilithium)
-        combined_pk = classical_keys.public_key + pqc_keys.public_key
-        combined_sk = classical_keys.secret_key + pqc_keys.secret_key
+            # Combine keys (Ed25519 first, then Dilithium), as one bytearray
+            combined_pk = classical_keys.public_key + pqc_keys.public_key
+            combined_sk = held(bytearray(classical_keys.secret_key) + pqc_keys.secret_key)
 
-        return KeyPair(
-            public_key=combined_pk,
-            secret_key=combined_sk,
-            algorithm=self.algorithm,
-            metadata={
-                "classical_algorithm": "Ed25519",
-                "pqc_algorithm": "ML-DSA-65",
-                "classical_pk_size": len(classical_keys.public_key),
-                "pqc_pk_size": len(pqc_keys.public_key),
-            },
-        )
+            keypair = KeyPair(
+                public_key=combined_pk,
+                secret_key=combined_sk,
+                algorithm=self.algorithm,
+                metadata={
+                    "classical_algorithm": "Ed25519",
+                    "pqc_algorithm": "ML-DSA-65",
+                    "classical_pk_size": len(classical_keys.public_key),
+                    "pqc_pk_size": len(pqc_keys.public_key),
+                },
+            )
+            # The combined key is the only secret copy left: zero the components.
+            classical_keys.wipe()
+            pqc_keys.wipe()
+        return keypair
 
     # Module-level thread pool for parallel hybrid verification (Item 9).
     # Shared across all HybridSignatureProvider instances to avoid per-call

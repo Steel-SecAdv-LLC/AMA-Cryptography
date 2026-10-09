@@ -2611,7 +2611,11 @@ def _kat_ed25519() -> Tuple[Optional[bool], str]:
         # Pairwise consistency on a fresh key (FIPS 140-3 §4.9.2).
         fresh_pk, fresh_sk = native_ed25519_keypair()
         msg = b"FIPS 140-3 Ed25519 pairwise consistency"
-        if not native_ed25519_verify(native_ed25519_sign(msg, fresh_sk), msg, fresh_pk):
+        try:
+            consistent = native_ed25519_verify(native_ed25519_sign(msg, fresh_sk), msg, fresh_pk)
+        finally:
+            fresh_sk[:] = bytes(len(fresh_sk))
+        if not consistent:
             return False, "Ed25519 KAT: pairwise consistency test failed"
 
         return True, "Ed25519 KAT passed (RFC 8032 TEST 1 + negative + pairwise)"

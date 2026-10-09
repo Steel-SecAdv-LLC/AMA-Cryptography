@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import dataclasses
+import gc
 import importlib
 import sys
 from typing import Any, Callable, ClassVar
@@ -1013,8 +1014,6 @@ def test_a_dying_parent_does_not_wipe_a_child_its_caller_kept() -> None:
     """PIN.  Only the explicit wipe cascades.  A caller that keeps a keypair
     from a result it drops keeps a usable key -- the extract-from-a-temporary
     rule.  Cascading from ``__del__`` fails this."""
-    import gc
-
     from ama_cryptography.crypto_api import create_crypto_package
 
     keypair = next(iter(create_crypto_package(b"kept").keypairs.values()))
@@ -2227,3 +2226,343 @@ def test_a_rollback_restores_the_key_even_when_a_restore_write_fails_otherwise(
         store.migrate_kdf("correct horse battery staple 1!")
     assert store.encryption_key is old_key and bytes(old_key) == old_copy
     assert store.salt == old_salt
+
+
+def test_a_keypair_cache_hands_out_a_copy_the_caller_can_wipe() -> None:
+    """PIN.  The secret ``get_or_generate`` returns is the caller's own
+    ``bytearray``: wiping it leaves the cache's key intact, and wiping the
+    cache's key (``rotate``) leaves no copy the caller can't reach.  Returning
+    the cache's own buffer fails the wipe check; returning ``bytes`` fails the
+    type check."""
+    from ama_cryptography.crypto_api import KeypairCache
+
+    cache = KeypairCache()
+    _pk, sk = cache.get_or_generate()
+    assert type(sk) is bytearray
+    expected = bytes(sk)
+    sm.zeroize(sk)
+    _pk2, sk2 = cache.get_or_generate()
+    assert bytes(sk2) == expected
+    assert sk2 is not sk
+
+
+def test_a_failed_hybrid_keygen_zeroes_the_x25519_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN.  The X25519 secret is minted before the Kyber keygen; when that
+    keygen raises, the secret is zeroed.  Removing the ``finally`` fails this."""
+    from ama_cryptography import crypto_api as ca
+    from ama_cryptography import pqc_backends as pb_
+
+    minted: list[bytearray] = []
+    real_x25519 = pb_.native_x25519_keypair
+
+    def recording_x25519() -> Any:
+        pk, sk = real_x25519()
+        minted.append(sk)
+        return pk, sk
+
+    def kyber_refuses() -> Any:
+        raise RuntimeError("kyber refused")
+
+    monkeypatch.setattr(pb_, "native_x25519_keypair", recording_x25519)
+    monkeypatch.setattr(ca, "generate_kyber_keypair", kyber_refuses)
+    with pytest.raises(RuntimeError, match="kyber refused"):
+        ca.HybridKEMProvider().generate_keypair()
+    assert len(minted) == 1 and not any(minted[0])
+
+
+def test_a_refused_hybrid_keypair_zeroes_the_combined_and_kyber_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The combined secret and the Kyber keypair are held until the
+    ``KeyPair`` has adopted the combined key.  A refusal while building it
+    zeroes both; restoring the bare ``KeyPair(...)`` call fails this."""
+    from ama_cryptography import crypto_api as ca
+
+    kyber_minted: list[Any] = []
+    real_kyber = pb.generate_kyber_keypair
+
+    def recording_kyber() -> Any:
+        kp = real_kyber()
+        kyber_minted.append(kp)
+        return kp
+
+    combined: list[bytearray] = []
+
+    def keypair_refuses(**kwargs: Any) -> Any:
+        combined.append(kwargs["secret_key"])
+        raise RuntimeError("keypair refused")
+
+    monkeypatch.setattr(ca, "generate_kyber_keypair", recording_kyber)
+    monkeypatch.setattr(ca, "KeyPair", keypair_refuses)
+    with pytest.raises(RuntimeError, match="keypair refused"):
+        ca.HybridKEMProvider().generate_keypair()
+    assert len(combined) == 1 and not any(combined[0])
+    assert len(kyber_minted) == 1 and not any(kyber_minted[0].secret_key)
+
+
+def test_a_refused_hybrid_encapsulation_zeroes_the_combined_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The combined shared secret is held until the result owns it; a
+    refusal while building the result zeroes it.  Restoring the bare
+    ``EncapsulatedSecret(...)`` call fails this."""
+    from ama_cryptography import crypto_api as ca
+
+    provider = ca.HybridKEMProvider()
+    public_key = provider.generate_keypair().public_key
+    combined: list[bytearray] = []
+
+    def result_refuses(**kwargs: Any) -> Any:
+        combined.append(kwargs["shared_secret"])
+        raise RuntimeError("result refused")
+
+    monkeypatch.setattr(ca, "EncapsulatedSecret", result_refuses)
+    with pytest.raises(RuntimeError, match="result refused"):
+        provider.encapsulate(public_key)
+    assert len(combined) == 1 and not any(combined[0])
+
+
+def test_a_successful_hybrid_encapsulation_zeroes_the_kyber_shared_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The Kyber component secret is zeroed explicitly on the success
+    path, not left to its finalizer.  Removing the ``wipe()`` fails this."""
+    from ama_cryptography import crypto_api as ca
+
+    provider = ca.HybridKEMProvider()
+    public_key = provider.generate_keypair().public_key
+    encapsulated: list[Any] = []
+    real_encaps = pb.kyber_encapsulate
+
+    def recording_encaps(pk: bytes) -> Any:
+        result = real_encaps(pk)
+        encapsulated.append(result)
+        return result
+
+    monkeypatch.setattr(ca, "kyber_encapsulate", recording_encaps)
+    provider.encapsulate(public_key)
+    assert len(encapsulated) == 1
+    assert type(encapsulated[0].shared_secret) is bytearray
+    assert not any(encapsulated[0].shared_secret)
+
+
+def test_a_failed_wipe_of_the_old_rekey_keys_leaves_the_new_keys_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The new keys are installed before the old ones are wiped, and both
+    old buffers are attempted even when the first wipe raises.  Installing
+    after the wipe fails the install check; stopping at the first failed wipe
+    fails the second-buffer check."""
+    from ama_cryptography.secure_memory import SecureMemoryError
+
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    session = sc._session_from(b"\x31" * 32, b"\x02" * 32, send_info=b"s", recv_info=b"r")
+    old_send, old_recv = session.send_key, session.recv_key
+    wiped: list[int] = []
+    real_memzero = sc.secure_memzero
+
+    def first_old_wipe_fails(buf: Any) -> None:
+        wiped.append(id(buf))
+        if buf is old_send:
+            raise SecureMemoryError("wipe failed")
+        real_memzero(buf)
+
+    monkeypatch.setattr(sc, "secure_memzero", first_old_wipe_fails)
+    with pytest.raises(SecureMemoryError, match="wipe failed"):
+        session.rekey()
+    assert session.send_key is not old_send and session.recv_key is not old_recv
+    assert session.rekey_epoch == 1
+    assert id(old_send) in wiped and id(old_recv) in wiped
+    assert any(session.send_key) and any(session.recv_key)
+    assert not any(old_recv)
+
+
+def _zeroed_on_drop(
+    monkeypatch: pytest.MonkeyPatch, make: Callable[[], Any], attrs: tuple[str, ...]
+) -> set[str]:
+    """Build a holder, drop it, and report which of its ``attrs`` buffers the
+    finalizer zeroed.  Identity is recorded without keeping a reference: a
+    probe that holds the buffer makes the holder a non-last owner, which the
+    finalizer correctly leaves alone."""
+    obj = make()
+    targets = {name: id(getattr(obj, name)) for name in attrs}
+    seen: set[int] = set()
+    real = sm._zero
+
+    def spy(value: Any) -> None:
+        seen.add(id(value))
+        real(value)
+
+    monkeypatch.setattr(sm, "_zero", spy)
+    del obj
+    gc.collect()
+    return {name for name, ident in targets.items() if ident in seen}
+
+
+def test_a_dropped_key_store_zeroes_its_key_encryption_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """PIN.  The key-encryption key protects every stored key.  Dropping the
+    store without ``close()`` zeroes it; before the class was a
+    ``SecretMaterial`` nothing did, and a dropped store left it in memory."""
+    from ama_cryptography.key_management import SecureKeyStorage
+
+    zeroed = _zeroed_on_drop(
+        monkeypatch,
+        lambda: SecureKeyStorage(tmp_path / "ks", master_password="correct horse battery 123"),
+        ("encryption_key",),
+    )
+    assert zeroed == {"encryption_key"}
+
+
+def test_a_dropped_session_zeroes_its_traffic_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN.  A session dropped without ``close()`` zeroes both live keys.
+    Removing ``SecretMaterial`` from ``SecureSession`` fails this."""
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    zeroed = _zeroed_on_drop(
+        monkeypatch,
+        lambda: sc._session_from(b"\x41" * 32, b"\x01" * 32, send_info=b"s", recv_info=b"r"),
+        ("send_key", "recv_key"),
+    )
+    assert zeroed == {"send_key", "recv_key"}
+
+
+def test_a_dropped_initiator_zeroes_its_shared_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN.  An initiator dropped mid-handshake zeroes the KEM shared secret it
+    holds.  Removing ``SecretMaterial`` from ``SecureChannelInitiator`` fails
+    this."""
+    from ama_cryptography.crypto_api import HybridKEMProvider
+
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    kem = HybridKEMProvider().generate_keypair()
+
+    def make() -> Any:
+        initiator = sc.SecureChannelInitiator(kem.public_key)
+        initiator.create_handshake()
+        return initiator
+
+    zeroed = _zeroed_on_drop(monkeypatch, make, ("_shared_secret",))
+    assert zeroed == {"_shared_secret"}
+
+
+def test_a_refused_hybrid_signing_keypair_zeroes_its_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The Ed25519 and ML-DSA component keypairs and the combined secret
+    are held until the KeyPair adopts the combined key; a refusal zeroes all
+    of them.  Restoring the bare ``bytearray(...) + ...`` fails this."""
+    from ama_cryptography import crypto_api as ca
+
+    prov = ca.HybridSignatureProvider()
+    minted: list[Any] = []
+    for sub in (prov.classical_provider, prov.pqc_provider):
+        real = sub.generate_keypair
+
+        def recording(real: Any = real) -> Any:
+            kp = real()
+            minted.append(kp)
+            return kp
+
+        monkeypatch.setattr(sub, "generate_keypair", recording)
+    combined: list[bytearray] = []
+    real_keypair = ca.KeyPair
+
+    def keypair_refuses(**kwargs: Any) -> Any:
+        # Only the hybrid's own KeyPair refuses; the components build theirs.
+        if "classical_algorithm" not in kwargs["metadata"]:
+            return real_keypair(**kwargs)
+        combined.append(kwargs["secret_key"])
+        raise RuntimeError("keypair refused")
+
+    monkeypatch.setattr(ca, "KeyPair", keypair_refuses)
+    with pytest.raises(RuntimeError, match="keypair refused"):
+        prov.generate_keypair()
+    assert len(minted) == 2 and all(not any(kp.secret_key) for kp in minted)
+    assert len(combined) == 1 and not any(combined[0])
+
+
+def test_a_refused_ed25519_keypair_zeroes_its_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN.  The 32-byte seed copied out of the 64-byte expanded key is held
+    until the KeyPair adopts it.  Restoring the bare copy fails this."""
+    from ama_cryptography import crypto_api as ca
+
+    seeds: list[bytearray] = []
+
+    def keypair_refuses(**kwargs: Any) -> Any:
+        seeds.append(kwargs["secret_key"])
+        raise RuntimeError("keypair refused")
+
+    monkeypatch.setattr(ca, "KeyPair", keypair_refuses)
+    with pytest.raises(RuntimeError, match="keypair refused"):
+        ca.Ed25519Provider().generate_keypair()
+    assert len(seeds) == 1 and not any(seeds[0])
+
+
+def test_a_refused_legacy_ed25519_keypair_zeroes_its_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The legacy Ed25519 path holds its secret until the container
+    adopts it.  Restoring the bare constructor call fails this."""
+    from ama_cryptography import legacy_compat as lc
+
+    secrets_seen: list[bytearray] = []
+
+    def container_refuses(**kwargs: Any) -> Any:
+        secrets_seen.append(kwargs["private_key"])
+        raise RuntimeError("container refused")
+
+    monkeypatch.setattr(lc, "Ed25519KeyPair", container_refuses)
+    with pytest.raises(RuntimeError, match="container refused"):
+        lc.generate_ed25519_keypair()
+    assert len(secrets_seen) == 1 and not any(secrets_seen[0])
+
+
+def test_the_handshake_ephemeral_secret_is_zeroed_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN.  The initiator's ephemeral KEM secret is never used, so it is zeroed
+    as soon as the public half is read.  Removing the ``wipe()`` fails this."""
+    from ama_cryptography.crypto_api import HybridKEMProvider
+
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    kem = HybridKEMProvider().generate_keypair()
+    initiator = sc.SecureChannelInitiator(kem.public_key)
+    minted: list[Any] = []
+    real = initiator._kem.generate_keypair
+
+    def recording() -> Any:
+        kp = real()
+        minted.append(kp)
+        return kp
+
+    monkeypatch.setattr(initiator._kem, "generate_keypair", recording)
+    initiator.create_handshake()
+    assert len(minted) == 1 and not any(minted[0].secret_key)
+    assert minted[0].public_key == initiator._ephemeral_pk
+
+
+def test_the_post_ed25519_consistency_check_zeroes_its_fresh_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  POST's Ed25519 pairwise draw is zeroed on every path, including a
+    failing pairwise verify: only the verify over the pairwise message fails,
+    so the draw is reached.  Removing the ``finally`` fails this."""
+    st = importlib.import_module("ama_cryptography._self_test")
+    minted: list[bytearray] = []
+    real_keypair = pb.native_ed25519_keypair
+    real_verify = pb.native_ed25519_verify
+
+    def recording_keypair() -> Any:
+        pk, sk = real_keypair()
+        minted.append(sk)
+        return pk, sk
+
+    pairwise_msg = b"FIPS 140-3 Ed25519 pairwise consistency"
+
+    def pairwise_verify_fails(*args: Any, **kwargs: Any) -> bool:
+        if args[1] == pairwise_msg:
+            raise RuntimeError("verify refused")
+        return bool(real_verify(*args, **kwargs))
+
+    monkeypatch.setattr(pb, "native_ed25519_keypair", recording_keypair)
+    monkeypatch.setattr(pb, "native_ed25519_verify", pairwise_verify_fails)
+    st._kat_ed25519()
+    assert len(minted) == 1 and not any(minted[0])

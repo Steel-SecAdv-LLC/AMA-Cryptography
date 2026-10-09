@@ -257,6 +257,37 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
     package refuses everywhere else.
 
   Four mutants, all killed.
+- **Secrets that outlived their owner, and three Copilot findings on
+  `5272a2e7`** (INVARIANT-6, -7). A correction first: the sweeps recorded
+  above were by pattern and were not complete. Measured after them, three
+  classes still let a secret outlive them: `SecureKeyStorage` did not zero
+  its key-encryption key when dropped (it protects every stored key at
+  rest); `SecureSession` did not zero its live send and receive keys when
+  dropped without `close()`; and `SecureChannelInitiator` did not zero its
+  shared secret when dropped mid-handshake. All three now use the
+  `SecretMaterial` mixin, so they gain a `wipe()` method, and the last
+  owner's finalizer zeroes them. `SecureSession`, a dataclass, also gets
+  the constant-time equality every secret container carries (INVARIANT-12). The tests drop each holder without
+  keeping a reference to its buffer, because a probe that holds one makes
+  the holder a non-last owner, which the finalizer correctly leaves alone.
+  - `KeypairCache.get_or_generate()` returned the cached secret as
+    immutable `bytes`, which the caller could not wipe. It now returns a
+    fresh `bytearray` the caller owns; the cache keeps and zeroes its own.
+    This is a public return-type change.
+  - `SecureSession.rekey()` wiped the old keys before installing the new
+    ones, so a failed wipe left the session holding the old keys and
+    dropped the new ones unwiped. The new keys are installed first, then
+    both old buffers are wiped, and a failed wipe is reported after the
+    session is consistent.
+  - Hybrid KEM keygen and encapsulation, hybrid signature keygen, Ed25519
+    keygen, the legacy Ed25519 path and the initiator's ephemeral KEM
+    keypair each held a secret in a bare local across a step that could
+    refuse, and dropped it intact on the refusal. Each is now held by a
+    failure guard until its owner adopts it. The ephemeral secret, which
+    the handshake never uses, is zeroed at once. The hybrid signature
+    keypair's component secrets are also zeroed on success.
+  - POST's Ed25519 pairwise draw is zeroed on every path.
+  Sixteen mutants, all killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.

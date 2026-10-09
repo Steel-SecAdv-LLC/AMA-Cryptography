@@ -814,7 +814,7 @@ class KeyRotationManager:
         return export_data
 
 
-class SecureKeyStorage:
+class SecureKeyStorage(SecretMaterial):
     """
     Secure key storage with encryption at rest
 
@@ -836,6 +836,10 @@ class SecureKeyStorage:
         - Legacy AES-CFB records are recognised and refused with a re-store
           instruction; they are not decrypted
     """
+
+    # The key-encryption key protects every stored key: it is zeroed when the
+    # store dies, not only on an explicit close.
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("encryption_key",)
 
     def __init__(
         self,

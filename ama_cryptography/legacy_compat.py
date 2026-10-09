@@ -449,7 +449,9 @@ def generate_ed25519_keypair(seed: Optional[SecretBytes] = None) -> Ed25519KeyPa
         return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
     else:
         public_bytes, sk_bytes = native_ed25519_keypair()
-        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
+        with ScrubOnRaise() as held:
+            held(sk_bytes)
+            return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
 
 
 def ed25519_sign(message: bytes, private_key: SecretBytes) -> bytes:
