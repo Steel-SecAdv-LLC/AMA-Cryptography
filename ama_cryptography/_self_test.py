@@ -55,6 +55,7 @@ from ama_cryptography._module_state import (
     _rng_state,
     _state_snapshot,
     entropy_source,
+    secrets_match,
 )
 from ama_cryptography._module_state import _set_error as _set_error
 from ama_cryptography._module_state import _set_operational as _set_operational
@@ -3303,7 +3304,9 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
         except Exception as exc:
             _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {_exception_text(exc)}"))
             return False, f"RNG health test exception: {_exception_text(exc)}"
-        if out1 == out2:
+        # Constant-time: two raw CSPRNG draws, compared as the secrets they
+        # are (INVARIANT-12; PR #415 review).
+        if secrets_match(out1, out2):
             _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
             return False, "RNG health test failed at startup"
         # Seed the continuous test with a DIGEST of the last draw, matching

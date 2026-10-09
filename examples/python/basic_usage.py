@@ -112,6 +112,7 @@ def example_2_key_management() -> None:
         KeyRotationManager,
         SecureKeyStorage,
     )
+    from ama_cryptography.secure_memory import constant_time_compare
 
     # HD Key Derivation - derive multiple keys from one seed
     print("\n--- HD Key Derivation ---")
@@ -153,7 +154,10 @@ def example_2_key_management() -> None:
 
         # Retrieve the key
         retrieved = storage.retrieve_key("my-key")
-        print(f"Key retrieved: {retrieved == test_key}")
+        # Keys are compared in constant time; retrieve_key returns a wipeable
+        # bytearray, or None for an unknown id.
+        matches = retrieved is not None and constant_time_compare(retrieved, test_key)
+        print(f"Key retrieved: {matches}")
 
 
 def example_3_data_protection() -> None:

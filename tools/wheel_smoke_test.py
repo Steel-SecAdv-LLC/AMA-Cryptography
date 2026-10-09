@@ -474,7 +474,7 @@ def check_private_storage_is_owner_only() -> None:
         store.store_key("smoke", b"\x01" * 32)
         check(
             "the key store retrieves what it stored",
-            store.retrieve_key("smoke") == b"\x01" * 32,
+            store.retrieve_key("smoke") == bytearray(b"\x01" * 32),
         )
         expected_dir = _owner_only.expected_owner_only_description(directory=True)
         actual_dir = _owner_only.access_description(store_dir)

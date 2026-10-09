@@ -79,6 +79,7 @@ from enum import Enum, auto
 from typing import Optional, Tuple, Union
 
 from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._secret_material import ScrubOnRaise, zeroize
 from ama_cryptography.exceptions import AmaCryptographyError
 from ama_cryptography.pqc_backends import native_sha3_256
 from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
@@ -814,12 +815,13 @@ class SecureSession(_SessionKeys):
 
         with self._lock:
             # HKDF borrows the current bytearray keys through the native
-            # buffer path, eliminating bytes(self.key) heap copies before
-            # the old material is wiped below.
-            new_send_bytes = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
-            new_recv_bytes = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
-            new_send = bytearray(new_send_bytes)
-            new_recv = bytearray(new_recv_bytes)
+            # buffer path, and returns each new key in a wipeable bytearray,
+            # used as is: re-wrapping it copied the key and dropped the
+            # original unwiped.  A failed second derivation zeroes the first
+            # (PR #415 review).
+            with ScrubOnRaise() as held:
+                new_send = held(native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey"))
+                new_recv = held(native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey"))
             # Wipe the source key material after native HKDF succeeds.
             self._wipe_keys()
             self.send_key = new_send
@@ -896,6 +898,26 @@ class SecureSession(_SessionKeys):
             # zeroed memory.  This is the whole point of using a
             # bytearray rather than rebinding immutable ``bytes``.
             self._wipe_keys()
+
+
+def _session_from(
+    shared_secret: Union[bytes, bytearray], session_id: bytes, *, send_info: bytes, recv_info: bytes
+) -> SecureSession:
+    """Derive both directions' keys from ``shared_secret`` and build the session.
+
+    ``native_hkdf`` returns each key in a wipeable ``bytearray``, which the
+    session holds as is (``SecureSession`` binds, it does not copy).  Wrapping
+    each in ``bytearray(...)`` again copied it and dropped the original
+    unwiped, and a failed second derivation dropped the first key intact; if
+    either derivation or the session's construction raises, every key derived
+    so far is now zeroed (INVARIANT-6; PR #415 review).
+    """
+    from ama_cryptography.pqc_backends import native_hkdf
+
+    with ScrubOnRaise() as held:
+        send_key = held(native_hkdf(shared_secret, KEY_BYTES, salt=session_id, info=send_info))
+        recv_key = held(native_hkdf(shared_secret, KEY_BYTES, salt=session_id, info=recv_info))
+        return SecureSession(session_id=session_id, send_key=send_key, recv_key=recv_key)
 
 
 class SecureChannelInitiator:
@@ -1075,12 +1097,14 @@ class SecureChannelInitiator:
         gives ``ValueError: Invalid public key length: expected 1952, got 1951``
         and leaves the shared secret live.
 
-        ``_shared_secret`` is ``bytes`` and cannot be wiped in place; dropping
-        the reference is what the success path does and is all that is
-        available here.  The channel moves to CLOSED rather than back to
+        ``_shared_secret`` is the wipeable ``bytearray`` the KEM returned, and
+        is zeroed before the reference is dropped, here and on the success
+        path; it was once ``bytes``, and dropping it was all that was
+        possible.  The channel moves to CLOSED rather than back to
         HANDSHAKE_SENT: a handshake that failed must not be completable by a
         second attempt with a different response.
         """
+        zeroize(self._shared_secret)
         self._shared_secret = None
         self._handshake_hash = None
         self._state = ChannelState.CLOSED
@@ -1128,7 +1152,8 @@ class SecureChannelInitiator:
             raise HandshakeError("Shared secret not established during handshake")
         session = self._derive_session(response.session_id, self._shared_secret)
 
-        # Clear handshake state
+        # Clear handshake state; the shared secret is consumed.
+        zeroize(self._shared_secret)
         self._shared_secret = None
         self._handshake_hash = None
         self._state = ChannelState.ESTABLISHED
@@ -1136,26 +1161,13 @@ class SecureChannelInitiator:
 
     @staticmethod
     def _derive_session(session_id: bytes, shared_secret: Union[bytes, bytearray]) -> SecureSession:
-        """Derive send/recv keys from shared secret via HKDF-SHA3-256.
-
-        Keys are wrapped in ``bytearray`` so that
-        :meth:`SecureSession.close` can wipe their backing memory in
-        place via ``secure_memzero``.
-        """
-        from ama_cryptography.pqc_backends import native_hkdf
-
-        # Derive separate keys for each direction
-        send_key = bytearray(
-            native_hkdf(
-                shared_secret, KEY_BYTES, salt=session_id, info=b"ama-noise-nk-initiator-send"
-            )
+        """Derive send/recv keys from shared secret via HKDF-SHA3-256."""
+        return _session_from(
+            shared_secret,
+            session_id,
+            send_info=b"ama-noise-nk-initiator-send",
+            recv_info=b"ama-noise-nk-responder-send",
         )
-        recv_key = bytearray(
-            native_hkdf(
-                shared_secret, KEY_BYTES, salt=session_id, info=b"ama-noise-nk-responder-send"
-            )
-        )
-        return SecureSession(session_id=session_id, send_key=send_key, recv_key=recv_key)
 
 
 class SecureChannelResponder:
@@ -1251,6 +1263,18 @@ class SecureChannelResponder:
                 exc_info=True,
             )
             raise HandshakeError("Handshake failed") from None
+        # The decapsulated secret is this method's: consumed by the key
+        # derivation below, and zeroed whether that and the signing before it
+        # succeed or raise (PR #415 review: it was dropped intact).
+        try:
+            return self._respond(msg, shared_secret)
+        finally:
+            zeroize(shared_secret)
+
+    def _respond(
+        self, msg: HandshakeMessage, shared_secret: Union[bytes, bytearray]
+    ) -> Tuple[HandshakeResponse, SecureSession]:
+        """Sign the transcript and derive the session; see :meth:`handle_handshake`."""
 
         # Generate session ID — through the health-tested draw, not bare
         # secrets.token_bytes.  The session ID is signed into the handshake
@@ -1290,20 +1314,11 @@ class SecureChannelResponder:
     def _derive_session(session_id: bytes, shared_secret: Union[bytes, bytearray]) -> SecureSession:
         """Derive send/recv keys from shared secret via HKDF-SHA3-256.
 
-        Keys are wrapped in ``bytearray`` for in-place secure wipe on
-        ``close()`` (see :class:`SecureSession`).
+        Responder send = Initiator recv (symmetric derivation).
         """
-        from ama_cryptography.pqc_backends import native_hkdf
-
-        # Responder send = Initiator recv (symmetric derivation)
-        send_key = bytearray(
-            native_hkdf(
-                shared_secret, KEY_BYTES, salt=session_id, info=b"ama-noise-nk-responder-send"
-            )
+        return _session_from(
+            shared_secret,
+            session_id,
+            send_info=b"ama-noise-nk-responder-send",
+            recv_info=b"ama-noise-nk-initiator-send",
         )
-        recv_key = bytearray(
-            native_hkdf(
-                shared_secret, KEY_BYTES, salt=session_id, info=b"ama-noise-nk-initiator-send"
-            )
-        )
-        return SecureSession(session_id=session_id, send_key=send_key, recv_key=recv_key)

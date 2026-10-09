@@ -363,9 +363,14 @@ def aead128_decrypt(
         ctypes.c_char_p(t),
         ctypes.byref(pt) if pt is not None else None,
     )
-    if rc == _AMA_ERROR_VERIFY_FAILED:
-        raise AsconVerificationError("Ascon-AEAD128 authentication failed")
-    if rc != _AMA_SUCCESS:
-        raise AsconError(f"ama_ascon_aead128_decrypt failed with code {rc}")
-
-    return pt.raw[: len(ct)] if pt is not None else b""
+    # The plaintext's staging buffer is scrubbed on every path once copied
+    # out (PR #415 review sweep: it was left populated).
+    try:
+        if rc == _AMA_ERROR_VERIFY_FAILED:
+            raise AsconVerificationError("Ascon-AEAD128 authentication failed")
+        if rc != _AMA_SUCCESS:
+            raise AsconError(f"ama_ascon_aead128_decrypt failed with code {rc}")
+        return pt.raw[: len(ct)] if pt is not None else b""
+    finally:
+        if pt is not None:
+            ctypes.memset(pt, 0, ctypes.sizeof(pt))

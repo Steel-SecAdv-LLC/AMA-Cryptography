@@ -1746,3 +1746,418 @@ def test_a_refused_cose_private_key_zeroes_the_slices_it_took(
         kf.cose_to_private_key(bytes.fromhex(encoded))
     slices = [v for v in scrubbed if isinstance(v, bytearray) and len(v) == 3]
     assert slices and all(v == bytearray(3) for v in slices)
+
+
+# ---------------------------------------------------------------------------
+# Review of d74f44fd: RNG health comparisons, secure-channel secrets
+# ---------------------------------------------------------------------------
+
+
+def _recording_comparator(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    from ama_cryptography import secure_memory
+
+    calls: list[tuple[int, int]] = []
+    real = secure_memory.constant_time_compare
+
+    def recording(a: Any, b: Any) -> bool:
+        calls.append((len(a), len(b)))
+        return real(a, b)
+
+    monkeypatch.setattr(ms, "_secret_comparator", recording)
+    return calls
+
+
+def test_the_startup_rng_check_compares_its_draws_in_constant_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  POST compared its two raw CSPRNG draws with ``==``.  Restoring
+    it fails this."""
+    st = importlib.import_module("ama_cryptography._self_test")
+    monkeypatch.setattr(st, "_SELF_TEST_RESULTS", [])
+    monkeypatch.setitem(ms._rng_state, "previous", ms._rng_state["previous"])
+    calls = _recording_comparator(monkeypatch)
+    assert st._run_rng_stage() == (True, None)
+    assert calls == [(32, 32)]
+
+
+def test_the_continuous_rng_check_compares_digests_in_constant_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  The continuous test compared SHA-256 digests of the caller's
+    secret draws with ``==``.  Restoring it fails this."""
+    monkeypatch.setitem(ms._rng_state, "previous", ms._rng_state["previous"])
+    calls = _recording_comparator(monkeypatch)
+    ms.secure_random_fill(bytearray(32))
+    ms.secure_random_fill(bytearray(32))
+    assert (32, 32) in calls
+
+
+def _channel_parties() -> tuple[Any, Any]:
+    from ama_cryptography.crypto_api import HybridKEMProvider, HybridSignatureProvider
+    from ama_cryptography.secure_channel import SecureChannelInitiator, SecureChannelResponder
+
+    kem = HybridKEMProvider().generate_keypair()
+    sig = HybridSignatureProvider().generate_keypair()
+    return (
+        SecureChannelInitiator(kem.public_key),
+        SecureChannelResponder(kem.secret_key, sig.secret_key, sig.public_key),
+    )
+
+
+@pytest.mark.parametrize("outcome", ["completed", "rejected"])
+def test_the_initiator_zeroes_its_shared_secret_when_the_handshake_ends(outcome: str) -> None:
+    """PIN per row.  Both exits only dropped the reference to the KEM's
+    wipeable shared secret.  Removing either ``zeroize`` fails its row."""
+    import dataclasses as dc
+
+    from ama_cryptography.secure_channel import HandshakeError
+
+    initiator, responder = _channel_parties()
+    msg = initiator.create_handshake()
+    held = initiator._shared_secret
+    assert isinstance(held, bytearray) and any(held)
+    response, _ = responder.handle_handshake(msg)
+    if outcome == "completed":
+        initiator.complete_handshake(response)
+    else:
+        forged = dc.replace(response, signature=bytes(len(response.signature)))
+        with pytest.raises(HandshakeError):
+            initiator.complete_handshake(forged)
+    assert initiator._shared_secret is None and not any(held)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "refused"])
+def test_the_responder_zeroes_the_secret_it_decapsulated(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """PIN per row.  ``handle_handshake`` dropped the decapsulated secret
+    intact on success and on a later failure.  Removing the ``finally``
+    fails both rows."""
+    initiator, responder = _channel_parties()
+    msg = initiator.create_handshake()
+    decapsulated: list[bytearray] = []
+    real = responder._kem.decapsulate
+
+    def recording(ct: bytes, sk: Any) -> bytearray:
+        secret = bytearray(real(ct, sk))
+        decapsulated.append(secret)
+        return secret
+
+    monkeypatch.setattr(responder._kem, "decapsulate", recording)
+    if outcome == "refused":
+
+        def failing_sign(*_args: Any) -> Any:
+            raise RuntimeError("signer unavailable")
+
+        monkeypatch.setattr(responder._sig, "sign", failing_sign)
+        with pytest.raises(RuntimeError, match="signer unavailable"):
+            responder.handle_handshake(msg)
+    else:
+        responder.handle_handshake(msg)
+    assert len(decapsulated) == 1 and not any(decapsulated[0])
+
+
+def test_session_keys_are_the_derived_buffers_and_a_failed_derivation_zeroes_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  Each HKDF output was copied into a second ``bytearray`` and the
+    original dropped unwiped, and a failed second derivation dropped the first
+    key intact.  Restoring either fails this."""
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    derived: list[bytearray] = []
+    real = pb.native_hkdf
+
+    def recording(*args: Any, **kwargs: Any) -> bytearray:
+        key: bytearray = real(*args, **kwargs)
+        derived.append(key)
+        return key
+
+    monkeypatch.setattr(pb, "native_hkdf", recording)
+    session = sc._session_from(b"\x21" * 32, b"\x01" * 32, send_info=b"s", recv_info=b"r")
+    assert session.send_key is derived[0] and session.recv_key is derived[1]
+
+    derived.clear()
+    calls = {"n": 0}
+
+    def second_fails(*args: Any, **kwargs: Any) -> bytearray:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("HKDF failed")
+        return recording(*args, **kwargs)
+
+    monkeypatch.setattr(pb, "native_hkdf", second_fails)
+    with pytest.raises(RuntimeError, match="HKDF failed"):
+        sc._session_from(b"\x21" * 32, b"\x01" * 32, send_info=b"s", recv_info=b"r")
+    assert len(derived) == 1 and not any(derived[0])
+
+
+def test_a_failed_rekey_zeroes_the_new_key_and_keeps_the_old_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  ``rekey`` copied each new key and, if the second derivation
+    failed, dropped the first new key intact.  Restoring either fails this;
+    the session keeps its current keys."""
+    sc = importlib.import_module("ama_cryptography.secure_channel")
+    session = sc._session_from(b"\x21" * 32, b"\x01" * 32, send_info=b"s", recv_info=b"r")
+    old_send, old_recv = bytes(session.send_key), bytes(session.recv_key)
+    derived: list[bytearray] = []
+    real = pb.native_hkdf
+    calls = {"n": 0}
+
+    def second_fails(*args: Any, **kwargs: Any) -> bytearray:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("HKDF failed")
+        key: bytearray = real(*args, **kwargs)
+        derived.append(key)
+        return key
+
+    monkeypatch.setattr(pb, "native_hkdf", second_fails)
+    with pytest.raises(RuntimeError, match="HKDF failed"):
+        session.rekey()
+    assert len(derived) == 1 and not any(derived[0])
+    assert bytes(session.send_key) == old_send and bytes(session.recv_key) == old_recv
+
+    derived.clear()
+
+    def recording(*args: Any, **kwargs: Any) -> bytearray:
+        key: bytearray = real(*args, **kwargs)
+        derived.append(key)
+        return key
+
+    monkeypatch.setattr(pb, "native_hkdf", recording)
+    session.rekey()
+    assert session.send_key is derived[0] and session.recv_key is derived[1]
+
+
+def _kdf_outputs(monkeypatch: pytest.MonkeyPatch, module: Any, name: str) -> list[bytearray]:
+    outputs: list[bytearray] = []
+    real = getattr(module, name)
+
+    def recording(*args: Any, **kwargs: Any) -> bytearray:
+        key: bytearray = real(*args, **kwargs)
+        outputs.append(key)
+        return key
+
+    monkeypatch.setattr(module, name, recording)
+    return outputs
+
+
+@pytest.mark.parametrize("kdf", ["argon2id", "pbkdf2"])
+def test_a_key_store_holds_the_kdf_output_itself(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, kdf: str
+) -> None:
+    """PIN per row.  The store wrapped the KDF's wipeable output in a second
+    ``bytearray``, keeping a copy and dropping the original unwiped.
+    Restoring the wrap fails its row."""
+    import json
+    import warnings
+
+    km = importlib.import_module("ama_cryptography.key_management")
+    if kdf == "argon2id":
+        outputs = _kdf_outputs(monkeypatch, pb, "native_argon2id")
+        store = km.SecureKeyStorage(tmp_path, master_password="correct horse battery staple 1!")
+    else:
+        (tmp_path / ".salt").write_bytes(b"\x07" * 32)
+        (tmp_path / ".kdf_metadata.json").write_text(
+            json.dumps({"version": 1, "algorithm": "PBKDF2-HMAC-SHA256", "iterations": 100000}),
+            encoding="utf-8",
+        )
+        outputs = _kdf_outputs(monkeypatch, km, "native_pbkdf2_hmac_sha256")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = km.SecureKeyStorage(
+                tmp_path, master_password="correct horse battery staple 1!", allow_legacy_kdf=True
+            )
+    assert outputs and store.encryption_key is outputs[-1]
+
+
+@pytest.mark.parametrize("outcome", ["migrated", "rolled-back"])
+def test_kdf_migration_zeroes_the_key_it_retires(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, outcome: str
+) -> None:
+    """PIN per row.  ``migrate_kdf`` dropped the old key-encryption key
+    intact on success, and the new one on a rollback.  Removing the
+    ``zeroize(old_key)`` fails ``migrated``; removing the ``ScrubOnRaise``
+    registration fails ``rolled-back``."""
+    km = importlib.import_module("ama_cryptography.key_management")
+    store = km.SecureKeyStorage(tmp_path, master_password="correct horse battery staple 1!")
+    store.store_key("k", b"\x11" * 32)
+    old_key = store.encryption_key
+    old_copy = bytes(old_key)
+    outputs = _kdf_outputs(monkeypatch, pb, "native_argon2id")
+    if outcome == "migrated":
+        assert store.migrate_kdf("correct horse battery staple 1!") is True
+        assert store.encryption_key is outputs[-1] and any(outputs[-1])
+        assert not any(old_key)
+    else:
+        real_write = km._atomic_write_bytes
+        failed: list[Any] = []
+
+        def first_salt_write_fails(path: Any, data: bytes) -> None:
+            # The migration's write of the new salt fails; the rollback's
+            # restore of the old one succeeds.
+            if path == store.salt_file and not failed:
+                failed.append(path)
+                raise OSError("disk full")
+            real_write(path, data)
+
+        monkeypatch.setattr(km, "_atomic_write_bytes", first_salt_write_fails)
+        with pytest.raises(OSError, match="disk full"):
+            store.migrate_kdf("correct horse battery staple 1!")
+        assert len(outputs) == 1 and not any(outputs[0])
+        assert store.encryption_key is old_key and bytes(old_key) == old_copy
+
+
+_AEAD = {
+    "aes256gcm": ("ama_aes256_gcm_decrypt", 32, 12),
+    "chacha20poly1305": ("ama_chacha20poly1305_decrypt", 32, 12),
+    "ascon128": ("ama_ascon_aead128_decrypt", 16, 16),
+}
+
+
+def _aead(name: str) -> tuple[Any, Any, type[BaseException]]:
+    """``(encrypt, decrypt, the exception a forged tag raises)``."""
+    if name == "aes256gcm":
+        return pb.native_aes256_gcm_encrypt, pb.native_aes256_gcm_decrypt, ValueError
+    if name == "chacha20poly1305":
+        return (
+            pb.native_chacha20poly1305_encrypt,
+            pb.native_chacha20poly1305_decrypt,
+            RuntimeError,
+        )
+    ascon = importlib.import_module("ama_cryptography.ascon")
+    return ascon.aead128_encrypt, ascon.aead128_decrypt, ascon.AsconVerificationError
+
+
+@pytest.mark.parametrize("outcome", ["opened", "forged"])
+@pytest.mark.parametrize("name", sorted(_AEAD))
+def test_an_aead_decryption_scrubs_its_plaintext_staging_buffer(
+    monkeypatch: pytest.MonkeyPatch, name: str, outcome: str
+) -> None:
+    """Each decrypt copied the plaintext out of its ctypes staging buffer and
+    left the buffer populated; ``SecureKeyStorage`` decrypts stored keys this
+    way.  ``opened`` rows are PIN: removing a ``finally`` fails its row.
+    ``forged`` rows are SMOKE, measured: on an authentication failure the C
+    side already leaves the buffer zero, so they pass without the ``finally``
+    (AGENTS.md 6.3)."""
+    symbol, key_len, nonce_len = _AEAD[name]
+    encrypt, decrypt, refusal = _aead(name)
+    key, nonce, plaintext = bytearray(b"\x42" * key_len), b"\x24" * nonce_len, b"\x5a" * 32
+    ciphertext, tag = encrypt(key, nonce, plaintext)
+    staged: list[Any] = []
+    real = getattr(pb._native_lib, symbol)
+
+    def staging(*args: Any) -> int:
+        out = args[-1]
+        staged.append(getattr(out, "_obj", out))
+        return int(real(*args))
+
+    monkeypatch.setattr(pb._native_lib, symbol, staging)
+    if outcome == "opened":
+        assert decrypt(key, nonce, ciphertext, tag) == plaintext
+    else:
+        with pytest.raises(refusal):
+            decrypt(key, nonce, ciphertext, bytes(len(tag)))
+    assert len(staged) == 1 and not any(bytes(staged[0]))
+
+
+def _key_store(tmp_path: Any) -> Any:
+    km = importlib.import_module("ama_cryptography.key_management")
+    store = km.SecureKeyStorage(tmp_path, master_password="correct horse battery staple 1!")
+    store.store_key("k1", b"\x11" * 32)
+    store.store_key("k2", b"\x22" * 32)
+    return store
+
+
+def test_a_stored_key_comes_back_wipeable(tmp_path: Any) -> None:
+    """PIN.  ``retrieve_key`` returned every stored key as ``bytes``, through
+    the public decrypt's copy.  Routing it back through that copy fails
+    this."""
+    store = _key_store(tmp_path)
+    key = store.retrieve_key("k1")
+    assert isinstance(key, bytearray) and key == b"\x11" * 32
+
+
+def _retrieved(monkeypatch: pytest.MonkeyPatch, store: Any) -> list[bytearray]:
+    keys: list[bytearray] = []
+    real = store.retrieve_key
+
+    def recording(key_id: str) -> Any:
+        key = real(key_id)
+        if key is not None:
+            keys.append(key)
+        return key
+
+    monkeypatch.setattr(store, "retrieve_key", recording)
+    return keys
+
+
+@pytest.mark.parametrize("outcome", ["migrated", "rolled-back", "metadata-unreadable"])
+def test_kdf_migration_zeroes_every_key_it_decrypted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, outcome: str
+) -> None:
+    """PIN per row.  ``migrate_kdf`` decrypted every stored key to re-encrypt
+    it and dropped them all intact.  Removing the ``finally`` fails every
+    row; reading a key's metadata before registering the key fails
+    ``metadata-unreadable``."""
+    km = importlib.import_module("ama_cryptography.key_management")
+    store = _key_store(tmp_path)
+    keys = _retrieved(monkeypatch, store)
+    password = "correct horse battery staple 1!"
+    if outcome == "migrated":
+        assert store.migrate_kdf(password) is True
+    elif outcome == "rolled-back":
+        real_write = km._atomic_write_bytes
+        failed: list[Any] = []
+
+        def first_salt_write_fails(path: Any, data: bytes) -> None:
+            if path == store.salt_file and not failed:
+                failed.append(path)
+                raise OSError("disk full")
+            real_write(path, data)
+
+        monkeypatch.setattr(km, "_atomic_write_bytes", first_salt_write_fails)
+        with pytest.raises(OSError, match="disk full"):
+            store.migrate_kdf(password)
+    else:
+        real_load = km.json.load
+        loads = {"n": 0}
+
+        def second_load_fails(f: Any) -> Any:
+            # The first key file's record (read by retrieve_key) loads; the
+            # migration's read of its metadata is the second load, and fails.
+            loads["n"] += 1
+            if loads["n"] == 2:
+                raise ValueError("unreadable metadata")
+            return real_load(f)
+
+        monkeypatch.setattr(km.json, "load", second_load_fails)
+        with pytest.raises(ValueError, match="unreadable metadata"):
+            store.migrate_kdf(password)
+    assert keys and all(not any(key) for key in keys)
+
+
+def test_a_rollback_restores_the_key_even_when_a_restore_write_fails_otherwise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """PIN.  The rollback caught only ``OSError`` from its restore writes;
+    anything else stopped it before the in-memory key and salt were put
+    back, leaving the store on the new, zeroed key.  Moving the restore out
+    of its ``finally`` fails this."""
+    km = importlib.import_module("ama_cryptography.key_management")
+    store = _key_store(tmp_path)
+    old_key, old_salt = store.encryption_key, store.salt
+    old_copy = bytes(old_key)
+
+    def every_salt_write_fails(path: Any, data: bytes) -> None:
+        if path == store.salt_file:
+            raise RuntimeError("restore refused")
+        km_write(path, data)
+
+    km_write = km._atomic_write_bytes
+    monkeypatch.setattr(km, "_atomic_write_bytes", every_salt_write_fails)
+    with pytest.raises(RuntimeError, match="restore refused"):
+        store.migrate_kdf("correct horse battery staple 1!")
+    assert store.encryption_key is old_key and bytes(old_key) == old_copy
+    assert store.salt == old_salt

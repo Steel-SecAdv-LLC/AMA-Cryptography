@@ -511,7 +511,10 @@ def secure_random_fill(buf: Union[bytearray, memoryview]) -> None:
         health_digest = digest_fn(window)
         # Compare-and-store atomically: see the _rng_lock rationale above.
         with _rng_lock:
-            if _rng_state["previous"] is not None and health_digest == _rng_state["previous"]:
+            # Constant-time: the digest is of the caller's secret draw
+            # (INVARIANT-12; PR #415 review).
+            previous = _rng_state["previous"]
+            if previous is not None and secrets_match(health_digest, previous):
                 _set_error("Continuous RNG test failed: consecutive identical outputs")
                 raise CryptoModuleError("Module in error state: Continuous RNG test failed")
             _rng_state["previous"] = health_digest

@@ -211,6 +211,36 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
   trailing octets, and a well-formed item that is not a map.
   `_asn1.scrub_decoded` now zeroes them on all four paths. Each path is PIN;
   five mutants, all killed.
+- **Copilot's review of `d74f44fd`, and the sweep it prompted**
+  (INVARIANT-6, -12):
+  - POST's startup RNG check compared its two raw draws with `==`, and the
+    continuous test compared SHA-256 digests of the caller's draws with
+    `==`. Both now use the injected constant-time comparison.
+  - `secure_channel`: the initiator zeroes its shared secret when the
+    handshake completes or is rejected, and the responder zeroes the secret
+    it decapsulated on every exit. Session keys and rekeyed keys are the
+    HKDF outputs themselves (wrapping each in a second `bytearray` copied it
+    and dropped the original), and a failed second derivation zeroes the
+    first.
+  - The sweep's finds. `SecureKeyStorage` wrapped its Argon2id and PBKDF2
+    key-encryption keys the same way, and `migrate_kdf` dropped the retired
+    key on success and the new one on a rollback. The AES-256-GCM,
+    ChaCha20-Poly1305 and Ascon-AEAD128 decrypt wrappers left the
+    plaintext in their ctypes staging buffers; each now scrubs it. On an
+    authentication failure the C side already leaves it zero, so those
+    test rows are SMOKE (AGENTS.md 6.3).
+  - `SecureKeyStorage.retrieve_key` returned every stored key as `bytes`,
+    through the public decrypt's copy. It now decrypts straight into a
+    wipeable `bytearray` (an internal AES-GCM core the public wrapper also
+    uses), and `migrate_kdf` zeroes every key it decrypted, however it
+    ends. The public AEAD decrypt functions still return `bytes`. The two
+    examples that read a key back now compare it in constant time.
+  - `migrate_kdf`'s rollback caught only `OSError` from its restore writes;
+    any other exception stopped it before the in-memory key and salt were
+    put back, leaving the store on the new, zeroed key. The in-memory
+    restore now runs in a `finally`.
+
+  Twenty-one mutants, all killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.
@@ -406,7 +436,8 @@ uncovered. Every guard below is PIN by mutation unless marked otherwise.
   keygens; KEM, X25519 and ECDH shared secrets; HKDF, PBKDF2 and Argon2id
   output, agent-bound HKDF and legacy Argon2id included (the Cython HKDF now
   writes into the bytearray it returns); FROST
-  dealt shares; HD-derived keys; the hybrid combiner's output. Native wrappers
+  dealt shares; HD-derived keys; keys read back from `SecureKeyStorage`; the
+  hybrid combiner's output. Native wrappers
   return through `_take_secret`, which wipes the ctypes staging buffer, and
   read secret inputs in place (`_borrow`). Containers holding secrets
   (`KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult`,
@@ -2362,7 +2393,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
 | 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported, nor are the 24 undeclared helpers the export map now localises (the `ama_has_*` / `ama_cpuid_has_*` CPU probes and three raw Keccak permutations), none of which any installed header ever declared | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
-| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output (`AgentBinding.derive_key` and the legacy Argon2id migration path included), FROST dealt shares and nonces, HD-derived keys, Ascon-AEAD128 keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (its `__hash__` is `None`: `hash()` raises `TypeError` and `collections.abc.Hashable` reports False). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
+| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output (`AgentBinding.derive_key` and the legacy Argon2id migration path included), FROST dealt shares and nonces, HD-derived keys, keys read back by `SecureKeyStorage.retrieve_key`, Ascon-AEAD128 keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (its `__hash__` is `None`: `hash()` raises `TypeError` and `collections.abc.Hashable` reports False). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —

@@ -34,7 +34,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, cast
 from ama_cryptography import _owner_only
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
-from ama_cryptography._secret_material import ScrubOnRaise, SecretBytes, SecretMaterial
+from ama_cryptography._secret_material import ScrubOnRaise, SecretBytes, SecretMaterial, zeroize
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
@@ -1256,15 +1256,15 @@ class SecureKeyStorage:
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
 
-                self.encryption_key = bytearray(
-                    native_argon2id(
-                        master_password.encode("utf-8"),
-                        self.salt,
-                        t_cost=t_cost,
-                        m_cost=m_cost,
-                        parallelism=parallelism,
-                        out_len=self.KDF_KEY_BYTES,
-                    )
+                # A wipeable bytearray already; wrapping it again copied the
+                # key and dropped the original unwiped (PR #415 review sweep).
+                self.encryption_key = native_argon2id(
+                    master_password.encode("utf-8"),
+                    self.salt,
+                    t_cost=t_cost,
+                    m_cost=m_cost,
+                    parallelism=parallelism,
+                    out_len=self.KDF_KEY_BYTES,
                 )
             except (ImportError, RuntimeError) as exc:
                 raise RuntimeError(
@@ -1288,13 +1288,11 @@ class SecureKeyStorage:
             self.kdf_params["iterations"] = iterations
             # Key-encryption-key derivation on this module's own PBKDF2
             # (INVARIANT-1; see the BIP39 site above for the full rationale).
-            self.encryption_key = bytearray(
-                native_pbkdf2_hmac_sha256(
-                    master_password.encode("utf-8"),
-                    self.salt,
-                    iterations,
-                    self.KDF_KEY_BYTES,
-                )
+            self.encryption_key = native_pbkdf2_hmac_sha256(
+                master_password.encode("utf-8"),
+                self.salt,
+                iterations,
+                self.KDF_KEY_BYTES,
             )
 
         # Warn if using legacy parameters
@@ -1328,25 +1326,40 @@ class SecureKeyStorage:
         # name "migrate", and reported success.
         self._require_argon2id("migrate the key store")
 
-        # Read all existing keys with old parameters
-        old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
-        for key_file in self.storage_path.glob("*.json"):
-            if key_file.name.startswith("."):
-                continue
-            key_id = key_file.stem
-            key_data = self.retrieve_key(key_id)
-            # `is not None`, not truthiness.  A zero-length stored value —
-            # a tombstone, a placeholder provisioned before its material
-            # arrives, an empty result from an upstream serializer — is
-            # falsy, so `if key_data:` skipped it.  The migration then
-            # rotated the salt and metadata around it, leaving that record
-            # encrypted under a key the new password no longer derives:
-            # permanently unreadable, while list_keys() went on reporting it.
-            # Silent, and not recoverable once the old salt is gone.
-            if key_data is not None:
-                with open(key_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f).get("metadata", {})
-                old_keys[key_id] = (key_data, metadata)
+        # Read all existing keys with old parameters.  Each is decrypted into a
+        # wipeable bytearray and zeroed when the migration ends, whichever way
+        # (PR #415 review sweep: they were dropped intact).
+        old_keys: Dict[str, Tuple[bytearray, Dict[str, Any]]] = {}
+        try:
+            for key_file in self.storage_path.glob("*.json"):
+                if key_file.name.startswith("."):
+                    continue
+                key_id = key_file.stem
+                key_data = self.retrieve_key(key_id)
+                # `is not None`, not truthiness.  A zero-length stored value —
+                # a tombstone, a placeholder provisioned before its material
+                # arrives, an empty result from an upstream serializer — is
+                # falsy, so `if key_data:` skipped it.  The migration then
+                # rotated the salt and metadata around it, leaving that record
+                # encrypted under a key the new password no longer derives:
+                # permanently unreadable, while list_keys() went on reporting it.
+                # Silent, and not recoverable once the old salt is gone.
+                if key_data is not None:
+                    # Registered before its metadata is read, so a failed read
+                    # still leaves the decrypted key where the finally zeroes it.
+                    old_keys[key_id] = (key_data, {})
+                    with open(key_file, "r", encoding="utf-8") as f:
+                        old_keys[key_id] = (key_data, json.load(f).get("metadata", {}))
+            return self._reencrypt_under_current_kdf(master_password, old_keys)
+        finally:
+            for key_data, _metadata in old_keys.values():
+                zeroize(key_data)
+
+    def _reencrypt_under_current_kdf(
+        self, master_password: str, old_keys: Dict[str, Tuple[bytearray, Dict[str, Any]]]
+    ) -> bool:
+        """Re-encrypt ``old_keys`` under a new salt and an Argon2id key; see
+        :meth:`migrate_kdf`."""
 
         # Generate new salt
         new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
@@ -1354,99 +1367,112 @@ class SecureKeyStorage:
         # Derive the new key with Argon2id (availability checked above).
         from ama_cryptography.pqc_backends import native_argon2id
 
-        new_encryption_key = bytearray(
-            native_argon2id(
-                master_password.encode("utf-8"),
-                new_salt,
-                t_cost=self.ARGON2_T_COST,
-                m_cost=self.ARGON2_M_COST,
-                parallelism=self.ARGON2_PARALLELISM,
-                out_len=self.KDF_KEY_BYTES,
+        new_encryption_key = native_argon2id(
+            master_password.encode("utf-8"),
+            new_salt,
+            t_cost=self.ARGON2_T_COST,
+            m_cost=self.ARGON2_M_COST,
+            parallelism=self.ARGON2_PARALLELISM,
+            out_len=self.KDF_KEY_BYTES,
+        )
+        # The new key is zeroed if anything below raises, before or inside the
+        # rollback; on success the retired key is (PR #415 review sweep: both
+        # were dropped intact).
+        with ScrubOnRaise() as held:
+            held(new_encryption_key)
+
+            # Re-encrypt all keys under the new key.  This is the dangerous part:
+            # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
+            # while the persisted ``.salt`` still selects the *old* key until the
+            # very end.  If the process dies partway through, the keys already
+            # rewritten are encrypted under a key that the on-disk salt can no longer
+            # reproduce — i.e. permanently undecryptable.  The previous rollback
+            # restored only ``self.encryption_key`` (not ``self.salt``, and not the
+            # rewritten files), so any interrupted migration lost data.
+            #
+            # Crash-safety strategy:
+            #   * snapshot the raw bytes of every file the migration overwrites,
+            #   * write each key + the salt + metadata via ``_atomic_write_bytes``
+            #     (atomic replace, so no file is ever torn),
+            #   * on any exception restore the exact prior on-disk state from the
+            #     snapshot and restore both ``encryption_key`` and ``salt`` in memory.
+            old_key = self.encryption_key
+            old_salt = self.salt
+
+            snapshot: Dict[Path, Optional[bytes]] = {}
+            for key_id in old_keys:
+                key_path = self.storage_path / f"{key_id}.json"
+                snapshot[key_path] = key_path.read_bytes() if key_path.exists() else None
+            snapshot[self.salt_file] = (
+                self.salt_file.read_bytes() if self.salt_file.exists() else None
             )
-        )
+            snapshot[self.metadata_file] = (
+                self.metadata_file.read_bytes() if self.metadata_file.exists() else None
+            )
 
-        # Re-encrypt all keys under the new key.  This is the dangerous part:
-        # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
-        # while the persisted ``.salt`` still selects the *old* key until the
-        # very end.  If the process dies partway through, the keys already
-        # rewritten are encrypted under a key that the on-disk salt can no longer
-        # reproduce — i.e. permanently undecryptable.  The previous rollback
-        # restored only ``self.encryption_key`` (not ``self.salt``, and not the
-        # rewritten files), so any interrupted migration lost data.
-        #
-        # Crash-safety strategy:
-        #   * snapshot the raw bytes of every file the migration overwrites,
-        #   * write each key + the salt + metadata via ``_atomic_write_bytes``
-        #     (atomic replace, so no file is ever torn),
-        #   * on any exception restore the exact prior on-disk state from the
-        #     snapshot and restore both ``encryption_key`` and ``salt`` in memory.
-        old_key = self.encryption_key
-        old_salt = self.salt
+            old_kdf_params = self.kdf_params
 
-        snapshot: Dict[Path, Optional[bytes]] = {}
-        for key_id in old_keys:
-            key_path = self.storage_path / f"{key_id}.json"
-            snapshot[key_path] = key_path.read_bytes() if key_path.exists() else None
-        snapshot[self.salt_file] = self.salt_file.read_bytes() if self.salt_file.exists() else None
-        snapshot[self.metadata_file] = (
-            self.metadata_file.read_bytes() if self.metadata_file.exists() else None
-        )
-
-        old_kdf_params = self.kdf_params
-
-        self.encryption_key = new_encryption_key
-        self.salt = new_salt
-        # Swap the recorded parameters over with the key, so the keys written
-        # below are bound to the parameters they are actually protected by
-        # rather than to the ones being migrated away from.
-        self.kdf_params = {
-            "algorithm": "Argon2id",
-            "t_cost": self.ARGON2_T_COST,
-            "m_cost": self.ARGON2_M_COST,
-            "parallelism": self.ARGON2_PARALLELISM,
-        }
-
-        try:
-            for key_id, (key_data, key_metadata) in old_keys.items():
-                self.store_key(key_id, key_data, key_metadata)
-
-            # Update salt file (atomic, 0600).
-            _atomic_write_bytes(self.salt_file, new_salt)
-
-            # Update metadata (atomic, 0600).
-            metadata = {
-                "version": self.KDF_VERSION,
+            self.encryption_key = new_encryption_key
+            self.salt = new_salt
+            # Swap the recorded parameters over with the key, so the keys written
+            # below are bound to the parameters they are actually protected by
+            # rather than to the ones being migrated away from.
+            self.kdf_params = {
                 "algorithm": "Argon2id",
-                "salt_bytes": self.KDF_SALT_BYTES,
-                "migrated_at": datetime.now(timezone.utc).isoformat(),
                 "t_cost": self.ARGON2_T_COST,
                 "m_cost": self.ARGON2_M_COST,
                 "parallelism": self.ARGON2_PARALLELISM,
             }
-            _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
 
-            return True
-        except Exception:
-            # Restore the prior on-disk state so no key is left encrypted under a
-            # key the persisted salt cannot reproduce, then restore in-memory key
-            # and salt together (the old code left ``self.salt`` inconsistent).
-            for path, original in snapshot.items():
+            try:
+                for key_id, (key_data, key_metadata) in old_keys.items():
+                    self.store_key(key_id, key_data, key_metadata)
+
+                # Update salt file (atomic, 0600).
+                _atomic_write_bytes(self.salt_file, new_salt)
+
+                # Update metadata (atomic, 0600).
+                metadata = {
+                    "version": self.KDF_VERSION,
+                    "algorithm": "Argon2id",
+                    "salt_bytes": self.KDF_SALT_BYTES,
+                    "migrated_at": datetime.now(timezone.utc).isoformat(),
+                    "t_cost": self.ARGON2_T_COST,
+                    "m_cost": self.ARGON2_M_COST,
+                    "parallelism": self.ARGON2_PARALLELISM,
+                }
+                _atomic_write_bytes(
+                    self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8")
+                )
+
+                zeroize(old_key)
+                return True
+            except Exception:
+                # Restore the prior on-disk state so no key is left encrypted under a
+                # key the persisted salt cannot reproduce, then restore in-memory key
+                # and salt together (the old code left ``self.salt`` inconsistent).
+                # The in-memory restore sits in a ``finally``: an exception other
+                # than OSError from a restore write stopped it, leaving the store
+                # on the new, zeroed key (PR #415 review sweep).
                 try:
-                    if original is None:
-                        if path.exists():
-                            path.unlink()
-                    else:
-                        _atomic_write_bytes(path, original)
-                except OSError:
-                    logger.error(
-                        "migrate_kdf rollback could not restore %s; the key store "
-                        "may need manual recovery from backup",
-                        path,
-                    )
-            self.encryption_key = old_key
-            self.salt = old_salt
-            self.kdf_params = old_kdf_params
-            raise
+                    for path, original in snapshot.items():
+                        try:
+                            if original is None:
+                                if path.exists():
+                                    path.unlink()
+                            else:
+                                _atomic_write_bytes(path, original)
+                        except OSError:
+                            logger.error(
+                                "migrate_kdf rollback could not restore %s; the key store "
+                                "may need manual recovery from backup",
+                                path,
+                            )
+                finally:
+                    self.encryption_key = old_key
+                    self.salt = old_salt
+                    self.kdf_params = old_kdf_params
+                raise
 
     @classmethod
     def from_existing(
@@ -1557,7 +1583,7 @@ class SecureKeyStorage:
         # process dies mid-write (load-bearing for crash-safe ``migrate_kdf``).
         _atomic_write_bytes(key_file, json.dumps(storage_data, indent=2).encode("utf-8"))
 
-    def retrieve_key(self, key_id: str) -> Optional[bytes]:
+    def retrieve_key(self, key_id: str) -> Optional[bytearray]:
         """
         Retrieve and decrypt key with authentication verification.
 
@@ -1565,12 +1591,13 @@ class SecureKeyStorage:
             key_id: Key identifier
 
         Returns:
-            Decrypted key bytes or None if not found
+            The decrypted key in a wipeable ``bytearray`` (INVARIANT-6), or
+            None if not found
 
         Raises:
             ValueError: If authentication fails (tampering detected) or unknown algorithm
         """
-        from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
+        from ama_cryptography.pqc_backends import _aes256_gcm_decrypt_wipeable
 
         # Same traversal guard as ``store_key`` — a store you cannot write with
         # a malicious id must not be readable with one either.
@@ -1612,11 +1639,12 @@ class SecureKeyStorage:
             aad = self._aad_for(key_id, storage_version, recorded_binding)
 
             # Decrypt with authentication (raises ValueError if tampered);
-            # keep the wipeable bytearray key on the buffer-protocol path.
+            # keep the wipeable bytearray key on the buffer-protocol path.  The
+            # stored key is decrypted straight into a wipeable bytearray: the
+            # public wrapper's ``bytes`` copy left every key the store returned
+            # un-wipeable (PR #415 review sweep).
             try:
-                plaintext: bytes = native_aes256_gcm_decrypt(
-                    self.encryption_key, nonce, ct, tag, aad
-                )
+                plaintext = _aes256_gcm_decrypt_wipeable(self.encryption_key, nonce, ct, tag, aad)
             except ValueError:
                 # A parameter mismatch is the one authentication failure with
                 # a specific, actionable cause: the key was protected at a

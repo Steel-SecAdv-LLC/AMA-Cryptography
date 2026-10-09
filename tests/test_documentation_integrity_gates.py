@@ -836,11 +836,11 @@ class TestTheReturnTypeComparisonDoesNotDependOnTheInterpreter:
     @pytest.mark.parametrize(
         "declared",
         [
-            "Optional[bytes]",
-            "bytes | None",  # PEP 604; how 3.14 renders the annotation
-            "Union[bytes, None]",
-            "Union[None, bytes]",  # a union is a set, not a sequence
-            "typing.Optional[bytes]",
+            "Optional[bytearray]",
+            "bytearray | None",  # PEP 604; how 3.14 renders the annotation
+            "Union[bytearray, None]",
+            "Union[None, bytearray]",  # a union is a set, not a sequence
+            "typing.Optional[bytearray]",
         ],
     )
     def test_every_spelling_of_one_type_is_accepted(self, declared: str) -> None:

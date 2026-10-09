@@ -6050,6 +6050,29 @@ def native_aes256_gcm_decrypt(
         ValueError: If key, nonce, or tag has incorrect length, or if
             authentication tag verification fails
     """
+    # A copy, which is this function's contract; the bytearray it is copied
+    # from is zeroed.  Key material goes through _aes256_gcm_decrypt_wipeable.
+    plaintext = _aes256_gcm_decrypt_wipeable(key, nonce, ciphertext, tag, aad)
+    try:
+        return bytes(plaintext)
+    finally:
+        zeroize(plaintext)
+
+
+def _aes256_gcm_decrypt_wipeable(
+    key: _BufferInput,
+    nonce: _BufferInput,
+    ciphertext: _BufferInput,
+    tag: _BufferInput,
+    aad: _BufferInput = b"",
+) -> bytearray:
+    """:func:`native_aes256_gcm_decrypt`, returning the plaintext in a wipeable
+    ``bytearray`` the C side wrote it into.
+
+    For plaintext that is key material: ``SecureKeyStorage.retrieve_key``
+    returned every stored key as ``bytes`` through the public wrapper (PR #415
+    review sweep).  Same checks and errors as the public function.
+    """
     check_crypto_permitted()
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
@@ -6067,7 +6090,9 @@ def native_aes256_gcm_decrypt(
             f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, " f"got {len(tag)}"
         )
 
-    pt_buf = ctypes.create_string_buffer(len(ciphertext))
+    # The plaintext is written straight into the bytearray returned
+    # (_secret_out): no staging buffer, so nothing is left behind in one.
+    plaintext, pt_buf = _secret_out(len(ciphertext))
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; authentication failure never observes a copied key.
@@ -6093,10 +6118,11 @@ def native_aes256_gcm_decrypt(
     finally:
         if borrow is not None:
             borrow.__exit__(None, None, None)
+    del pt_buf  # the ctypes view pins the bytearray's size; release it
     if rc != 0:
+        zeroize(plaintext)
         raise ValueError("AES-256-GCM authentication tag verification failed")
-
-    return bytes(pt_buf)
+    return plaintext
 
 
 # ============================================================================
@@ -9687,10 +9713,13 @@ def native_chacha20poly1305_decrypt(
     finally:
         if borrow is not None:
             borrow.__exit__(None, None, None)
-    if rc != 0:
-        raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
-
-    return bytes(pt_buf)
+    # Staging buffer scrubbed on every path, as in native_aes256_gcm_decrypt.
+    try:
+        if rc != 0:
+            raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
+        return bytes(pt_buf)
+    finally:
+        _wipe(pt_buf)
 
 
 # ============================================================================

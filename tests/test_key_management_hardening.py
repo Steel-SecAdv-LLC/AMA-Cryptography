@@ -63,7 +63,7 @@ class TestKeyIdTraversalGuard:
 
     def test_valid_ids_still_work(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
-        assert store.retrieve_key("alpha") == _KEYS["alpha"]
+        assert store.retrieve_key("alpha") == bytearray(_KEYS["alpha"])
         assert store.retrieve_key("does-not-exist") is None
         assert store.delete_key("does-not-exist") is False
 

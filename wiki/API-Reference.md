@@ -495,7 +495,7 @@ metadata:  dict           = mgr.export_metadata(filepath: Path | None = None)
 Defined in `ama_cryptography/key_management.py` (`class SecureKeyStorage`). The constructor takes
 a **storage directory** and an optional master password — not a raw
 encryption key. `retrieve_key()` returns the ciphertext-decrypted key
-material as `Optional[bytes]` (or `None` if the id is missing); metadata
+material as `Optional[bytearray]`, wipeable (or `None` if the id is missing); metadata
 is stored separately as a JSON-serializable `dict` and is typically
 retrieved via `KeyRotationManager`.
 
@@ -517,7 +517,7 @@ storage.store_key(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None
 
-key_bytes: Optional[bytes] = storage.retrieve_key(key_id: str) -> Optional[bytes]
+key_bytes: Optional[bytearray] = storage.retrieve_key(key_id: str) -> Optional[bytearray]
 deleted:   bool            = storage.delete_key(key_id: str) -> bool
 all_ids:   List[str]       = storage.list_keys() -> List[str]
 ```

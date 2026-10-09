@@ -271,12 +271,12 @@ class TestKeyManagementDecryptPaths:
         # Retrieve
         retrieved = temp_storage.retrieve_key(key_id)
 
-        assert retrieved == key_data
-        assert isinstance(retrieved, bytes)
+        assert retrieved == bytearray(key_data)
+        assert isinstance(retrieved, bytearray)
 
     @skip_no_native_aes
-    def test_retrieve_returns_bytes_type(self, temp_storage: Any) -> None:
-        """Retrieved key is explicitly bytes type."""
+    def test_retrieve_returns_bytearray_type(self, temp_storage: Any) -> None:
+        """Retrieved key is a bytearray, so its holder can wipe it."""
         import secrets
 
         key_data = secrets.token_bytes(32)
@@ -285,8 +285,9 @@ class TestKeyManagementDecryptPaths:
         temp_storage.store_key(key_id, key_data)
         retrieved = temp_storage.retrieve_key(key_id)
 
-        # Type check - this tests our type annotation fix
-        assert type(retrieved) is bytes
+        # Exactly bytearray: an immutable bytes copy could not be zeroed
+        # (INVARIANT-6).
+        assert type(retrieved) is bytearray
 
     def test_retrieve_nonexistent_key_returns_none(self, temp_storage: Any) -> None:
         """Retrieving non-existent key returns None."""

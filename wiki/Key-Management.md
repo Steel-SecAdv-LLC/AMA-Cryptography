@@ -299,7 +299,7 @@ meta     = mgr.register_key("my-key-id", purpose="doc-signing")
 # returned by register_key lives in the rotation manager, not the store.
 storage.store_key("my-key-id", key_data, metadata={"purpose": "doc-signing"})
 
-retrieved: bytes | None = storage.retrieve_key("my-key-id")
+retrieved: bytearray | None = storage.retrieve_key("my-key-id")
 assert retrieved == key_data
 
 # Metadata for active/deprecated/revoked status is maintained by the
