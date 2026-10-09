@@ -255,7 +255,19 @@ class TestTheFastPathEmitsTheGeneralEncoding:
             assert tx.canonical(value) == self._reference(value), value
 
     def test_exact_types_encode_identically(self) -> None:
-        for value in (b"", b"x" * 300, "", "é", 0, -(2**70), [], (), {}, [b"a", ("b", None)]):
+        values: tuple[Any, ...] = (
+            b"",
+            b"x" * 300,
+            "",
+            "é",
+            0,
+            -(2**70),
+            [],
+            (),
+            {},
+            [b"a", ("b", None)],
+        )
+        for value in values:
             assert tx.canonical(value) == self._reference(value), value
 
     def test_a_subclass_keeps_the_general_branch(self) -> None:
