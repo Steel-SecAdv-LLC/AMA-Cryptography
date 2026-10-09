@@ -46,6 +46,7 @@ comparison and never short-circuiting across fields.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import sys
 from typing import Any, Callable, ClassVar, Dict, Tuple, TypeVar, Union, cast
@@ -168,6 +169,23 @@ def finalize_secret(owner: object, name: str, label: str, names: Tuple[str, ...]
         record_finalizer_error(label, f"wipe() failed: {exc}")
 
 
+def _each(action: Callable[[Any], None], items: Any) -> None:
+    """Apply ``action`` to every item, in order, even when one raises.
+
+    A wipe that stopped at its first failure would leave every later secret
+    populated.  Each call is an exit callback, so all of them run; a failure
+    propagates once they have, a later one carrying the earlier as its
+    ``__context__``.  Nothing is caught, so nothing is swallowed.
+    """
+    with contextlib.ExitStack() as stack:
+        for item in reversed(list(items)):
+            stack.callback(action, item)
+
+
+def _wipe_child(child: Any) -> None:
+    child.wipe()
+
+
 def _wipe_children(value: Any) -> None:
     """Call ``wipe()`` on a secret holder, or on each one in a dict or list."""
     if value is None:
@@ -178,8 +196,7 @@ def _wipe_children(value: Any) -> None:
         children = value
     else:
         children = (value,)
-    for child in children:
-        child.wipe()
+    _each(_wipe_child, children)
 
 
 class SecretMaterial:
@@ -209,11 +226,16 @@ class SecretMaterial:
 
         Explicit, so unconditional: anything sharing these buffers sees zeros.
         Take a copy first (``bytes(obj.field)``) of anything still needed.
+        A failure wiping one attribute or child does not spare the rest: all
+        are attempted before it propagates.
         """
-        for name in self._SECRET_ATTRS:
-            _zero(self.__dict__.get(name))
-        for name in self._SECRET_CHILDREN:
-            _wipe_children(self.__dict__.get(name))
+        # One stack for both, run last-in first-out: the attributes in order,
+        # then the children in order (see :func:`_each`).
+        with contextlib.ExitStack() as stack:
+            for name in reversed(self._SECRET_CHILDREN):
+                stack.callback(_wipe_children, self.__dict__.get(name))
+            for name in reversed(self._SECRET_ATTRS):
+                stack.callback(_zero, self.__dict__.get(name))
 
     def __del__(self) -> None:
         for name in self._SECRET_ATTRS:

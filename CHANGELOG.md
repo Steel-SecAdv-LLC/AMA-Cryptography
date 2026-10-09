@@ -241,6 +241,22 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
     restore now runs in a `finally`.
 
   Twenty-one mutants, all killed.
+- **Copilot's review of `bcad30b9`** (INVARIANT-6; backend parity):
+  - An explicit `wipe()` stopped at the first child whose own `wipe()`
+    raised, leaving later keypairs populated, both siblings in one dict
+    (`CryptoPackageResult.keypairs`) and later attributes
+    (`KeyManagementSystem`). Every attribute and child is now attempted
+    before the failure propagates.
+  - `hmac_sha3_256` gave different verdicts on its two backends. A
+    signed-octet buffer hashed on ctypes but raised `ValueError` on the
+    Cython binding; a wide-item or strided buffer raised `TypeError` on one
+    and `ValueError` or `BufferError` on the other. The binding now applies
+    the ctypes backend's rule, and a test pins one verdict per buffer kind
+    across both. Copilot suggested casting every buffer to octets, but that
+    would accept a wide-item buffer whose `len()` counts items, which the
+    package refuses everywhere else.
+
+  Four mutants, all killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.

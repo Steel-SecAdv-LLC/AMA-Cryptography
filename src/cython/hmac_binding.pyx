@@ -61,6 +61,23 @@ cdef bytes _mac(const uint8_t *key_p, size_t key_len, const uint8_t *msg_p, size
         ama_secure_memzero(out, 32)
 
 
+cdef object _octet_view(object data):
+    """``data`` as a view of unsigned octets, under the rule
+    ``pqc_backends._byte_view`` applies to the ctypes backend.
+
+    A buffer of multi-byte items, more than one dimension or a stride is
+    refused: its ``len()`` counts items, so a caller's length check would
+    pass on the wrong number of octets.  Single-byte items of any format
+    (``'b'``, ``'c'``, ``'B'``) are the same octets, and are cast to ``'B'``
+    for the typed view, which otherwise accepts ``'B'`` alone.
+    """
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1 or not view.c_contiguous:
+        view.release()
+        raise TypeError("buffer must be a one-dimensional, contiguous byte buffer")
+    return view if view.format == "B" else view.cast("B")
+
+
 cdef bytes _mac_views(const unsigned char[::1] key, const unsigned char[::1] msg):
     # &view[0] is undefined for a zero-length view; an empty key or message
     # is legal HMAC input, so it gets a valid pointer to nothing.
@@ -77,17 +94,19 @@ def cy_hmac_sha3_256(object key, object msg):
     INVARIANT-1 compliant: calls only ama_cryptography native C.
     RFC 2104 compliant: 136-byte block size (SHA3-256 Keccak rate).
 
-    ``key`` and ``msg`` may be ``bytes``, ``bytearray`` or any contiguous
-    byte buffer; all are read in place, so a wipeable key is never copied
-    into an immutable one on the way in.  ``bytes`` and ``bytearray`` are
-    read straight from their storage under the GIL: a typed-memoryview
-    acquisition per argument cost 0.35 us of a 4.1 us call (measured
-    2026-10-08 against 774d050), so views are kept for other buffers only.
+    ``key`` and ``msg`` may be ``bytes``, ``bytearray`` or any
+    one-dimensional, contiguous buffer of single-byte items; all are read in
+    place, so a wipeable key is never copied into an immutable one on the way
+    in.  ``bytes`` and ``bytearray`` are read straight from their storage
+    under the GIL: a typed-memoryview acquisition per argument cost 0.35 us
+    of a 4.1 us call (measured 2026-10-08 against 774d050), so views are kept
+    for other buffers only.
 
     Returns 32-byte HMAC digest.
+    Raises TypeError for any other buffer, as the ctypes backend does.
     Raises RuntimeError on native C failure (e.g. AMA_ERROR_MEMORY).
     """
     check_crypto_permitted()
     if _is_octets(key) and _is_octets(msg):
         return _mac(_octets_ptr(key), <size_t>len(key), _octets_ptr(msg), <size_t>len(msg))
-    return _mac_views(key, msg)
+    return _mac_views(_octet_view(key), _octet_view(msg))

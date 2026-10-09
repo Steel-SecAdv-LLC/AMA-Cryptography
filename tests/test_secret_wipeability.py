@@ -943,6 +943,72 @@ def test_wiping_a_key_management_system_wipes_both_signing_keys() -> None:
     assert not any(ed_secret) and not any(ml_secret) and not any(kms.master_secret)
 
 
+class _Holder:
+    """A child secret holder whose ``wipe()`` can be made to fail first."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.secret = bytearray(b"\x5a" * 8)
+        self.fail = fail
+
+    def wipe(self) -> None:
+        if self.fail:
+            raise RuntimeError("this child's wipe failed")
+        sm.zeroize(self.secret)
+
+
+class _Parent(sm.SecretMaterial):
+    _SECRET_ATTRS: ClassVar[tuple[str, ...]] = ("key",)
+    _SECRET_CHILDREN: ClassVar[tuple[str, ...]] = ("first", "second")
+
+    def __init__(self, first: Any, second: Any) -> None:
+        self.key = bytearray(b"\xa5" * 8)
+        self.first = first
+        self.second = second
+
+
+def test_a_failed_child_wipe_does_not_spare_its_siblings() -> None:
+    """PIN.  A child whose ``wipe()`` raises does not stop the cascade over
+    the others in the same dict; the failure still propagates.  Looping over
+    the children with a bare ``child.wipe()`` fails this."""
+    kept = _Holder()
+    parent = _Parent({"bad": _Holder(fail=True), "good": kept}, None)
+    with pytest.raises(RuntimeError, match="this child's wipe failed"):
+        parent.wipe()
+    assert not any(kept.secret)
+
+
+def test_a_failed_child_wipe_does_not_spare_the_next_attribute() -> None:
+    """PIN.  The same across ``_SECRET_CHILDREN`` attributes, as in
+    ``KeyManagementSystem``: the second attribute's child is wiped after the
+    first attribute's fails.  A loop over the attributes fails this."""
+    kept = _Holder()
+    parent = _Parent(_Holder(fail=True), kept)
+    with pytest.raises(RuntimeError, match="this child's wipe failed"):
+        parent.wipe()
+    assert not any(kept.secret) and not any(parent.key)
+
+
+def test_a_failed_attribute_wipe_does_not_spare_the_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  Zeroing the object's own attributes and cascading to its
+    children share one exit stack, so a failure in the first does not skip
+    the second.  Two stacks in sequence fail this."""
+
+    def failing_zero(value: Any) -> None:
+        raise RuntimeError("this attribute's wipe failed")
+
+    monkeypatch.setattr(sm, "_zero", failing_zero)
+    kept = _Holder()
+    parent = _Parent(None, kept)
+    with pytest.raises(RuntimeError, match="this attribute's wipe failed"):
+        parent.wipe()
+    assert not any(kept.secret)
+    # Restored before ``parent`` is collected, so its finalizer zeroes
+    # ``key`` with the real helper and records no error.
+    monkeypatch.undo()
+
+
 def test_a_dying_parent_does_not_wipe_a_child_its_caller_kept() -> None:
     """PIN.  Only the explicit wipe cascades.  A caller that keeps a keypair
     from a result it drops keeps a usable key -- the extract-from-a-temporary
