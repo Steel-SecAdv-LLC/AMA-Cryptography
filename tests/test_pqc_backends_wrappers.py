@@ -230,7 +230,7 @@ class TestArgon2idLegacyVerify:
     _P = 1
     _OUT_LEN = 32
 
-    def _legacy_tag(self) -> bytes:
+    def _legacy_tag(self) -> bytearray:
         """Derive a legacy (pre-2.1.5) tag via the public wrapper.
 
         We exercise ``native_argon2id_legacy`` because ``native_argon2id``

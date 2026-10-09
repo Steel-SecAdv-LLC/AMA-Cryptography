@@ -3804,25 +3804,35 @@ class AmaContext:
 
         if self._algorithm == self.ALG_KYBER_1024:
 
+            # The shared secrets these mint are taken into wipeable bytearrays
+            # and their ctypes staging buffers scrubbed on every path:
+            # ``bytes(ss)`` left an immutable copy and the populated staging
+            # buffer behind, on every call (PR #415 review).
             def _encaps(pub: bytes) -> tuple:
                 ct = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
                 ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
                 ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-                rc = self.kem_encapsulate(
-                    pub, ct, ctypes.pointer(ct_len), ss, KYBER_SHARED_SECRET_BYTES
-                )
-                if rc != 0:
-                    raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
-                return bytes(ct.raw[: ct_len.value]), bytes(ss)
+                try:
+                    rc = self.kem_encapsulate(
+                        pub, ct, ctypes.pointer(ct_len), ss, KYBER_SHARED_SECRET_BYTES
+                    )
+                    if rc != 0:
+                        raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
+                    return bytes(ct.raw[: ct_len.value]), _take_secret(ss)
+                finally:
+                    _wipe(ss)
 
-            def _decaps(ciphertext: bytes, secret: ctypes.Array) -> bytes:
+            def _decaps(ciphertext: bytes, secret: ctypes.Array) -> bytearray:
                 ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-                rc = self.kem_decapsulate(
-                    ciphertext, cast(bytes, secret), ss, KYBER_SHARED_SECRET_BYTES
-                )
-                if rc != 0:
-                    raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
-                return bytes(ss)
+                try:
+                    rc = self.kem_decapsulate(
+                        ciphertext, cast(bytes, secret), ss, KYBER_SHARED_SECRET_BYTES
+                    )
+                    if rc != 0:
+                        raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
+                    return _take_secret(ss)
+                finally:
+                    _wipe(ss)
 
             pairwise_test_kem(_encaps, _decaps, pk, sk_view, "AmaContext(ML-KEM-1024)")
         else:
@@ -7653,7 +7663,21 @@ def _borrow(secret: _BufferInput) -> Any:
         return secret
     view = _byte_view(secret)
     if view.readonly:
-        return view.tobytes()
+        # ``tobytes()`` here was a fresh immutable copy of the secret (PR #415
+        # review).  A read-only view of a whole ``bytes`` is that ``bytes``,
+        # passed as is; of a whole ``bytearray`` (``toreadonly()``), that
+        # storage, borrowed.  A read-only view of PART of a buffer has no
+        # copy-free route to C, and is refused rather than copied.
+        owner = view.obj
+        if isinstance(owner, bytes) and view.nbytes == len(owner):
+            return owner
+        if isinstance(owner, bytearray) and view.nbytes == len(owner):
+            return (ctypes.c_char * view.nbytes).from_buffer(owner)
+        raise TypeError(
+            "a secret passed as a read-only view of part of a buffer cannot be "
+            "borrowed without copying it; pass the bytes or bytearray itself, or "
+            "a writable view"
+        )
     return (ctypes.c_char * view.nbytes).from_buffer(view)
 
 
@@ -9314,13 +9338,13 @@ def native_argon2id(
 
 
 def native_argon2id_legacy(
-    password: bytes,
+    password: _BufferInput,
     salt: bytes,
     t_cost: int = 3,
     m_cost: int = 65536,
     parallelism: int = 4,
     out_len: int = 32,
-) -> bytes:
+) -> bytearray:
     """
     Derive an Argon2id tag using the pre-shim (buggy) derivation.
 
@@ -9344,7 +9368,7 @@ def native_argon2id_legacy(
         out_len:     Output tag length (≥ 4 bytes).
 
     Returns:
-        Derived tag bytes of length ``out_len``.
+        The derived tag, ``out_len`` bytes, in a wipeable ``bytearray``.
 
     Raises:
         RuntimeError: If the native library is unavailable, or if the loaded
@@ -9406,21 +9430,25 @@ def native_argon2id_legacy(
     )
 
     out_buf = ctypes.create_string_buffer(out_len)
-    rc = _native_lib.ama_argon2id_legacy(
-        _borrow(password),
-        len(password),
-        salt,
-        len(salt),
-        t_cost,
-        m_cost,
-        parallelism,
-        out_buf,
-        out_len,
-    )
-    if rc != 0:
-        raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
-
-    return bytes(out_buf)
+    # Taken into a wipeable bytearray and the staging buffer scrubbed on every
+    # path, as native_argon2id does (PR #415 review sweep).
+    try:
+        rc = _native_lib.ama_argon2id_legacy(
+            _borrow(password),
+            len(password),
+            salt,
+            len(salt),
+            t_cost,
+            m_cost,
+            parallelism,
+            out_buf,
+            out_len,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
+        return _take_secret(out_buf)
+    finally:
+        _wipe(out_buf)
 
 
 def native_argon2id_legacy_verify(

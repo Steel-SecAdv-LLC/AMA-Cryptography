@@ -1505,7 +1505,7 @@ class SecureKeyStorage:
             raise ValueError("key_id must be non-empty alphanumeric (with - and _ allowed)")
 
     def store_key(
-        self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None
+        self, key_id: str, key_data: SecretBytes, metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         Store key with AES-256-GCM authenticated encryption.
@@ -2202,7 +2202,7 @@ if __name__ == "__main__":
     storage = SecureKeyStorage(demo_storage_path, master_password=demo_password)
 
     # Store a key
-    test_key = secrets.token_bytes(32)
+    test_key = secure_token_bytearray(32)  # INVARIANT-41: the health-tested draw
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
     logger.info("[OK] Key stored securely")
 

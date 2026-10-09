@@ -1269,3 +1269,429 @@ def test_a_key_management_system_that_fails_late_zeroes_its_secrets(
         legacy.generate_key_management_system("wipe-test")
     assert len(minted) == 2
     assert all(not any(secret) for secret in minted)
+
+
+# ---------------------------------------------------------------------------
+# Review of 83e113c7: hybrid components, staging buffers, borrowed views,
+# secret comparisons, and the sweep that followed
+# ---------------------------------------------------------------------------
+
+
+def _hybrid() -> Any:
+    return importlib.import_module("ama_cryptography.hybrid_combiner").HybridCombiner()
+
+
+def _fresh_secret_from(ids: list[int], fill: int, size: int = 32) -> bytearray:
+    """A secret only its receiver holds; the test keeps its id, not it."""
+    secret = bytearray([fill]) * size
+    ids.append(id(secret))
+    return secret
+
+
+def test_a_hybrid_encapsulation_that_fails_releases_the_first_component(
+    zeroed_ids: list[int],
+) -> None:
+    """PIN.  The second encapsulator raised after the first returned its
+    secret, and nothing owned it.  Removing the release in the ``except``
+    fails this."""
+    minted: list[int] = []
+
+    def classical(_pk: bytes) -> tuple[bytes, bytearray]:
+        return b"\x01" * 32, _fresh_secret_from(minted, 0x11)
+
+    def failing_pqc(_pk: bytes) -> tuple[bytes, bytearray]:
+        raise RuntimeError("PQC encapsulation failed")
+
+    with pytest.raises(RuntimeError, match="PQC encapsulation"):
+        _hybrid().encapsulate_hybrid(classical, failing_pqc, b"\x02" * 32, b"\x03" * 32)
+    assert minted[0] in zeroed_ids
+
+
+def test_a_refused_hybrid_encapsulation_releases_both_components(
+    zeroed_ids: list[int],
+) -> None:
+    """PIN.  An empty ciphertext is refused after both secrets exist."""
+    minted: list[int] = []
+
+    def classical(_pk: bytes) -> tuple[bytes, bytearray]:
+        return b"\x01" * 32, _fresh_secret_from(minted, 0x11)
+
+    def pqc(_pk: bytes) -> tuple[bytes, bytearray]:
+        return b"", _fresh_secret_from(minted, 0x22)
+
+    with pytest.raises(ValueError, match="PQC ciphertext is empty"):
+        _hybrid().encapsulate_hybrid(classical, pqc, b"\x02" * 32, b"\x03" * 32)
+    assert all(ident in zeroed_ids for ident in minted)
+
+
+def test_a_hybrid_encapsulation_that_fails_after_combining_releases_the_result(
+    monkeypatch: pytest.MonkeyPatch, zeroed_ids: list[int]
+) -> None:
+    """PIN.  The combined secret exists before the result container does; a
+    failure building that container dropped it.  Removing its release fails
+    this."""
+    hc = importlib.import_module("ama_cryptography.hybrid_combiner")
+    combined: list[int] = []
+    real_combine = hc.HybridCombiner.combine
+
+    def recording_combine(self: Any, **kwargs: Any) -> bytearray:
+        secret: bytearray = real_combine(self, **kwargs)
+        combined.append(id(secret))
+        return secret
+
+    def failing_container(**_kwargs: Any) -> Any:
+        raise MemoryError("container allocation failed")
+
+    monkeypatch.setattr(hc.HybridCombiner, "combine", recording_combine)
+    monkeypatch.setattr(hc, "HybridEncapsulation", failing_container)
+    minted: list[int] = []
+    with pytest.raises(MemoryError, match="container allocation"):
+        hc.HybridCombiner().encapsulate_hybrid(
+            lambda _pk: (b"\x01" * 32, _fresh_secret_from(minted, 0x11)),
+            lambda _pk: (b"\x02" * 32, _fresh_secret_from(minted, 0x22)),
+            b"\x03" * 32,
+            b"\x04" * 32,
+        )
+    assert combined and combined[0] in zeroed_ids
+    assert all(ident in zeroed_ids for ident in minted)
+
+
+def _raises_holding(secret: bytearray) -> None:
+    raise ValueError("refused while holding the secret")
+
+
+def _raises_from_inner(secret: bytearray) -> None:
+    try:
+        _raises_holding(secret)
+    except ValueError as inner:
+        raise RuntimeError("wrapped") from inner
+
+
+def test_forgetting_failed_callees_drops_their_references() -> None:
+    """PIN.  A finished callee's frame, and one inside a chained exception
+    raised there, each held the secret.  Not clearing the traceback's frames
+    fails the first assertion; not following the chain fails the second."""
+    secret = bytearray(b"\x5e" * 32)
+    baseline = sys.getrefcount(secret)
+    for raiser in (_raises_holding, _raises_from_inner):
+        try:
+            raiser(secret)
+        except (ValueError, RuntimeError) as exc:
+            assert sys.getrefcount(secret) > baseline
+            sm.forget_failed_callees(exc)
+            assert sys.getrefcount(secret) == baseline, raiser.__name__
+
+
+def test_forgetting_failed_callees_leaves_a_handled_exception_alone() -> None:
+    """PIN.  An exception the CALLER was already handling is the context of
+    the new one, and its frames are the caller's business.  Following every
+    ``__context__`` link fails this."""
+    theirs = bytearray(b"\x6f" * 32)
+    ours = bytearray(b"\x70" * 32)
+    try:
+        _raises_holding(theirs)
+    except ValueError:
+        held = sys.getrefcount(theirs)
+        try:
+            _raises_holding(ours)
+        except ValueError as exc:
+            assert exc.__context__ is not None
+            sm.forget_failed_callees(exc)
+        assert sys.getrefcount(theirs) == held
+
+
+def test_a_hybrid_decapsulation_whose_second_half_fails_releases_the_first(
+    zeroed_ids: list[int],
+) -> None:
+    """PIN.  The cleanup ``try`` began after both decapsulations, so a
+    raising second one dropped the first secret.  Moving the first call back
+    outside the guard fails this."""
+    minted: list[int] = []
+
+    def classical(_ct: bytes, _sk: Any) -> bytearray:
+        return _fresh_secret_from(minted, 0x33)
+
+    def failing_pqc(_ct: bytes, _sk: Any) -> bytearray:
+        raise RuntimeError("PQC decapsulation failed")
+
+    with pytest.raises(RuntimeError, match="PQC decapsulation"):
+        _hybrid().decapsulate_hybrid(
+            classical, failing_pqc, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 32
+        )
+    assert minted[0] in zeroed_ids
+
+
+def test_a_rejected_hybrid_component_secret_is_released(zeroed_ids: list[int]) -> None:
+    """PIN.  An oversized component is refused; the validation loop's
+    variable still held it when the ``finally`` asked whether anyone else
+    did, so it was spared.  Validating through a name that holds the secret
+    fails this."""
+    minted: list[int] = []
+
+    def classical(_ct: bytes, _sk: Any) -> bytearray:
+        return _fresh_secret_from(minted, 0x44)
+
+    def oversized_pqc(_ct: bytes, _sk: Any) -> bytearray:
+        return _fresh_secret_from(minted, 0x55, size=512)
+
+    with pytest.raises(ValueError, match="PQC shared secret too large"):
+        _hybrid().decapsulate_hybrid(
+            classical, oversized_pqc, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 32
+        )
+    assert all(ident in zeroed_ids for ident in minted)
+
+
+def test_borrow_passes_a_whole_read_only_view_without_copying() -> None:
+    """PIN.  ``_borrow`` copied every read-only view with ``tobytes()``.  A
+    view of a whole ``bytes`` is now that ``bytes``; of a whole
+    ``bytearray``, that storage."""
+    immutable = b"\x5a" * 32
+    assert pb._borrow(memoryview(immutable)) is immutable
+    wipeable = bytearray(b"\x5b" * 32)
+    borrowed = pb._borrow(memoryview(wipeable).toreadonly())
+    expected = ctypes.addressof((ctypes.c_char * 32).from_buffer(wipeable))
+    assert isinstance(borrowed, ctypes.Array) and ctypes.addressof(borrowed) == expected
+
+
+def test_borrow_refuses_a_read_only_view_of_part_of_a_buffer() -> None:
+    """PIN.  No copy-free route exists for it, so it is refused, not copied."""
+    with pytest.raises(TypeError, match="read-only view of part"):
+        pb._borrow(memoryview(b"\x5a" * 64)[:32])
+
+
+def test_constant_time_compare_borrows_a_whole_read_only_view() -> None:
+    """PIN.  ``_borrow_readable`` copied read-only views too; a whole-object
+    view is now addressed where it lives."""
+    from ama_cryptography import secure_memory
+
+    wipeable = bytearray(b"\x5c" * 16)
+    holder, length = secure_memory._borrow_readable(memoryview(wipeable).toreadonly(), "a")
+    expected = ctypes.addressof((ctypes.c_char * 16).from_buffer(wipeable))
+    assert length == 16 and ctypes.addressof(holder) == expected
+    immutable = b"\x5d" * 16
+    holder, _ = secure_memory._borrow_readable(memoryview(immutable), "a")
+    own = ctypes.cast(ctypes.c_char_p(immutable), ctypes.c_void_p).value
+    assert ctypes.cast(holder, ctypes.c_void_p).value == own
+
+
+def test_constant_time_compare_refuses_a_read_only_slice_of_wipeable_storage() -> None:
+    """PIN.  Copying it would leave the secret where its owner's wipe cannot
+    reach.  A slice of ``bytes`` is still compared: that storage was never
+    wipeable.  Restoring the unconditional copy fails the first assertion."""
+    from ama_cryptography import secure_memory
+
+    wipeable = bytearray(b"\x71" * 64)
+    with pytest.raises(TypeError, match="part of a writable buffer"):
+        secure_memory.constant_time_compare(memoryview(wipeable).toreadonly()[:32], b"\x71" * 32)
+    immutable = b"\x72" * 64
+    assert secure_memory.constant_time_compare(memoryview(immutable)[:32], b"\x72" * 32)
+
+
+def test_the_ama_context_kem_pairwise_test_mints_wipeable_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  ``AmaContext``'s ML-KEM pairwise test turned both shared-secret
+    staging buffers into immutable ``bytes``.  Restoring ``bytes(ss)``
+    fails this."""
+    kinds: list[type] = []
+    real = ms.pairwise_test_kem
+
+    def inspecting(encaps: Any, decaps: Any, pk: Any, sk: Any, label: str) -> None:
+        ct, ss = encaps(pk)
+        kinds.append(type(ss))
+        kinds.append(type(decaps(ct, sk)))
+        real(encaps, decaps, pk, sk, label)
+
+    monkeypatch.setattr(pb, "pairwise_test_kem", inspecting)
+    alg = pb.AmaContext.ALG_KYBER_1024
+    with pb.AmaContext(alg) as ctx:
+        pk_size, sk_size = pb.AmaContext._KEY_SIZES[alg]
+        pk = ctypes.create_string_buffer(pk_size)
+        sk = ctypes.create_string_buffer(sk_size)
+        assert ctx.keypair_generate(pk, pk_size, sk, sk_size) == 0
+    assert kinds == [bytearray, bytearray]
+
+
+@pytest.mark.parametrize("step", ["encapsulate", "decapsulate"])
+def test_a_failing_ama_context_pairwise_step_scrubs_its_staging_buffer(
+    monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    """PIN.  On success ``_take_secret`` wipes the staging buffer itself; the
+    ``finally`` is what scrubs it when the native call wrote output and then
+    reported failure.  Removing that ``finally`` fails the step's row."""
+    captured: dict[str, Any] = {}
+    real = ms.pairwise_test_kem
+
+    def capturing(encaps: Any, decaps: Any, pk: Any, sk: Any, label: str) -> None:
+        captured.update(encaps=encaps, decaps=decaps, pk=pk, sk=sk)
+        real(encaps, decaps, pk, sk, label)
+
+    monkeypatch.setattr(pb, "pairwise_test_kem", capturing)
+    alg = pb.AmaContext.ALG_KYBER_1024
+    with pb.AmaContext(alg) as ctx:
+        pk_size, sk_size = pb.AmaContext._KEY_SIZES[alg]
+        pk = ctypes.create_string_buffer(pk_size)
+        sk = ctypes.create_string_buffer(sk_size)
+        assert ctx.keypair_generate(pk, pk_size, sk, sk_size) == 0
+        staged: list[Any] = []
+
+        def writes_then_fails(*args: Any) -> int:
+            out = args[3] if step == "encapsulate" else args[2]
+            ctypes.memset(out, 0xAB, len(out))
+            staged.append(out)
+            return -1
+
+        monkeypatch.setattr(ctx, f"kem_{step}", writes_then_fails)
+        with pytest.raises(RuntimeError, match=f"ama_kem_{step} failed"):
+            if step == "encapsulate":
+                captured["encaps"](captured["pk"])
+            else:
+                captured["decaps"](b"\x00" * pb.KYBER_CIPHERTEXT_BYTES, captured["sk"])
+    assert len(staged) == 1 and not any(staged[0].raw)
+
+
+@pytest.mark.parametrize("form", ["kem", "dh"])
+def test_pairwise_tests_compare_secrets_in_constant_time(
+    monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    """PIN.  The KEM and DH pairwise tests compared shared secrets with
+    ``!=``.  Restoring it fails the row."""
+    from ama_cryptography import secure_memory
+
+    calls: list[int] = []
+    real = secure_memory.constant_time_compare
+
+    def recording(a: Any, b: Any) -> bool:
+        calls.append(len(a))
+        return real(a, b)
+
+    monkeypatch.setattr(secure_memory, "constant_time_compare", recording)
+    secret = bytearray(b"\x66" * 32)
+    if form == "kem":
+        ms.pairwise_test_kem(
+            lambda _pk: (b"ct", bytearray(secret)),
+            lambda _ct, _sk: bytearray(secret),
+            b"pk",
+            bytearray(b"\x01" * 32),
+            "test-kem",
+        )
+    else:
+        ms.pairwise_test_agreement(
+            lambda _own, _peer: bytearray(secret),
+            (b"eph-pk", bytearray(b"\x02" * 32)),
+            bytearray(b"\x01" * 32),
+            b"pk",
+            "test-dh",
+        )
+    assert calls == [32]
+
+
+def _restricted_binding(agent: Any) -> Any:
+    """A binding whose every entry point takes the authority key."""
+    return agent.AgentBinding(
+        instance_id=bytes(range(agent.AGENT_INSTANCE_ID_BYTES)),
+        lifetime=agent.AgentLifetime.PERSISTENT,
+        capabilities=agent.AgentCapability.DATA_SIGN | agent.AgentCapability.PERSISTENCE,
+        ethical_profile_hash=b"\x42" * 32,
+    )
+
+
+def _address_of(buffer: bytearray) -> int:
+    return ctypes.addressof((ctypes.c_char * len(buffer)).from_buffer(buffer))
+
+
+def test_an_agent_bound_key_is_wipeable_and_its_inputs_borrowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  ``derive_key`` copied the input keying material and the
+    authority key into ``bytes`` and returned the derived key as ``bytes``,
+    leaving its ctypes buffer populated.  Restoring ``_as_bytes`` for either
+    input, or ``bytes(out)``, fails this."""
+    agent = importlib.import_module("ama_cryptography.agent_binding")
+    binding = _restricted_binding(agent)
+    authority = bytearray(b"\x88" * agent.AUTHORITY_KEY_MIN_BYTES)
+    ikm = bytearray(b"\x77" * 32)
+    seen: list[tuple[Any, Any]] = []
+    lib = agent._require_native()
+    real = lib.ama_hkdf_agent_bound
+
+    def recording(*args: Any) -> Any:
+        seen.append((args[1], args[5]))
+        return real(*args)
+
+    monkeypatch.setattr(lib, "ama_hkdf_agent_bound", recording)
+    binding.authorize(authority)
+    key = binding.derive_key(ikm, 32, info=b"session", authority_key=authority)
+    assert isinstance(key, bytearray) and len(key) == 32
+    held_key, held_ikm = seen[0]
+    assert isinstance(held_key, ctypes.Array) and ctypes.addressof(held_key) == _address_of(
+        authority
+    )
+    assert isinstance(held_ikm, ctypes.Array) and ctypes.addressof(held_ikm) == _address_of(ikm)
+
+
+@pytest.mark.parametrize("entry", ["authorize", "check", "signing_context"])
+def test_the_authority_key_is_borrowed_by_every_binding_entry_point(
+    monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    """PIN.  ``authorize``, ``check`` and ``signing_context`` copied the
+    authority key into ``bytes`` as ``derive_key`` did.  Restoring
+    ``_as_bytes`` in any one fails its row."""
+    agent = importlib.import_module("ama_cryptography.agent_binding")
+    binding = _restricted_binding(agent)
+    authority = bytearray(b"\x99" * agent.AUTHORITY_KEY_MIN_BYTES)
+    if entry != "authorize":
+        binding.authorize(authority)
+    native = {
+        "authorize": "ama_agent_binding_authorize",
+        "check": "ama_agent_binding_check",
+        "signing_context": "ama_agent_binding_context",
+    }[entry]
+    seen: list[Any] = []
+    lib = agent._require_native()
+    real = getattr(lib, native)
+
+    def recording(*args: Any) -> Any:
+        seen.append(args[1])
+        return real(*args)
+
+    monkeypatch.setattr(lib, native, recording)
+    getattr(binding, entry)(authority)
+    assert isinstance(seen[0], ctypes.Array) and ctypes.addressof(seen[0]) == _address_of(authority)
+
+
+@pytest.mark.skipif(
+    pb._native_lib is None or not hasattr(pb._native_lib, "ama_argon2id_legacy"),
+    reason="the loaded native library does not export ama_argon2id_legacy",
+)
+@pytest.mark.parametrize("outcome", ["derived", "refused"])
+def test_the_legacy_argon2id_tag_is_wipeable_and_its_buffer_scrubbed(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """PIN.  The legacy derivation returned ``bytes(out_buf.raw)`` and left
+    its staging buffer populated on every path.  Restoring that fails the
+    ``derived`` row; dropping the ``finally`` alone fails ``refused``, where
+    the C side wrote output and then reported failure."""
+    staged: list[Any] = []
+    real = pb._native_lib.ama_argon2id_legacy
+
+    def staging(*args: Any) -> int:
+        staged.append(args[7])
+        if outcome == "refused":
+            ctypes.memset(args[7], 0xAA, args[8])
+            return -1
+        return int(real(*args))
+
+    monkeypatch.setattr(pb._native_lib, "ama_argon2id_legacy", staging)
+    with pytest.warns(pb.SecurityWarning):
+        if outcome == "derived":
+            tag = pb.native_argon2id_legacy(
+                bytearray(b"password"), b"saltsalt", t_cost=1, m_cost=8, parallelism=1, out_len=16
+            )
+            assert isinstance(tag, bytearray) and len(tag) == 16 and any(tag)
+        else:
+            with pytest.raises(RuntimeError, match="ama_argon2id_legacy failed"):
+                pb.native_argon2id_legacy(
+                    bytearray(b"password"), b"saltsalt", t_cost=1, m_cost=8, parallelism=1
+                )
+    assert len(staged) == 1 and not any(staged[0].raw)

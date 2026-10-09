@@ -57,6 +57,7 @@ from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography._secret_material import (
     SecretMaterial,
     constant_time_equality,
+    forget_failed_callees,
     release_if_unshared,
 )
 
@@ -70,6 +71,37 @@ _HYBRID_LABEL = b"ama-hybrid-kem-v2"
 # outputs — but prevent multi-GB allocation from attacker-controlled input.
 _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
 _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
+
+
+def _secret_shape(value: Any) -> Tuple[bool, int]:
+    """Whether ``value`` is a byte string, and its length if so.
+
+    Validation reads a component secret through this and nothing else, so the
+    function that refuses it never holds the secret: a name bound to it there
+    stays alive in the propagating traceback and makes ``release_if_unshared``
+    read a second owner.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return True, len(value)
+    return False, 0
+
+
+def _check_component_secret(label: str, is_bytes: bool, length: int, type_refusal: str) -> None:
+    if not is_bytes:
+        raise TypeError(f"{label} {type_refusal}")
+    if length == 0:
+        raise ValueError(f"{label} shared secret is empty")
+    if length > _MAX_SS_BYTES:
+        raise ValueError(f"{label} shared secret too large ({length} > {_MAX_SS_BYTES})")
+
+
+def _check_component_ciphertext(label: str, ct: Any) -> None:
+    if not isinstance(ct, bytes):
+        raise TypeError(f"{label} encapsulate must return (bytes, bytes or bytearray)")
+    if len(ct) == 0:
+        raise ValueError(f"{label} ciphertext is empty")
+    if len(ct) > _MAX_CT_BYTES:
+        raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
 
 
 @constant_time_equality()
@@ -409,45 +441,55 @@ class HybridCombiner:
             HybridEncapsulation with combined secret and component data
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
-        classical_ct, classical_ss = classical_encapsulate(classical_pk)
-        pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
+        # Each component secret is released if anything after it raises -- the
+        # second encapsulator, the validation below, the combiner -- unless the
+        # encapsulator kept a reference of its own (PR #415 review: both were
+        # dropped intact).  On success the returned container owns them.
+        classical_ss: Any = None
+        pqc_ss: Any = None
+        combined: Any = None
+        try:
+            classical_ct, classical_ss = classical_encapsulate(classical_pk)
+            pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
 
-        # SECURITY FIX: Validate encapsulation outputs to prevent injection
-        # of zero-length secrets, oversized ciphertexts, or non-bytes types
-        # that could cause downstream key compromise or DoS (audit finding H4).
-        for label, ct, ss in [
-            ("Classical", classical_ct, classical_ss),
-            ("PQC", pqc_ct, pqc_ss),
-        ]:
-            # The shared secret may be a bytearray: every native KEM in this
-            # library returns one, so that its holder can wipe it.
-            if not isinstance(ct, bytes) or not isinstance(ss, (bytes, bytearray)):
-                raise TypeError(f"{label} encapsulate must return (bytes, bytes or bytearray)")
-            if len(ss) == 0:
-                raise ValueError(f"{label} shared secret is empty")
-            if len(ct) == 0:
-                raise ValueError(f"{label} ciphertext is empty")
-            if len(ct) > _MAX_CT_BYTES:
-                raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
-            if len(ss) > _MAX_SS_BYTES:
-                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
+            # SECURITY FIX: Validate encapsulation outputs to prevent injection
+            # of zero-length secrets, oversized ciphertexts, or non-bytes types
+            # that could cause downstream key compromise or DoS (audit finding
+            # H4).  The secrets are checked by shape only, so no other name
+            # holds one while a refusal propagates (see _check_component_secret).
+            _check_component_ciphertext("Classical", classical_ct)
+            _check_component_ciphertext("PQC", pqc_ct)
+            _check_component_secret(
+                "Classical",
+                *_secret_shape(classical_ss),
+                "encapsulate must return (bytes, bytes or bytearray)",
+            )
+            _check_component_secret(
+                "PQC", *_secret_shape(pqc_ss), "encapsulate must return (bytes, bytes or bytearray)"
+            )
 
-        combined = self.combine(
-            classical_ss=classical_ss,
-            pqc_ss=pqc_ss,
-            classical_ct=classical_ct,
-            pqc_ct=pqc_ct,
-            classical_pk=classical_pk,
-            pqc_pk=pqc_pk,
-        )
+            combined = self.combine(
+                classical_ss=classical_ss,
+                pqc_ss=pqc_ss,
+                classical_ct=classical_ct,
+                pqc_ct=pqc_ct,
+                classical_pk=classical_pk,
+                pqc_pk=pqc_pk,
+            )
 
-        return HybridEncapsulation(
-            combined_secret=combined,
-            classical_ciphertext=classical_ct,
-            pqc_ciphertext=pqc_ct,
-            classical_shared_secret=classical_ss,
-            pqc_shared_secret=pqc_ss,
-        )
+            return HybridEncapsulation(
+                combined_secret=combined,
+                classical_ciphertext=classical_ct,
+                pqc_ciphertext=pqc_ct,
+                classical_shared_secret=classical_ss,
+                pqc_shared_secret=pqc_ss,
+            )
+        except BaseException as exc:
+            forget_failed_callees(exc)
+            release_if_unshared(classical_ss)
+            release_if_unshared(pqc_ss)
+            release_if_unshared(combined)
+            raise
 
     def decapsulate_hybrid(
         self,
@@ -482,23 +524,29 @@ class HybridCombiner:
             once combined, unless the decapsulate callables kept references.
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
-        classical_ss = classical_decapsulate(classical_ct, classical_sk)
-        pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
-
-        # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
-        # Same validation as encapsulate_hybrid — a buggy or attacker-controlled
-        # decapsulate callable could return empty, non-bytes, or oversized values.
+        # The guard starts before the first component exists: a raising second
+        # decapsulator dropped the first secret intact (PR #415 review).
+        classical_ss: Any = None
+        pqc_ss: Any = None
         try:
-            for label, ss in [("Classical", classical_ss), ("PQC", pqc_ss)]:
-                if not isinstance(ss, (bytes, bytearray)):
-                    raise TypeError(f"{label} decapsulate must return bytes or bytearray")
-                if len(ss) == 0:
-                    raise ValueError(f"{label} shared secret is empty")
-                if len(ss) > _MAX_SS_BYTES:
-                    raise ValueError(
-                        f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})"
-                    )
-            del ss  # the loop variable is a second reference to the last one
+            classical_ss = classical_decapsulate(classical_ct, classical_sk)
+            pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
+
+            # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
+            # Same validation as encapsulate_hybrid — a buggy or
+            # attacker-controlled decapsulate callable could return empty,
+            # non-bytes, or oversized values.  By shape only: the former loop
+            # variable still held the rejected secret when the refusal reached
+            # the ``finally``, so release_if_unshared saw a second owner and
+            # left it intact (PR #415 review).
+            _check_component_secret(
+                "Classical",
+                *_secret_shape(classical_ss),
+                "decapsulate must return bytes or bytearray",
+            )
+            _check_component_secret(
+                "PQC", *_secret_shape(pqc_ss), "decapsulate must return bytes or bytearray"
+            )
             return self.combine(
                 classical_ss=classical_ss,
                 pqc_ss=pqc_ss,
@@ -507,6 +555,9 @@ class HybridCombiner:
                 classical_pk=classical_pk,
                 pqc_pk=pqc_pk,
             )
+        except BaseException as exc:
+            forget_failed_callees(exc)
+            raise
         finally:
             release_if_unshared(classical_ss)
             release_if_unshared(pqc_ss)

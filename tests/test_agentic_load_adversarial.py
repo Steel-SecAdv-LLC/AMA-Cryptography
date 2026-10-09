@@ -377,7 +377,9 @@ class TestHighConcurrencyAgenticLoad:
                 instance_id=instance_id(idx),
                 capabilities=AgentCapability.DATA_SIGN | AgentCapability.KEY_EXCHANGE,
             )
-            key = binding.derive_key(b"shared-ikm" * 4, 32, info=b"session")
+            # Derived keys are wipeable bytearrays, which are unhashable; the
+            # set below takes immutable copies (CHANGELOG row 24's migration).
+            key = bytes(binding.derive_key(b"shared-ikm" * 4, 32, info=b"session"))
             with lock:
                 results[idx] = key
 

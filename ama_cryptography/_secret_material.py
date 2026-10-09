@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+from types import FrameType
 from typing import Any, Callable, ClassVar, Dict, Tuple, TypeVar, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
@@ -179,6 +180,49 @@ def _measure_sole_local() -> int:
 
 
 _SOLE_AS_LOCAL = _measure_sole_local()
+
+
+def forget_failed_callees(exc: BaseException) -> None:
+    """Clear the locals of the finished frames ``exc`` carries below the
+    handler that caught it, so they stop holding the secrets passed to them.
+
+    Call it in an ``except`` block before :func:`release_if_unshared`.  A
+    callee that received a secret as an argument and then raised leaves its
+    frame in the traceback, and that frame's reference made the secret look
+    shared: it was never released (PR #415 review).  The frame has finished
+    and is reachable only through the exception, so its locals are no one's;
+    they would also keep the secret alive for anyone retaining the exception.
+
+    Frames still executing -- the handler's own, and its callers' -- are
+    left alone.  A chained exception (``__cause__`` / ``__context__``) is
+    followed only when it was raised and caught inside those finished
+    frames, never into an exception the caller was already handling.
+    """
+    tb = exc.__traceback__
+    finished: set[int] = set()
+    visited: set[int] = set()
+    if tb is not None:
+        tb = tb.tb_next  # the handler's own frame, still executing
+    pending = [(exc, tb)]
+    while pending:
+        current, first = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        frames: list[FrameType] = []
+        while first is not None:
+            frames.append(first.tb_frame)
+            first = first.tb_next
+        finished.update(id(frame) for frame in frames)
+        for frame in frames:
+            try:
+                frame.clear()
+            except RuntimeError:  # still executing; nothing it holds is ours
+                pass
+        for link in (current.__cause__, current.__context__):
+            if link is not None and link.__traceback__ is not None:
+                if id(link.__traceback__.tb_frame) in finished:
+                    pending.append((link, link.__traceback__))
 
 
 def finalize_secret(owner: object, name: str, label: str, names: Tuple[str, ...] = ()) -> None:

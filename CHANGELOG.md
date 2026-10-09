@@ -39,8 +39,9 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 Nine Copilot findings and two CodeQL alerts on `8f61a789`; Copilot's review
 of `6cc56f09` (two new findings, three it had missed earlier); and its review
 of `f300f6f7`, four findings of one class, which was then swept for the
-rest. Each was reproduced before it was fixed; every guard below is PIN by
-mutation unless marked otherwise.
+rest; and its review of `83e113c7`, six findings in the same two classes,
+after which the Python layer was swept for both. Each was reproduced before
+it was fixed; every guard below is PIN by mutation unless marked otherwise.
 
 - **`tools/verify_install_oob.py` passed a tree with a planted subdirectory
   module** (High: a gate that cannot detect what it claims). Its package
@@ -122,6 +123,54 @@ mutation unless marked otherwise.
 
   One mechanism serves all of these: `_secret_material.ScrubOnRaise`, which
   `key_formats` already used. Thirteen mutants, all killed.
+- **Shared secrets left behind on the hybrid, staging and comparison
+  paths** (review of `83e113c7`; INVARIANT-6 and -12):
+  - `encapsulate_hybrid` dropped both component secrets intact when the
+    second encapsulator, the validation or the result's construction raised,
+    and `decapsulate_hybrid`'s guard began only after both decapsulations.
+    Both guards now start before the first component exists.
+  - A rejected component secret was never released: the validation loop's
+    variable still held it when the refusal reached the cleanup, which then
+    saw a second owner. Validation now reads only the secret's type and
+    length.
+  - Writing the test for a failure after combining found the general case.
+    A callee that received the secrets and then raised kept them in its
+    frame, which the propagating traceback holds, so `release_if_unshared`
+    released nothing. `_secret_material.forget_failed_callees` now clears
+    the locals of the finished frames an exception carries below its
+    handler before the release, following a chained exception only when it
+    was raised inside those frames, never into one the caller was already
+    handling. A retained exception no longer keeps those secrets alive
+    either.
+  - `AmaContext`'s ML-KEM pairwise test returned both shared secrets as
+    `bytes` and left its staging buffers populated. On success
+    `_take_secret` wipes the buffer itself, so the `finally` that covers a
+    native call which wrote output and then failed has its own test.
+  - `_borrow` and `constant_time_compare` copied a read-only memoryview into
+    `bytes`. A read-only view of a whole `bytes` or `bytearray` is now
+    passed where it lives. `_borrow` refuses a read-only view of part of a
+    buffer. `constant_time_compare` refuses one whose owner is writable, as
+    the copy would outlive the owner's wipe, and still copies a slice of
+    `bytes`, storage no one could wipe anyway.
+  - The ML-KEM and Diffie-Hellman pairwise tests compared the two shared
+    secrets with `!=`, under docstrings arguing that no attacker supplies an
+    operand. INVARIANT-12 has no such exemption: both now use the native
+    constant-time comparison, and the docstrings say so.
+  - The sweep's finds. `AgentBinding` copied the authority key (in
+    `authorize`, `check`, `signing_context` and `derive_key`) and the HKDF
+    input keying material into `bytes`, and `derive_key` returned its key as
+    `bytes` with the ctypes buffer still populated. The secrets are now
+    borrowed in place and the key returned as a `bytearray`; a caller that
+    hashes the key must convert it. `native_argon2id_legacy` returned
+    `bytes` and left its staging buffer populated; it now returns a
+    `bytearray` and scrubs the buffer on every path. The `key_management`
+    demo drew its key with `secrets.token_bytes`. The sweep searched by
+    pattern (secret comparisons, `bytes()` of an output buffer, `_as_bytes`
+    on a secret argument), which is not a proof that nothing else remains.
+
+  Thirty mutants, all killed. The first mutant written for the
+  decapsulation guard left the second call inside it, so it survived; the
+  pre-fix shape, both calls outside, is killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.
@@ -132,7 +181,8 @@ mutation unless marked otherwise.
 - **`ama_secp256k1_seckey_tweak_add` left `out` unzeroed** when `seckey` or
   `tweak` was NULL, against its header's "refused => out zeroed".
 - **The wiki's ML-KEM example typed the secret key as `bytes`**; it takes
-  `bytes | bytearray | memoryview`.
+  `bytes | bytearray | memoryview`. Its HD-wallet examples typed
+  `HDKeyDerivation.derive_key`'s result as `bytes`; it is a `bytearray`.
 - **README's inventories named 28 translation units under a heading of 29,
   and omitted `_secret_material` from the module list**, past a gate that
   checked only the counts. Where a count is followed by its list, the
@@ -314,7 +364,8 @@ uncovered. Every guard below is PIN by mutation unless marked otherwise.
   their count read 0.
 - **Every secret the library mints is a `bytearray`** (Breaking, row 24):
   keygens; KEM, X25519 and ECDH shared secrets; HKDF, PBKDF2 and Argon2id
-  output (the Cython HKDF now writes into the bytearray it returns); FROST
+  output, agent-bound HKDF and legacy Argon2id included (the Cython HKDF now
+  writes into the bytearray it returns); FROST
   dealt shares; HD-derived keys; the hybrid combiner's output. Native wrappers
   return through `_take_secret`, which wipes the ctypes staging buffer, and
   read secret inputs in place (`_borrow`). Containers holding secrets
@@ -2271,7 +2322,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
 | 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported, nor are the 24 undeclared helpers the export map now localises (the `ama_has_*` / `ama_cpuid_has_*` CPU probes and three raw Keccak permutations), none of which any installed header ever declared | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
-| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output, FROST dealt shares and nonces, HD-derived keys, Ascon-AEAD128 keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (its `__hash__` is `None`: `hash()` raises `TypeError` and `collections.abc.Hashable` reports False). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
+| 24 | **Breaking** | every secret the Python layer mints is returned as a `bytearray`, not `bytes`: secret keys from every keygen, KEM / X25519 / ECDH shared secrets, HKDF / PBKDF2 / Argon2id output (`AgentBinding.derive_key` and the legacy Argon2id migration path included), FROST dealt shares and nonces, HD-derived keys, Ascon-AEAD128 keys, the hybrid combiner's output, and the secret fields of `KeyPair`, `EncapsulatedSecret`, `CryptoPackageResult` and `PrivateKey`. A `bytearray` compares equal to the same `bytes` and is accepted by every API that took `bytes`; it is not hashable, and neither, now, is `key_formats.PrivateKey` (its `__hash__` is `None`: `hash()` raises `TypeError` and `collections.abc.Hashable` reports False). MAC tags remain `bytes` | none for comparison and slicing; take `bytes(value)` to use a secret as a dict key or set member, key a collection of private keys on `.public()`, and call `.wipe()` or zero the buffer when done with it |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —

@@ -468,11 +468,15 @@ def _borrow_readable(obj: Union[bytes, bytearray, memoryview], name: str) -> Tup
     ``bytes`` and mutable buffers are passed by reference through the buffer
     protocol; nothing is copied, so a secret in a ``bytearray`` is compared
     where it lives and can still be wiped by its owner.  A *read-only*
-    memoryview has no writable buffer for ``from_buffer`` to borrow; the one
-    portable route is a ``tobytes()`` copy, which is taken and documented
-    rather than refused, because rejecting the type would push callers into
-    making that copy themselves anyway.  The returned holder must be kept
-    alive for the duration of the native call.
+    memoryview of a whole ``bytes`` or ``bytearray`` is that object, borrowed
+    the same way (PR #415 review: it was copied).  A read-only view of *part*
+    of a buffer has no writable buffer for ``from_buffer`` to borrow and no
+    portable way to find its offset, so the one route is a ``tobytes()``
+    copy.  It is taken only when the owner is itself immutable (a slice of
+    ``bytes``), whose contents no one could wipe anyway; a read-only view of
+    part of a WRITABLE buffer is refused, because the copy would outlive the
+    owner's wipe (INVARIANT-6).  The returned holder must be kept alive for
+    the duration of the native call.
     """
     if isinstance(obj, bytes):
         return ctypes.c_char_p(obj), len(obj)
@@ -488,6 +492,19 @@ def _borrow_readable(obj: Union[bytes, bytearray, memoryview], name: str) -> Tup
         if n == 0:
             return ctypes.c_char_p(b""), 0
         if obj.readonly:
+            owner = obj.obj
+            if isinstance(owner, bytes) and n == len(owner):
+                return ctypes.c_char_p(owner), n
+            if isinstance(owner, bytearray) and n == len(owner):
+                return (ctypes.c_char * n).from_buffer(owner), n
+            with memoryview(owner) as whole:
+                wipeable = not whole.readonly
+            if wipeable:
+                raise TypeError(
+                    f"{name}: a read-only view of part of a writable buffer cannot be "
+                    "compared without copying it out of storage its owner can wipe; "
+                    "pass the buffer itself or a writable view"
+                )
             return ctypes.c_char_p(obj.tobytes()), n
         return (ctypes.c_char * n).from_buffer(obj), n
     raise TypeError(f"{name} must be bytes, bytearray or memoryview, not {type(obj).__name__}")

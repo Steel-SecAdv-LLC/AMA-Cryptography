@@ -166,7 +166,7 @@ hd   = HDKeyDerivation(seed=seed)
 
 # Structured BIP-44-style derivation: always produces a FULLY hardened
 # path m/{purpose}'/{account}'/{change}'/{index}'
-key_material: bytes = hd.derive_key(purpose=44, account=0, change=0, index=0)
+key_material: bytearray = hd.derive_key(purpose=44, account=0, change=0, index=0)
 
 # Explicit-path derivation: returns (derived_key, chain_code).
 # Accepts both hardened (with trailing ') and non-hardened components.

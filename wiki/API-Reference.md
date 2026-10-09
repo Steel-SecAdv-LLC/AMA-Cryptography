@@ -450,7 +450,7 @@ hd = HDKeyDerivation(
 )
 
 # Convenience: always fully-hardened BIP-44 path
-key_material: bytes = hd.derive_key(
+key_material: bytearray = hd.derive_key(
     purpose: int,           # e.g., 44
     account: int = 0,
     change: int = 0,
