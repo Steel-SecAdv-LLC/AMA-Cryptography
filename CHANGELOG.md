@@ -129,19 +129,21 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
     second encapsulator, the validation or the result's construction raised,
     and `decapsulate_hybrid`'s guard began only after both decapsulations.
     Both guards now start before the first component exists.
-  - A rejected component secret was never released: the validation loop's
-    variable still held it when the refusal reached the cleanup, which then
-    saw a second owner. Validation now reads only the secret's type and
-    length.
-  - Writing the test for a failure after combining found the general case.
-    A callee that received the secrets and then raised kept them in its
-    frame, which the propagating traceback holds, so `release_if_unshared`
-    released nothing. `_secret_material.forget_failed_callees` now clears
-    the locals of the finished frames an exception carries below its
-    handler before the release, following a chained exception only when it
-    was raised inside those frames, never into one the caller was already
-    handling. A retained exception no longer keeps those secrets alive
-    either.
+  - The combiner now owns the component secrets its callables return, and
+    its docstrings state the contract: a callable returns a fresh secret,
+    as every KEM in this library does. Each `bytearray` component is zeroed
+    on every failure, and the combined secret with it; decapsulation also
+    zeroes them once combined. On a successful encapsulation the result
+    holds them intact (PIN against over-scrubbing).
+  - **Corrected (AGENTS.md 6.6).** `57964b78` instead decided ownership by
+    reference count (`release_if_unshared`, added by this PR in
+    `8f61a789`). It added `forget_failed_callees` to clear a raising
+    callee's frame, which held a second reference. CPython 3.14 failed
+    every 3.14 lane; the two logs read show the same six tests, and the
+    same six failed locally on 3.14.6. It borrows some loads of a local and
+    not others, so the same local counts 1 in one place and 2 inside an
+    `except`, and nothing was zeroed. A count that depends on where it is
+    read cannot decide ownership, so both helpers are removed.
   - `AmaContext`'s ML-KEM pairwise test returned both shared secrets as
     `bytes` and left its staging buffers populated. On success
     `_take_secret` wipes the buffer itself, so the `finally` that covers a
@@ -168,9 +170,47 @@ it was fixed; every guard below is PIN by mutation unless marked otherwise.
     pattern (secret comparisons, `bytes()` of an output buffer, `_as_bytes`
     on a secret argument), which is not a proof that nothing else remains.
 
-  Thirty mutants, all killed. The first mutant written for the
-  decapsulation guard left the second call inside it, so it survived; the
-  pre-fix shape, both calls outside, is killed.
+  Twenty-seven mutants, all killed on CPython 3.13; the seven for the
+  ownership contract are killed on 3.14.6 as well. The first mutant
+  written for the decapsulation guard left the second call inside it, so
+  it survived; the pre-fix shape, both calls outside, is killed.
+- **Two import cycles this PR introduced** (CodeQL `py/cyclic-import` on
+  `57964b78`). `_secret_material` (since `f300f6f7`) and `_module_state`
+  (since `57964b78`) each imported `secure_memory` inside a function for the
+  constant-time comparison. `secure_memory` reaches both through
+  `pqc_backends`, so each edge closed a cycle; `main` had none. The
+  comparison is now injected into `_module_state`
+  (`register_secret_comparator`), as the entropy source already is, and
+  `_secret_material` reads it from there:
+  - The package `__init__` wires it before POST. A first attempt registered
+    it from `secure_memory`'s own import, which POST outran: the ML-KEM
+    pairwise test refused and the import failed, which is the fail-closed
+    path doing its job.
+  - After a reload it is recovered through `sys.modules`, a lookup rather
+    than an import. With neither, a comparison raises
+    `NativeBackendUnavailableError` and is never replaced by `==`.
+  - The `__init__` wiring is redundant with that recovery: without it the
+    package still imports and POST passes, and the test that checks the
+    wiring is what fails (AGENTS.md 6.3).
+  - New gate, `tests/test_package_import_graph.py`: no cycle among the
+    package's modules, counting every import wherever it sits. It is PIN on
+    both edges; the instrument is PIN on its three planted import forms and
+    on reading `from pkg import <submodule>` as no read of the `__init__`.
+    A read of a name the package `__init__` defines is outside its scope.
+    Counted, `main` has one such cycle: `_self_test` reads
+    `_find_import_shadowing` from the `__init__`, which imports `_self_test`.
+    It is recorded here, not remediated in this PR.
+
+  Ten more mutants, all killed: five on the comparator and its edges, five
+  on the instrument.
+- **A refused COSE private key dropped the byte strings it had decoded**
+  (Copilot's review of `57964b78`). The CBOR reader takes byte strings as
+  `bytearray` slices of the private buffer, `d` among them. Four refusals
+  dropped those slices intact: a map refused part-way (Copilot's example,
+  keys out of order), an array refused part-way, a value followed by
+  trailing octets, and a well-formed item that is not a map.
+  `_asn1.scrub_decoded` now zeroes them on all four paths. Each path is PIN;
+  five mutants, all killed.
 - **`PrivateKey` reported itself hashable** (CodeQL). Its `__hash__` method
   raised `TypeError`, so `collections.abc.Hashable` still said True. It is
   now `None`, as for any unhashable type.

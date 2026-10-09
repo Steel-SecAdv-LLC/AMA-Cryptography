@@ -36,7 +36,11 @@ import ama_cryptography._module_state as ms
 import ama_cryptography.pqc_backends as pb
 from ama_cryptography import _secret_material as sm
 from ama_cryptography import key_formats as kf
-from ama_cryptography.exceptions import CryptoModuleError, KeyFormatError
+from ama_cryptography.exceptions import (
+    CryptoModuleError,
+    KeyFormatError,
+    NativeBackendUnavailableError,
+)
 
 
 @pytest.fixture
@@ -99,35 +103,6 @@ def test_wipe_is_unconditional() -> None:
     kp = pb.KyberKeyPair(public_key=b"\x00" * 1568, secret_key=held)
     kp.wipe()
     assert held == bytearray(16), "an explicit wipe() zeroes even a shared buffer"
-
-
-def test_release_if_unshared_zeroes_a_sole_local_and_spares_a_shared_one(
-    zeroed_ids: list[int],
-) -> None:
-    """PIN both ways: the threshold is calibrated at import, so an off-by-one
-    either zeroes a value someone else holds or never zeroes at all."""
-
-    def sole() -> int:
-        value = bytearray(b"\x11" * 8)
-        ident = id(value)
-        sm.release_if_unshared(value)
-        return ident
-
-    assert sole() in zeroed_ids
-    # The zeroed value is freed and its address may be reused at once: an id
-    # recorded above would then match the next allocation.
-    zeroed_ids.clear()
-
-    def one_other_holder() -> tuple[int, list[bytearray]]:
-        # Exactly one reference more than the sole case: the boundary.
-        value = bytearray(b"\x22" * 8)
-        other = [value]
-        sm.release_if_unshared(value)
-        return id(value), other
-
-    ident, other = one_other_holder()
-    assert ident not in zeroed_ids
-    assert other[0] == bytearray(b"\x22" * 8), "a value someone else holds was zeroed"
 
 
 @dataclasses.dataclass
@@ -662,7 +637,7 @@ def test_private_key_equality_compares_the_secrets_in_constant_time(
         calls.append((bytes(a), bytes(b)))
         return real(a, b)
 
-    monkeypatch.setattr(secure_memory, "constant_time_compare", recording)
+    monkeypatch.setattr(ms, "_secret_comparator", recording)
     _public, key = _p256()
     same = kf.PrivateKey(key.algorithm, bytes(key.key), key.public_key, None)
     other = kf.PrivateKey(key.algorithm, bytes(_p256()[1].key), key.public_key, None)
@@ -1281,62 +1256,58 @@ def _hybrid() -> Any:
     return importlib.import_module("ama_cryptography.hybrid_combiner").HybridCombiner()
 
 
-def _fresh_secret_from(ids: list[int], fill: int, size: int = 32) -> bytearray:
-    """A secret only its receiver holds; the test keeps its id, not it."""
-    secret = bytearray([fill]) * size
-    ids.append(id(secret))
-    return secret
+def _zeroed(*buffers: bytearray) -> bool:
+    return all(not any(buf) for buf in buffers)
 
 
-def test_a_hybrid_encapsulation_that_fails_releases_the_first_component(
-    zeroed_ids: list[int],
-) -> None:
+# The hybrid combiner owns the component secrets its callables return (its
+# docstrings state the contract).  PR #415 first decided ownership by
+# reference count, which CPython 3.14 makes depend on where the count is read;
+# these tests observe the buffers' contents, which no interpreter changes.
+
+
+def test_a_hybrid_encapsulation_that_fails_zeroes_the_first_component() -> None:
     """PIN.  The second encapsulator raised after the first returned its
-    secret, and nothing owned it.  Removing the release in the ``except``
-    fails this."""
-    minted: list[int] = []
-
-    def classical(_pk: bytes) -> tuple[bytes, bytearray]:
-        return b"\x01" * 32, _fresh_secret_from(minted, 0x11)
+    secret.  Removing ``zeroize(classical_ss)`` fails this."""
+    first = bytearray(b"\x11" * 32)
 
     def failing_pqc(_pk: bytes) -> tuple[bytes, bytearray]:
         raise RuntimeError("PQC encapsulation failed")
 
     with pytest.raises(RuntimeError, match="PQC encapsulation"):
-        _hybrid().encapsulate_hybrid(classical, failing_pqc, b"\x02" * 32, b"\x03" * 32)
-    assert minted[0] in zeroed_ids
+        _hybrid().encapsulate_hybrid(
+            lambda _pk: (b"\x01" * 32, first), failing_pqc, b"\x02" * 32, b"\x03" * 32
+        )
+    assert _zeroed(first)
 
 
-def test_a_refused_hybrid_encapsulation_releases_both_components(
-    zeroed_ids: list[int],
-) -> None:
-    """PIN.  An empty ciphertext is refused after both secrets exist."""
-    minted: list[int] = []
-
-    def classical(_pk: bytes) -> tuple[bytes, bytearray]:
-        return b"\x01" * 32, _fresh_secret_from(minted, 0x11)
-
-    def pqc(_pk: bytes) -> tuple[bytes, bytearray]:
-        return b"", _fresh_secret_from(minted, 0x22)
-
+def test_a_refused_hybrid_encapsulation_zeroes_both_components() -> None:
+    """PIN.  An empty ciphertext is refused after both secrets exist.
+    Removing ``zeroize(pqc_ss)`` fails this."""
+    first, second = bytearray(b"\x11" * 32), bytearray(b"\x22" * 32)
     with pytest.raises(ValueError, match="PQC ciphertext is empty"):
-        _hybrid().encapsulate_hybrid(classical, pqc, b"\x02" * 32, b"\x03" * 32)
-    assert all(ident in zeroed_ids for ident in minted)
+        _hybrid().encapsulate_hybrid(
+            lambda _pk: (b"\x01" * 32, first),
+            lambda _pk: (b"", second),
+            b"\x02" * 32,
+            b"\x03" * 32,
+        )
+    assert _zeroed(first, second)
 
 
-def test_a_hybrid_encapsulation_that_fails_after_combining_releases_the_result(
-    monkeypatch: pytest.MonkeyPatch, zeroed_ids: list[int]
+def test_a_hybrid_encapsulation_that_fails_after_combining_zeroes_the_result(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PIN.  The combined secret exists before the result container does; a
-    failure building that container dropped it.  Removing its release fails
-    this."""
+    failure building that container dropped it.  Removing
+    ``zeroize(combined)`` fails this."""
     hc = importlib.import_module("ama_cryptography.hybrid_combiner")
-    combined: list[int] = []
+    combined: list[bytearray] = []
     real_combine = hc.HybridCombiner.combine
 
     def recording_combine(self: Any, **kwargs: Any) -> bytearray:
         secret: bytearray = real_combine(self, **kwargs)
-        combined.append(id(secret))
+        combined.append(secret)
         return secret
 
     def failing_container(**_kwargs: Any) -> Any:
@@ -1344,101 +1315,93 @@ def test_a_hybrid_encapsulation_that_fails_after_combining_releases_the_result(
 
     monkeypatch.setattr(hc.HybridCombiner, "combine", recording_combine)
     monkeypatch.setattr(hc, "HybridEncapsulation", failing_container)
-    minted: list[int] = []
+    first, second = bytearray(b"\x11" * 32), bytearray(b"\x22" * 32)
     with pytest.raises(MemoryError, match="container allocation"):
         hc.HybridCombiner().encapsulate_hybrid(
-            lambda _pk: (b"\x01" * 32, _fresh_secret_from(minted, 0x11)),
-            lambda _pk: (b"\x02" * 32, _fresh_secret_from(minted, 0x22)),
+            lambda _pk: (b"\x01" * 32, first),
+            lambda _pk: (b"\x02" * 32, second),
             b"\x03" * 32,
             b"\x04" * 32,
         )
-    assert combined and combined[0] in zeroed_ids
-    assert all(ident in zeroed_ids for ident in minted)
+    assert len(combined) == 1 and _zeroed(combined[0], first, second)
 
 
-def _raises_holding(secret: bytearray) -> None:
-    raise ValueError("refused while holding the secret")
+def test_a_successful_hybrid_encapsulation_hands_its_secrets_over_intact() -> None:
+    """PIN against over-scrubbing: on success the container holds the
+    component secrets, unzeroed.  Zeroing them on every exit fails this."""
+    first, second = bytearray(b"\x11" * 32), bytearray(b"\x22" * 32)
+    enc = _hybrid().encapsulate_hybrid(
+        lambda _pk: (b"\x01" * 32, first),
+        lambda _pk: (b"\x02" * 32, second),
+        b"\x03" * 32,
+        b"\x04" * 32,
+    )
+    assert enc.classical_shared_secret is first and first == bytearray(b"\x11" * 32)
+    assert enc.pqc_shared_secret is second and second == bytearray(b"\x22" * 32)
+    assert any(enc.combined_secret)
 
 
-def _raises_from_inner(secret: bytearray) -> None:
-    try:
-        _raises_holding(secret)
-    except ValueError as inner:
-        raise RuntimeError("wrapped") from inner
-
-
-def test_forgetting_failed_callees_drops_their_references() -> None:
-    """PIN.  A finished callee's frame, and one inside a chained exception
-    raised there, each held the secret.  Not clearing the traceback's frames
-    fails the first assertion; not following the chain fails the second."""
-    secret = bytearray(b"\x5e" * 32)
-    baseline = sys.getrefcount(secret)
-    for raiser in (_raises_holding, _raises_from_inner):
-        try:
-            raiser(secret)
-        except (ValueError, RuntimeError) as exc:
-            assert sys.getrefcount(secret) > baseline
-            sm.forget_failed_callees(exc)
-            assert sys.getrefcount(secret) == baseline, raiser.__name__
-
-
-def test_forgetting_failed_callees_leaves_a_handled_exception_alone() -> None:
-    """PIN.  An exception the CALLER was already handling is the context of
-    the new one, and its frames are the caller's business.  Following every
-    ``__context__`` link fails this."""
-    theirs = bytearray(b"\x6f" * 32)
-    ours = bytearray(b"\x70" * 32)
-    try:
-        _raises_holding(theirs)
-    except ValueError:
-        held = sys.getrefcount(theirs)
-        try:
-            _raises_holding(ours)
-        except ValueError as exc:
-            assert exc.__context__ is not None
-            sm.forget_failed_callees(exc)
-        assert sys.getrefcount(theirs) == held
-
-
-def test_a_hybrid_decapsulation_whose_second_half_fails_releases_the_first(
-    zeroed_ids: list[int],
-) -> None:
-    """PIN.  The cleanup ``try`` began after both decapsulations, so a
-    raising second one dropped the first secret.  Moving the first call back
-    outside the guard fails this."""
-    minted: list[int] = []
-
-    def classical(_ct: bytes, _sk: Any) -> bytearray:
-        return _fresh_secret_from(minted, 0x33)
+def test_a_hybrid_decapsulation_whose_second_half_fails_zeroes_the_first() -> None:
+    """PIN.  The cleanup began after both decapsulations, so a raising second
+    one dropped the first secret.  Moving both calls back outside the guard
+    fails this."""
+    first = bytearray(b"\x33" * 32)
 
     def failing_pqc(_ct: bytes, _sk: Any) -> bytearray:
         raise RuntimeError("PQC decapsulation failed")
 
     with pytest.raises(RuntimeError, match="PQC decapsulation"):
         _hybrid().decapsulate_hybrid(
-            classical, failing_pqc, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 32
+            lambda _ct, _sk: first,
+            failing_pqc,
+            b"\x01" * 32,
+            b"\x02" * 32,
+            b"\x03" * 32,
+            b"\x04" * 32,
         )
-    assert minted[0] in zeroed_ids
+    assert _zeroed(first)
 
 
-def test_a_rejected_hybrid_component_secret_is_released(zeroed_ids: list[int]) -> None:
-    """PIN.  An oversized component is refused; the validation loop's
-    variable still held it when the ``finally`` asked whether anyone else
-    did, so it was spared.  Validating through a name that holds the secret
-    fails this."""
-    minted: list[int] = []
-
-    def classical(_ct: bytes, _sk: Any) -> bytearray:
-        return _fresh_secret_from(minted, 0x44)
-
-    def oversized_pqc(_ct: bytes, _sk: Any) -> bytearray:
-        return _fresh_secret_from(minted, 0x55, size=512)
-
+def test_a_rejected_hybrid_component_secret_is_zeroed() -> None:
+    """PIN.  An oversized component is refused, and both are zeroed.
+    Removing ``zeroize(pqc_ss)`` from the ``finally`` fails this."""
+    first, oversized = bytearray(b"\x44" * 32), bytearray(b"\x55" * 512)
     with pytest.raises(ValueError, match="PQC shared secret too large"):
         _hybrid().decapsulate_hybrid(
-            classical, oversized_pqc, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 32
+            lambda _ct, _sk: first,
+            lambda _ct, _sk: oversized,
+            b"\x01" * 32,
+            b"\x02" * 32,
+            b"\x03" * 32,
+            b"\x04" * 32,
         )
-    assert all(ident in zeroed_ids for ident in minted)
+    assert _zeroed(first, oversized)
+
+
+def test_a_successful_hybrid_decapsulation_consumes_its_components() -> None:
+    """PIN.  The combined secret matches encapsulation, and the components
+    are zeroed once combined.  Removing ``zeroize(classical_ss)`` from the
+    ``finally`` fails this."""
+    hybrid = _hybrid()
+    enc = hybrid.encapsulate_hybrid(
+        lambda _pk: (b"\x01" * 32, bytearray(b"\x11" * 32)),
+        lambda _pk: (b"\x02" * 32, bytearray(b"\x22" * 32)),
+        b"\x03" * 32,
+        b"\x04" * 32,
+    )
+    first, second = bytearray(b"\x11" * 32), bytearray(b"\x22" * 32)
+    combined = hybrid.decapsulate_hybrid(
+        lambda _ct, _sk: first,
+        lambda _ct, _sk: second,
+        b"\x01" * 32,
+        b"\x02" * 32,
+        b"\x05" * 32,
+        b"\x06" * 32,
+        classical_pk=b"\x03" * 32,
+        pqc_pk=b"\x04" * 32,
+    )
+    assert combined == enc.combined_secret
+    assert _zeroed(first, second)
 
 
 def test_borrow_passes_a_whole_read_only_view_without_copying() -> None:
@@ -1565,7 +1528,7 @@ def test_pairwise_tests_compare_secrets_in_constant_time(
         calls.append(len(a))
         return real(a, b)
 
-    monkeypatch.setattr(secure_memory, "constant_time_compare", recording)
+    monkeypatch.setattr(ms, "_secret_comparator", recording)
     secret = bytearray(b"\x66" * 32)
     if form == "kem":
         ms.pairwise_test_kem(
@@ -1695,3 +1658,91 @@ def test_the_legacy_argon2id_tag_is_wipeable_and_its_buffer_scrubbed(
                     bytearray(b"password"), b"saltsalt", t_cost=1, m_cost=8, parallelism=1
                 )
     assert len(staged) == 1 and not any(staged[0].raw)
+
+
+# ---------------------------------------------------------------------------
+# The comparison is injected, not imported (CodeQL py/cyclic-import on 57964b78)
+# ---------------------------------------------------------------------------
+
+
+def test_the_package_wires_the_constant_time_comparison() -> None:
+    """PIN.  The package ``__init__`` registers it before POST.  Removing that
+    registration fails this; the ``sys.modules`` recovery below would hide it
+    from every other test, because ``__init__`` still imports the module."""
+    from ama_cryptography import secure_memory
+
+    assert ms._secret_comparator is secure_memory.constant_time_compare
+
+
+def test_an_unregistered_comparison_is_recovered_through_sys_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  A re-run of ``_module_state``'s body loses the registration; the
+    loaded ``secure_memory`` is found without an import.  Removing the lookup
+    fails this."""
+    from ama_cryptography import secure_memory
+
+    calls: list[int] = []
+    real = secure_memory.constant_time_compare
+
+    def recording(a: Any, b: Any) -> bool:
+        calls.append(len(a))
+        return real(a, b)
+
+    monkeypatch.setattr(ms, "_secret_comparator", None)
+    monkeypatch.setattr(secure_memory, "constant_time_compare", recording)
+    assert ms.secrets_match(bytearray(b"\x31" * 8), b"\x31" * 8)
+    assert not ms.secrets_match(bytearray(b"\x31" * 8), b"\x32" * 8)
+    assert calls == [8, 8]
+
+
+def test_a_comparison_with_nothing_to_compare_with_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN.  No registration and no loaded ``secure_memory``: a could-not-run,
+    never a fallback to ``==``.  Replacing the refusal with ``a == b`` fails
+    this."""
+    monkeypatch.setattr(ms, "_secret_comparator", None)
+    monkeypatch.delitem(sys.modules, "ama_cryptography.secure_memory")
+    with pytest.raises(NativeBackendUnavailableError, match="Nothing was compared"):
+        ms.secrets_match(b"\x41" * 8, b"\x41" * 8)
+
+
+# ---------------------------------------------------------------------------
+# A refused COSE decode zeroes what it already sliced (review of 57964b78)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        # {-4: h'616263', 1: 0}: the second key sorts before the first.
+        pytest.param("a2234361626301" "00", id="map-refused-part-way"),
+        # [h'616263', <indefinite length>]: the second element is refused.
+        pytest.param("8243616263ff", id="array-refused-part-way"),
+        # {-4: h'616263'} followed by a stray octet.
+        pytest.param("a12343616263" "00", id="trailing-octet"),
+        # h'616263' alone: decoded, then refused as not a map.
+        pytest.param("43616263", id="not-a-map"),
+    ],
+)
+def test_a_refused_cose_private_key_zeroes_the_slices_it_took(
+    monkeypatch: pytest.MonkeyPatch, encoded: str
+) -> None:
+    """PIN per row.  Each decode took a ``bytearray`` slice of the private
+    buffer -- where ``d`` would be -- before the refusal, and dropped it
+    intact.  Removing the scrub on that path fails its row."""
+    from ama_cryptography import _asn1
+
+    scrubbed: list[Any] = []
+    real = sm.zeroize
+
+    def recording(value: Any) -> None:
+        real(value)
+        scrubbed.append(value)
+
+    monkeypatch.setattr(_asn1, "zeroize", recording)
+    with pytest.raises(KeyFormatError):
+        kf.cose_to_private_key(bytes.fromhex(encoded))
+    slices = [v for v in scrubbed if isinstance(v, bytearray) and len(v) == 3]
+    assert slices and all(v == bytearray(3) for v in slices)

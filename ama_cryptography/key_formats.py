@@ -118,6 +118,7 @@ from ama_cryptography._asn1 import (
     der_sequence,
     der_tagged,
     oid_from_string,
+    scrub_decoded,
 )
 from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography._secret_material import (
@@ -2101,6 +2102,7 @@ def _load_cose(data: bytes, *, wipeable: bool = False) -> dict[Any, Any]:
 def _cose_map(data: bytes | bytearray) -> dict[Any, Any]:
     obj = cbor_decode_canonical(data)
     if not isinstance(obj, dict):
+        scrub_decoded(obj)  # a byte string or array sliced from a private buffer
         raise KeyFormatError("a COSE_Key must be a CBOR map")
     return obj
 

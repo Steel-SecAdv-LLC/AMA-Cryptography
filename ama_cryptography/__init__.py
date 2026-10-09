@@ -460,6 +460,9 @@ _refuse_tampered_bindings_before_import()
 
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
+from ama_cryptography._module_state import (
+    register_secret_comparator as _module_state_register_secret_comparator,
+)
 from ama_cryptography._self_test import _run_self_tests as _post
 from ama_cryptography._self_test import (
     check_crypto_permitted as check_crypto_permitted,
@@ -494,6 +497,18 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
 )
+from ama_cryptography.secure_memory import (
+    constant_time_compare as _constant_time_compare,
+)
+
+# Every secret comparison below this package's API -- the pairwise tests POST
+# runs, the secret containers' ``__eq__`` -- goes through the native
+# constant-time comparison.  ``_module_state`` holds it by injection, because
+# importing ``secure_memory`` from there is an import cycle (CodeQL
+# py/cyclic-import, PR #415); it is wired here, before POST, so the first
+# pairwise test finds it.  Unwired, a comparison refuses rather than falling
+# back to ``==``.
+_module_state_register_secret_comparator(_constant_time_compare)
 
 # FIPS 140-3 §4.9.2: a module whose power-on self-tests failed must not
 # present itself as usable.

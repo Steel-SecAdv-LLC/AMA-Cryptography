@@ -48,10 +48,10 @@ from __future__ import annotations
 
 import dataclasses
 import sys
-from types import FrameType
 from typing import Any, Callable, ClassVar, Dict, Tuple, TypeVar, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
+from ama_cryptography._module_state import secrets_match
 
 #: Secret octets as the library hands them around: a wipeable ``bytearray``
 #: wherever the library minted them, ``bytes`` where a caller supplied them.
@@ -151,80 +151,6 @@ def _wipe_if_last_owner(namespace: Dict[str, Any], name: str, names: Tuple[str, 
                 _zero(value[index])
 
 
-def release_if_unshared(value: Any, _calibrate: bool = False) -> Any:
-    """Zero ``value`` (a ``bytearray``) when the calling frame holds the only
-    reference to it.
-
-    For an intermediate secret a library function obtained and is about to
-    drop -- a component shared secret after it has been combined, say --
-    which would otherwise be freed with its contents intact.  The value may
-    have come from a caller-supplied callable that kept a reference of its
-    own; that reference raises the count, and the value is then left alone:
-    this never zeroes what someone else still holds.
-
-    The threshold is measured at import by calling this function through the
-    same path, from a frame holding the value in one local.
-    """
-    refs = sys.getrefcount(value)
-    if _calibrate:
-        return refs
-    if isinstance(value, bytearray) and refs <= _SOLE_AS_LOCAL:
-        _zero(value)
-    return None
-
-
-def _measure_sole_local() -> int:
-    local = bytearray(1)
-    refs: int = release_if_unshared(local, _calibrate=True)
-    return refs
-
-
-_SOLE_AS_LOCAL = _measure_sole_local()
-
-
-def forget_failed_callees(exc: BaseException) -> None:
-    """Clear the locals of the finished frames ``exc`` carries below the
-    handler that caught it, so they stop holding the secrets passed to them.
-
-    Call it in an ``except`` block before :func:`release_if_unshared`.  A
-    callee that received a secret as an argument and then raised leaves its
-    frame in the traceback, and that frame's reference made the secret look
-    shared: it was never released (PR #415 review).  The frame has finished
-    and is reachable only through the exception, so its locals are no one's;
-    they would also keep the secret alive for anyone retaining the exception.
-
-    Frames still executing -- the handler's own, and its callers' -- are
-    left alone.  A chained exception (``__cause__`` / ``__context__``) is
-    followed only when it was raised and caught inside those finished
-    frames, never into an exception the caller was already handling.
-    """
-    tb = exc.__traceback__
-    finished: set[int] = set()
-    visited: set[int] = set()
-    if tb is not None:
-        tb = tb.tb_next  # the handler's own frame, still executing
-    pending = [(exc, tb)]
-    while pending:
-        current, first = pending.pop()
-        if id(current) in visited:
-            continue
-        visited.add(id(current))
-        frames: list[FrameType] = []
-        while first is not None:
-            frames.append(first.tb_frame)
-            first = first.tb_next
-        finished.update(id(frame) for frame in frames)
-        for frame in frames:
-            try:
-                frame.clear()
-            except RuntimeError:  # still executing; nothing it holds is ours
-                pass
-        for link in (current.__cause__, current.__context__):
-            if link is not None and link.__traceback__ is not None:
-                if id(link.__traceback__.tb_frame) in finished:
-                    pending.append((link, link.__traceback__))
-
-
 def finalize_secret(owner: object, name: str, label: str, names: Tuple[str, ...] = ()) -> None:
     """The ``__del__`` body for one secret attribute of ``owner``.
 
@@ -304,8 +230,6 @@ def _secrets_equal(a: Any, b: Any) -> bool:
     by the native constant-time comparison, and a list element by element
     with no early exit.
     """
-    from ama_cryptography.secure_memory import constant_time_compare
-
     if a is None or b is None:
         return a is None and b is None
     if isinstance(a, list) or isinstance(b, list):
@@ -316,7 +240,7 @@ def _secrets_equal(a: Any, b: Any) -> bool:
             verdict &= _secrets_equal(left, right)
         return verdict
     if isinstance(a, (bytes, bytearray)) and isinstance(b, (bytes, bytearray)):
-        return constant_time_compare(a, b)
+        return secrets_match(a, b)
     return bool(a == b)
 
 

@@ -595,12 +595,43 @@ def secure_token_bytes(n: int = 32) -> bytes:
 # running and failing, and enters ERROR.
 
 
-def _secrets_match(a: Any, b: Any) -> bool:
-    """Constant-time equality of two secret byte strings, through the native
-    comparison (imported here: ``secure_memory`` imports this module)."""
-    from ama_cryptography.secure_memory import constant_time_compare
+#: The native constant-time comparison (``secure_memory.constant_time_compare``),
+#: injected by the package ``__init__`` before POST, for the reason the entropy
+#: source is: ``secure_memory`` imports this module, so importing it back --
+#: even inside a function -- is an import cycle (CodeQL py/cyclic-import on
+#: PR #415).  ``_secret_material`` compares through it too, for the same reason.
+_secret_comparator: Optional[Callable[[Any, Any], bool]] = None
 
-    return constant_time_compare(a, b)
+
+def register_secret_comparator(compare: Callable[[Any, Any], bool]) -> None:
+    """Install the constant-time comparison every secret equality uses.
+
+    Called once by the package ``__init__``, before POST, with
+    ``secure_memory.constant_time_compare``.  Idempotent and last-write-wins.
+    """
+    global _secret_comparator
+    _secret_comparator = compare
+
+
+def secrets_match(a: Any, b: Any) -> bool:
+    """Constant-time equality of two secret byte strings (INVARIANT-12).
+
+    The registered comparison, or, if this module's body was re-run after it
+    was registered (see :func:`_resolve_native`), the same one found through
+    ``sys.modules`` -- a lookup, not an import.  Absent both it
+    raises :class:`NativeBackendUnavailableError`, a could-not-run: nothing
+    was compared, and no ``==`` stands in for it.
+    """
+    compare = _secret_comparator
+    if compare is None:
+        module = sys.modules.get("ama_cryptography.secure_memory")
+        compare = getattr(module, "constant_time_compare", None) if module is not None else None
+    if compare is None:
+        raise NativeBackendUnavailableError(
+            "No constant-time comparison is registered: "
+            "ama_cryptography.secure_memory has not been imported.  Nothing was compared."
+        )
+    return bool(compare(a, b))
 
 
 class _KeyReleasedOnlyIfConsistent:
@@ -725,7 +756,7 @@ def pairwise_test_kem(
             # Constant-time: both are secrets, and INVARIANT-12 covers every
             # secret-dependent comparison (``!=`` exits at the first
             # differing byte; PR #415 review).
-            if not _secrets_match(ss, shared_secret):
+            if not secrets_match(ss, shared_secret):
                 raise ValueError("Shared secrets do not match")
         except (CryptoModuleError, NativeBackendUnavailableError):
             # Could-not-run, not ran-and-failed — see the discipline note above.
@@ -777,7 +808,7 @@ def pairwise_test_agreement(
             eph_public, eph_secret = ephemeral_keypair
             ours = agree_fn(secret_key, eph_public)
             theirs = agree_fn(eph_secret, public_key)
-            if not _secrets_match(ours, theirs):
+            if not secrets_match(ours, theirs):
                 raise ValueError("DH roundtrip disagreed: the keypair halves do not correspond")
         except (CryptoModuleError, NativeBackendUnavailableError):
             # Could-not-run, not ran-and-failed — see the discipline note above.

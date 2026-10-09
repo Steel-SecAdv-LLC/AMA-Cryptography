@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, TypeVar, Union
 
+from ama_cryptography._secret_material import zeroize
 from ama_cryptography.exceptions import KeyFormatError
 
 __all__ = [
@@ -498,6 +499,25 @@ def cbor_encode_canonical(value: Any) -> bytes:
     raise KeyFormatError(f"unsupported CBOR type {type(value).__name__}")
 
 
+def scrub_decoded(value: Any) -> None:
+    """Zero every ``bytearray`` byte string in a decoded CBOR item: the item
+    itself, an array's elements, a map's values, at any depth.
+
+    For a decode that is refused part-way, or whose result is refused: the
+    slices it already took of a private buffer -- a COSE key's ``d`` -- are
+    independent copies that nothing else would zero (INVARIANT-6).  ``bytes``
+    and scalars are left as they are.
+    """
+    if isinstance(value, dict):
+        for item in value.values():
+            scrub_decoded(item)
+    elif isinstance(value, list):
+        for item in value:
+            scrub_decoded(item)
+    else:
+        zeroize(value)
+
+
 class _CborReader:
     """Reads one CBOR item from ``data``.
 
@@ -581,18 +601,31 @@ class _CborReader:
             except UnicodeDecodeError:
                 raise KeyFormatError("invalid UTF-8 in CBOR text string") from None
         if major == _CBOR_ARRAY:
-            # `value` is bounded by the head, but an 8-byte head can declare
-            # 2^64 elements; `_need(1)` inside the first `decode` is what stops
-            # the list comprehension from being asked to preallocate. Check the
-            # declared count against the octets that remain before entering it,
-            # since every element costs at least one octet.
-            self._need(value)
-            return [self.decode(depth + 1) for _ in range(value)]
+            return self._decode_array(value, depth)
         if major == _CBOR_MAP:
-            # Every pair costs at least two octets.
-            self._need(2 * value)
-            mapping: dict[Any, Any] = {}
-            previous: bytes | None = None
+            return self._decode_map(value, depth)
+        raise KeyFormatError(f"unsupported CBOR major type {major}")
+
+    def _decode_array(self, value: int, depth: int) -> list[Any]:
+        # `value` is bounded by the head, but an 8-byte head can declare
+        # 2^64 elements. Check the declared count against the octets that
+        # remain before looping, since every element costs at least one octet.
+        self._need(value)
+        items: list[Any] = []
+        try:
+            for _ in range(value):
+                items.append(self.decode(depth + 1))
+        except BaseException:
+            scrub_decoded(items)
+            raise
+        return items
+
+    def _decode_map(self, value: int, depth: int) -> dict[Any, Any]:
+        # Every pair costs at least two octets.
+        self._need(2 * value)
+        mapping: dict[Any, Any] = {}
+        previous: bytes | None = None
+        try:
             for _ in range(value):
                 key_start = self._pos
                 key = self.decode(depth + 1)
@@ -607,8 +640,12 @@ class _CborReader:
                 if isinstance(key, (list, dict)):
                     raise KeyFormatError("non-scalar CBOR map key")
                 mapping[key] = self.decode(depth + 1)
-            return mapping
-        raise KeyFormatError(f"unsupported CBOR major type {major}")
+        except BaseException:
+            # The values decoded so far are slices of the buffer -- for a
+            # private COSE_Key, ``d`` among them (PR #415 review).
+            scrub_decoded(mapping)
+            raise
+        return mapping
 
 
 def cbor_decode_canonical(data: bytes | bytearray) -> Any:
@@ -620,5 +657,6 @@ def cbor_decode_canonical(data: bytes | bytearray) -> Any:
     reader = _CborReader(data)
     value = reader.decode()
     if reader.pos != len(data):
+        scrub_decoded(value)
         raise KeyFormatError(f"{len(data) - reader.pos} trailing octet(s) after the CBOR item")
     return value
