@@ -1906,20 +1906,21 @@ def _parse_pq_private_key(
         raise KeyFormatError(f"unrecognised {alg.name} private-key CHOICE tag 0x{tag:02X}")
 
 
-def _expand_pq_seed(alg: _Alg, seed: bytes) -> tuple[bytes, bytes]:
+def _expand_pq_seed(alg: _Alg, seed: bytes | bytearray) -> tuple[bytes, bytes]:
     if len(seed) != alg.pq_seed_bytes:
         raise KeyFormatError(f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}")
     if alg.pq_family == "ml-dsa":
         public, secret = _pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
     else:
-        # `d` and `z` are slices of the seed: for a `bytearray` seed, independent
-        # copies of it, zeroed here whichever way the expansion ends.
-        d, z = seed[:32], seed[32:]
-        try:
-            public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, d, z)
-        finally:
-            _zero(d)
-            _zero(z)
+        if isinstance(seed, bytes):
+            # Immutable already: slicing it creates nothing wipeable.
+            public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
+        else:
+            # d || z as borrowed writable views of the caller's seed: slicing a
+            # bytearray seed would mint two ``bytearray`` copies that nothing
+            # holds, so no one could wipe them.
+            with memoryview(seed) as whole, whole[:32] as d, whole[32:] as z:
+                public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, d, z)
     return secret, public
 
 

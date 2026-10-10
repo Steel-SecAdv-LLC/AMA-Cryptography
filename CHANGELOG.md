@@ -34,6 +34,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### ML-KEM seed import borrows the seed instead of slicing it -- 2026-10-10
+
+`_expand_pq_seed` sliced the 64-octet ML-KEM seed into two 32-octet copies, `d` and `z`, for the backend. It now passes writable `memoryview`s of the one seed buffer (the loaded key's `PrivateKey.seed`), so no extra copy of the seed exists to be tracked or wiped (INVARIANT-6). ML-DSA already passed the seed through unchanged.
+
 ### POST known-answer tests scrub the secrets they derive -- 2026-10-10
 
 The ML-KEM-1024, ML-DSA-65 and Ed25519 power-on KATs and `tools/build_post_kats.py` derived seeds, secret keys and shared secrets as immutable `bytes`, compared them with `.hex()` and `==`, and never zeroed them (INVARIANT-6, -12). They now hold every secret in a `bytearray`, compare through the constant-time comparator and zero all of them on every exit; `native_ml_kem_keypair_from_seed` and `native_ml_dsa_keypair_from_seed` accept a `bytearray` seed and borrow it in place.

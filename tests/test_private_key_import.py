@@ -610,16 +610,29 @@ def test_a_public_spki_still_loads_and_its_work_copy_is_zeroed(scratch: Scratch)
     assert len(scratch.buffers) >= 1 and not [b for b in scratch.buffers if any(b)]
 
 
-def test_an_ml_kem_seed_expansion_zeroes_its_two_halves(zeroed: list[bytes]) -> None:
-    """PIN.  ``d`` and ``z`` are slices of the seed (independent copies for a
-    ``bytearray`` seed); both are zeroed after the expansion.  Removing the
-    ``_zero(d)`` / ``_zero(z)`` in ``_expand_pq_seed`` fails the respective
-    half of this."""
+def test_an_ml_kem_seed_expansion_borrows_the_seed_and_makes_no_copy(
+    zeroed: list[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PIN.  ``d`` and ``z`` reach the backend as views of the one buffer that
+    becomes the loaded key's seed, so no 32-octet copy exists to be wiped.  A
+    slice copy fails the aliasing check, with or without a ``_zero`` of it."""
+    seen: list[tuple[object, object]] = []
+    real = pb.native_ml_kem_keypair_from_seed
+
+    def spy(ps: Any, d: Any, z: Any) -> Any:
+        seen.append((d.obj, z.obj))
+        return real(ps, d, z)
+
     key = make_private("ML-KEM-768")
     assert key.seed is not None
     seed = bytes(key.seed)
-    kf.load_pkcs8(bytes(key.to_pkcs8(pq_format="seed")))
-    assert seed[:32] in zeroed and seed[32:] in zeroed
+    der = bytes(key.to_pkcs8(pq_format="seed"))
+    monkeypatch.setattr(pb, "native_ml_kem_keypair_from_seed", spy)
+    loaded = kf.load_pkcs8(der)
+    assert loaded.seed is not None
+    assert len(seen) == 1 and seen[0][0] is loaded.seed and seen[0][1] is loaded.seed
+    assert bytes(loaded.seed) == seed
+    assert seed[:32] not in zeroed and seed[32:] not in zeroed
 
 
 @pytest.mark.parametrize("name", ["Ed25519", "X25519"])
