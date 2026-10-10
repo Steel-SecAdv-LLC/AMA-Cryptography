@@ -91,20 +91,20 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 32 | 45,838 |
+| Library Python (`ama_cryptography/*.py`) | 32 | 45,874 |
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 90 | 54,739 |
-| Library total (Python + C + headers) | 122 | **100,577** |
+| Library total (Python + C + headers) | 122 | **100,613** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,467 |
-| Tests (`tests/**/*.py`) | 288 | 141,264 |
+| Tests (`tests/**/*.py`) | 289 | 142,271 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,984 |
-| **Whole project** (source + docs + config) | 804 | **493,939** |
+| **Whole project** (source + docs + config) | 805 | **495,008** |
 
 **Library total (the figure that most closely tracks "library size"):
-100,577 lines** across 122 files under `ama_cryptography/`, `src/c/`,
+100,613 lines** across 122 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`493,939` lines across Python, C, headers,
+**Whole-project total** (`495,008` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -155,7 +155,7 @@ excluded.
 
 ### Scope Composition
 
-The gap between "library" and "whole project" is informative: only **20.4%** of the repository is library code. The rest is tests, docs,
+The gap between "library" and "whole project" is informative: only **20.3%** of the repository is library code. The rest is tests, docs,
 config, vendored vector corpora, and scaffolding — verification
 artifacts outweighing library code is a healthy ratio for a security
 library that takes verification seriously, but the vendored share means
@@ -163,17 +163,17 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 100,577 | 20.4% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 141,264 | 28.6% | `tests/**/*.py` |
+| Library (Python + C + headers) | 100,613 | 20.3% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 142,271 | 28.7% | `tests/**/*.py` |
 | Top-level Python | 1,467 | 0.3% | `*.py` at repo root |
 | Cython | 1,984 | 0.4% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 248,647 | 50.3% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **493,939** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 248,673 | 50.2% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **495,008** | **100%** | sum of the scopes above |
 
-Test code (28.6%) is roughly 1.4x the size of the library (20.4%) — i.e. the test-to-library ratio is roughly **1.40**, and that
+Test code (28.7%) is roughly 1.4x the size of the library (20.3%) — i.e. the test-to-library ratio is roughly **1.41**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (50.3%) is dominated by the
-vendored NIST ACVP and Wycheproof JSON corpora (72,849 lines of `*.json` alone) and by this repository's Markdown, not by config.
+in the remainder row. The remainder (50.2%) is dominated by the
+vendored NIST ACVP and Wycheproof JSON corpora (72,850 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
 
@@ -237,8 +237,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 283 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **7,111** |
+| Python test files under `tests/` matching the static regex | 284 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **7,140** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 96 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 0 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |

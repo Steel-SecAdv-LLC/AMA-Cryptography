@@ -53,6 +53,7 @@ from ama_cryptography._module_state import (
     _exception_text,
     _finish_self_test,
     _rng_state,
+    _scrub,
     _state_snapshot,
     entropy_source,
     secrets_match,
@@ -2359,6 +2360,12 @@ def _kat_ml_kem_1024() -> Tuple[Optional[bool], str]:
     Vector: ``_post_kats/ml_kem_1024_kat.json`` (NIST ACVP-Server FIPS 203,
     pinned by ``tools/build_post_kats.py``).
     """
+    d: Any = None
+    z: Any = None
+    sk: Any = None
+    ss: Any = None
+    expected_sk: Any = None
+    expected_ss: Any = None
     try:
         from ama_cryptography.pqc_backends import (
             KYBER_AVAILABLE,
@@ -2370,20 +2377,29 @@ def _kat_ml_kem_1024() -> Tuple[Optional[bool], str]:
             return None, "ML-KEM-1024 KAT skipped (backend unavailable)"
 
         v = _load_post_kat("ml_kem_1024_kat.json")
-        pk, sk = native_ml_kem_keypair_from_seed(
-            1024, bytes.fromhex(v["d_hex"]), bytes.fromhex(v["z_hex"])
-        )
+        # The seeds derive the secret key, so they are held in bytearrays
+        # and zeroed below like the key itself.
+        d = bytearray.fromhex(v["d_hex"])
+        z = bytearray.fromhex(v["z_hex"])
+        pk, sk = native_ml_kem_keypair_from_seed(1024, d, z)
         if pk.hex() != v["pk_hex"]:
             return False, "ML-KEM-1024 KAT: keygen public key != NIST known answer"
-        if sk.hex() != v["sk_hex"]:
+        # Secrets are compared in constant time against bytearray copies and
+        # never rendered as hex; the finally below zeroes every one of them on
+        # every exit (INVARIANT-6, INVARIANT-12).
+        expected_sk = bytearray.fromhex(v["sk_hex"])
+        if not secrets_match(sk, expected_sk):
             return False, "ML-KEM-1024 KAT: keygen secret key != NIST known answer"
 
-        ss = native_ml_kem_decapsulate(1024, bytes.fromhex(v["ct_hex"]), bytes.fromhex(v["sk_hex"]))
-        if ss.hex() != v["ss_hex"]:
+        ss = native_ml_kem_decapsulate(1024, bytes.fromhex(v["ct_hex"]), sk)
+        expected_ss = bytearray.fromhex(v["ss_hex"])
+        if not secrets_match(ss, expected_ss):
             return False, "ML-KEM-1024 KAT: decapsulated secret != NIST known answer"
         return True, "ML-KEM-1024 KAT passed (NIST ACVP keygen + decaps known answer)"
     except Exception as exc:
         return False, f"ML-KEM-1024 KAT exception: {exc}"
+    finally:
+        _scrub(d, z, sk, ss, expected_sk, expected_ss)
 
 
 def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
@@ -2402,6 +2418,9 @@ def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
     Vector: ``_post_kats/ml_dsa_65_kat.json`` (NIST ACVP-Server FIPS 204,
     external interface with a fixed context).
     """
+    seed: Any = None
+    sk: Any = None
+    expected_sk: Any = None
     try:
         from ama_cryptography.pqc_backends import (
             DILITHIUM_AVAILABLE,
@@ -2413,10 +2432,12 @@ def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
             return None, "ML-DSA-65 KAT skipped (backend unavailable)"
 
         v = _load_post_kat("ml_dsa_65_kat.json")
-        pk, sk = native_ml_dsa_keypair_from_seed(65, bytes.fromhex(v["seed_hex"]))
+        seed = bytearray.fromhex(v["seed_hex"])
+        pk, sk = native_ml_dsa_keypair_from_seed(65, seed)
         if pk.hex() != v["pk_hex"]:
             return False, "ML-DSA-65 KAT: keygen public key != NIST known answer"
-        if sk.hex() != v["sk_hex"]:
+        expected_sk = bytearray.fromhex(v["sk_hex"])
+        if not secrets_match(sk, expected_sk):
             return False, "ML-DSA-65 KAT: keygen secret key != NIST known answer"
 
         pk_b = bytes.fromhex(v["pk_hex"])
@@ -2433,6 +2454,8 @@ def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
         return True, "ML-DSA-65 KAT passed (NIST ACVP keygen + verify + negative)"
     except Exception as exc:
         return False, f"ML-DSA-65 KAT exception: {exc}"
+    finally:
+        _scrub(seed, sk, expected_sk)
 
 
 def _kat_slh_dsa() -> Tuple[Optional[bool], str]:
@@ -2559,6 +2582,8 @@ def _kat_ed25519() -> Tuple[Optional[bool], str]:
     3. **Pairwise consistency** — a freshly generated key still round-trips,
        which is the FIPS 140-3 §4.9.2 requirement for a keygen path.
     """
+    seed: Any = None
+    sk: Any = None
     try:
         from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
@@ -2572,7 +2597,6 @@ def _kat_ed25519() -> Tuple[Optional[bool], str]:
             return None, "Ed25519 KAT skipped (native unavailable)"
 
         # RFC 8032 §7.1, TEST 1.
-        seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
         expected_pk = bytes.fromhex(
             "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
         )
@@ -2581,42 +2605,51 @@ def _kat_ed25519() -> Tuple[Optional[bool], str]:
             "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
         )
 
-        pk, sk = native_ed25519_keypair_from_seed(seed)
-        if pk != expected_pk:
-            return False, (
-                f"Ed25519 KAT: RFC 8032 TEST 1 public key mismatch — "
-                f"got {pk.hex()}, expected {expected_pk.hex()}"
-            )
-
-        sig = native_ed25519_sign(b"", sk)
-        if sig != expected_sig:
-            return False, (
-                f"Ed25519 KAT: RFC 8032 TEST 1 signature mismatch — "
-                f"got {sig.hex()}, expected {expected_sig.hex()}"
-            )
-
-        if not native_ed25519_verify(sig, b"", pk):
-            return False, "Ed25519 KAT: RFC 8032 TEST 1 signature did not verify"
-
-        # Negative case: flip one bit of S.  A verifier that accepts this
-        # accepts anything, and would equally have accepted a tampered module.
-        corrupted = bytearray(sig)
-        corrupted[32] ^= 0x01
-        if native_ed25519_verify(bytes(corrupted), b"", pk):
-            return False, (
-                "Ed25519 KAT: verifier ACCEPTED a corrupted signature — it "
-                "cannot detect a tampered module either"
-            )
-
-        # Pairwise consistency on a fresh key (FIPS 140-3 §4.9.2).
-        fresh_pk, fresh_sk = native_ed25519_keypair()
-        msg = b"FIPS 140-3 Ed25519 pairwise consistency"
         try:
-            consistent = native_ed25519_verify(native_ed25519_sign(msg, fresh_sk), msg, fresh_pk)
+            # The seed derives the secret key: a bytearray, zeroed below.
+            seed = bytearray.fromhex(
+                "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+            )
+            pk, sk = native_ed25519_keypair_from_seed(seed)
+            if pk != expected_pk:
+                return False, (
+                    f"Ed25519 KAT: RFC 8032 TEST 1 public key mismatch — "
+                    f"got {pk.hex()}, expected {expected_pk.hex()}"
+                )
+
+            sig = native_ed25519_sign(b"", sk)
+            if sig != expected_sig:
+                return False, (
+                    f"Ed25519 KAT: RFC 8032 TEST 1 signature mismatch — "
+                    f"got {sig.hex()}, expected {expected_sig.hex()}"
+                )
+
+            if not native_ed25519_verify(sig, b"", pk):
+                return False, "Ed25519 KAT: RFC 8032 TEST 1 signature did not verify"
+
+            # Negative case: flip one bit of S.  A verifier that accepts this
+            # accepts anything, and would equally have accepted a tampered module.
+            corrupted = bytearray(sig)
+            corrupted[32] ^= 0x01
+            if native_ed25519_verify(bytes(corrupted), b"", pk):
+                return False, (
+                    "Ed25519 KAT: verifier ACCEPTED a corrupted signature — it "
+                    "cannot detect a tampered module either"
+                )
+
+            # Pairwise consistency on a fresh key (FIPS 140-3 §4.9.2).
+            fresh_pk, fresh_sk = native_ed25519_keypair()
+            msg = b"FIPS 140-3 Ed25519 pairwise consistency"
+            try:
+                consistent = native_ed25519_verify(
+                    native_ed25519_sign(msg, fresh_sk), msg, fresh_pk
+                )
+            finally:
+                fresh_sk[:] = bytes(len(fresh_sk))
+            if not consistent:
+                return False, "Ed25519 KAT: pairwise consistency test failed"
         finally:
-            fresh_sk[:] = bytes(len(fresh_sk))
-        if not consistent:
-            return False, "Ed25519 KAT: pairwise consistency test failed"
+            _scrub(seed, sk)
 
         return True, "Ed25519 KAT passed (RFC 8032 TEST 1 + negative + pairwise)"
     except Exception as exc:

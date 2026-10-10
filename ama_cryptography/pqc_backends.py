@@ -7802,12 +7802,13 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
         _wipe(sk)
 
 
-def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> tuple:
+def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: _BufferInput, z: _BufferInput) -> tuple:
     """
     Deterministic ML-KEM keypair from the (d, z) seed pair (FIPS 203 §7.1).
 
     This is the KAT entry point and the one a PKCS#8 ``seed`` private key needs:
-    ``d || z`` is 64 octets and expands to the full key.
+    ``d || z`` is 64 octets and expands to the full key.  A seed passed as a
+    ``bytearray`` is borrowed in place, never copied, so the caller can wipe it.
 
     Raises:
         ValueError: If a seed is not exactly 32 bytes, or the set is unknown.
@@ -8084,9 +8085,11 @@ def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
         _wipe(sk)
 
 
-def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
+def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: _BufferInput) -> tuple:
     """
     Deterministic ML-DSA keypair from the 32-octet seed xi (FIPS 204 §5.1).
+    A seed passed as a ``bytearray`` is borrowed in place, never copied, so the
+    caller can wipe it.
 
     Raises:
         ValueError: If the seed is not exactly 32 bytes, or the set is unknown.

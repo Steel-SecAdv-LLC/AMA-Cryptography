@@ -34,6 +34,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### POST known-answer tests scrub the secrets they derive -- 2026-10-10
+
+The ML-KEM-1024, ML-DSA-65 and Ed25519 power-on KATs and `tools/build_post_kats.py` derived seeds, secret keys and shared secrets as immutable `bytes`, compared them with `.hex()` and `==`, and never zeroed them (INVARIANT-6, -12). They now hold every secret in a `bytearray`, compare through the constant-time comparator and zero all of them on every exit; `native_ml_kem_keypair_from_seed` and `native_ml_dsa_keypair_from_seed` accept a `bytearray` seed and borrow it in place.
+`tests/test_post_kat_wipe.py` fails on any second copy of a secret bound in a KAT frame or passed to a native or the comparator.
+
 ### Private-key exports return wipeable buffers -- 2026-10-10
 
 **BREAKING:** `PrivateKey.to_pkcs8()`, `to_pem()`, `to_jwk()`, `to_cose()`, `private_key_to_jwk()`, `private_key_to_cose()` and `encode_pem()` return a `ZeroizingBytearray` (was `bytes`, `str`, `dict`); `decode_pem()` returns `(label, bytearray)`. A `bytes`, `str` or `dict` cannot be zeroed (INVARIANT-6); the buffer is built once with no immutable copy of the key and wipes itself when collected. Migrate with `write_bytes`, `json.loads(key.to_jwk())` and `startswith(b"...")`; loaders are unchanged.
