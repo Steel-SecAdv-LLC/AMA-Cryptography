@@ -4520,7 +4520,7 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx: bytes) -> bytes:
+def dilithium_sign_ctx(message: bytes, secret_key: _BufferInput, ctx: bytes) -> bytes:
     """
     ML-DSA-65 sign with FIPS 204 §5.2 binding context (external/pure).
 
@@ -5462,7 +5462,7 @@ def native_ed25519_keypair() -> tuple:
     return public_key, secret_key
 
 
-def native_ed25519_keypair_from_seed(seed: Union[bytes, bytearray]) -> tuple:
+def native_ed25519_keypair_from_seed(seed: _BufferInput) -> tuple:
     """
     Generate Ed25519 keypair from a specific 32-byte seed.
 
@@ -5514,7 +5514,7 @@ def native_ed25519_keypair_from_seed(seed: Union[bytes, bytearray]) -> tuple:
     return public_key, secret_key
 
 
-def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+def native_ed25519_sign(message: bytes, secret_key: _BufferInput) -> bytes:
     """
     Sign message with Ed25519 using native C backend.
 

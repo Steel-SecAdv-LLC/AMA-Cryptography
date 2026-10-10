@@ -34,6 +34,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Signing path: no unwiped copies of the signing key or the derived keys -- 2026-10-10
+
+**BREAKING:** the `KeyPair` in a `create_crypto_package` result holds its own copy of a supplied `signing_keypair` secret key, so `result.wipe()` no longer zeroes the caller's key; `CryptoPackageConfig` gains `wipe()`, zeroes its cached seed expansion on collection, keeps `signing_keypair` out of `repr` and compares it in constant time (as `SecureSession` now does for its session keys).
+Hybrid signing lends the key to the Ed25519 and ML-DSA signers as `memoryview`s instead of slicing populated copies, the seed expansion and the derived-keys commitment are assembled in buffers they zero, and a failed signer no longer pins the caller's `bytearray` against `clear()`.
+The expansion memo is built under a lock and saves 0.85-0.89 M instructions per package (Intel Xeon 2.80 GHz, Release -O3 LTO, gcc 13.3.0); `tests/test_signing_path_secrets.py` fails when any of these guards is removed.
+
 ### `secure_random_bytes` returns a wipeable `bytearray` -- 2026-10-10
 
 **BREAKING:** `ama_cryptography.secure_memory.secure_random_bytes()` returns a `bytearray` (was `bytes`), written in place by the native CSPRNG so the caller owns the only copy and can `secure_memzero` it (INVARIANT-6); code that hashes, dict-keys or compares the result as `bytes` must wrap it in `bytes(...)`. `secure_token_bytearray` and `secure_random_fill` are now public from `ama_cryptography` and `ama_cryptography.secure_memory`.

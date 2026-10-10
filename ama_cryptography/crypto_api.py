@@ -30,6 +30,7 @@ import pathlib
 import sys
 import threading
 import time
+import traceback
 import warnings
 from _thread import LockType
 from abc import ABC, abstractmethod
@@ -40,13 +41,16 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
 from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
-from ama_cryptography._package_transcript import canonical as _canonical
+from ama_cryptography._package_transcript import (
+    append_canonical_byte_strings as _append_byte_strings,
+)
 from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography._secret_material import (
     ScrubOnRaise,
     SecretBytes,
     SecretMaterial,
     constant_time_equality,
+    zeroize,
 )
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
@@ -553,7 +557,7 @@ class Ed25519Provider(CryptoProvider):
     def sign(
         self,
         message: bytes,
-        secret_key: Union[bytes, bytearray],
+        secret_key: Union[bytes, bytearray, memoryview],
         precomputed_hash: Optional[bytes] = None,
     ) -> Signature:
         """
@@ -561,7 +565,9 @@ class Ed25519Provider(CryptoProvider):
 
         Args:
             message: Data to sign
-            secret_key: 32-byte Ed25519 seed or 64-byte native key
+            secret_key: 32-byte Ed25519 seed or 64-byte native key; a
+                writable ``memoryview`` of one borrows the caller's buffer
+                instead of copying it
             precomputed_hash: Optional pre-computed SHA3-256 hash of message.
                 When provided, skips redundant hash computation (~2x savings).
 
@@ -681,6 +687,75 @@ def _kc_secure_memzero(buf: bytearray) -> None:
     """Zero a bytearray in-place."""
     for i in range(len(buf)):
         buf[i] = 0
+
+
+def _borrowed_part(
+    key: SecretBytes, start: int, stop: Optional[int] = None
+) -> Union[bytes, memoryview]:
+    """``key[start:stop]`` without minting a second copy a caller cannot wipe.
+
+    A slice of a ``bytearray`` is an independent ``bytearray`` that nothing
+    zeroes: ``secret_key[:32]`` and ``secret_key[32:]`` left a populated copy
+    of the Ed25519 seed and of the whole 4,032-byte ML-DSA key behind on every
+    hybrid signature.  A ``memoryview`` slice borrows the caller's own storage
+    instead, so wiping the key wipes the part (the same rule
+    ``HybridKEMProvider.decapsulate`` applies).
+
+    ``bytes`` keeps the plain slice: nobody can wipe a ``bytes`` key whichever
+    way it is cut, and the ctypes boundary refuses a read-only view of PART of
+    a buffer rather than copy it (``pqc_backends._borrow``), so a view there
+    would turn a working call into a ``TypeError``.
+
+    Release them with :class:`_Borrowed`, which a ``with`` block needs: a view
+    left to its holder pins the caller's ``bytearray`` against ``clear()`` and
+    ``extend()`` for as long as any frame still names it.
+    """
+    if isinstance(key, bytearray):
+        return memoryview(key)[start:stop]
+    return key[start:stop]
+
+
+class _Borrowed:
+    """``with _Borrowed(key, (0, 32), (32, None)) as (head, tail):`` -- parts of
+    a secret key lent to a callee, and released when the block ends.
+
+    A ``memoryview`` of the caller's ``bytearray`` pins its size: ``clear()``
+    raises ``BufferError`` while any view lives.  The block's own locals are
+    released here.  A callee that raises is the other holder: its traceback
+    keeps the frame, the frame keeps the ctypes array ``_borrow`` made over the
+    view, and the array keeps the view -- so a caller holding the exception
+    (``except ... as exc`` stored, a logger, a test runner) could no longer
+    wipe-and-resize its own key.  The frames the exception passed through are
+    finished, so their locals are cleared (what ``unittest`` does to the
+    tracebacks it keeps); the block's own frame is still running and is left
+    as it is, which is why the parts are released explicitly.
+
+    ``release()`` is not guarded.  It raises ``BufferError`` only for a view
+    something holds a buffer export of; a ctypes array, ``memoryview(view)`` and
+    ``io.BytesIO(view)`` each take their own view of the same storage instead
+    (measured, CPython 3.13), and a Cython callee's export ends with its call.
+    Nothing that this library lends the parts to holds one, so a failure here
+    would be new and should be loud, not swallowed.
+    """
+
+    __slots__ = ("_views",)
+
+    def __init__(self, key: SecretBytes, *spans: Tuple[int, Optional[int]]) -> None:
+        self._views: Tuple[Union[bytes, memoryview], ...] = tuple(
+            _borrowed_part(key, start, stop) for start, stop in spans
+        )
+
+    def __enter__(self) -> Tuple[Union[bytes, memoryview], ...]:
+        return self._views
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        try:
+            if tb is not None:
+                traceback.clear_frames(tb)
+        finally:
+            for view in self._views:
+                if isinstance(view, memoryview):
+                    view.release()
 
 
 class KeypairCache:
@@ -1834,9 +1909,6 @@ class HybridSignatureProvider(CryptoProvider):
             if len(secret_key) == self.ED25519_FULL_SK_SIZE + self.DILITHIUM_SK_SIZE
             else self.ED25519_SK_SIZE
         )
-        classical_sk_bytes = secret_key[:classical_size]
-        pqc_sk = secret_key[classical_size:]
-
         # Compute hash once and pass to both providers
         msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
@@ -1844,10 +1916,19 @@ class HybridSignatureProvider(CryptoProvider):
         # Ed25519 over the explicit wrapper, ML-DSA-65 with the label as its
         # FIPS 204 context.  ``message_hash`` stays the hash of the caller's
         # message; it is metadata, not signed input.
-        classical_sig = self.classical_provider.sign(
-            hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
-        )
-        pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
+        #
+        # The key is lent to the two signers, not sliced out of: a slice of a
+        # bytearray is a populated copy of the Ed25519 key and of the 4,032-byte
+        # ML-DSA key that nothing would ever zero.  The loan ends with the block
+        # (see :class:`_Borrowed`), including when a signer raises.
+        with _Borrowed(secret_key, (0, classical_size), (classical_size, None)) as (
+            classical_sk_bytes,
+            pqc_sk,
+        ):
+            classical_sig = self.classical_provider.sign(
+                hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
+            )
+            pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
 
         # Combine signatures (Ed25519 first, then Dilithium)
         combined_sig = classical_sig.signature + pqc_sig_bytes
@@ -2346,8 +2427,42 @@ def get_pqc_capabilities() -> Dict[str, Any]:
     }
 
 
+class _SigningExpansionCache(SecretMaterial):
+    """The cache ``_normalized_signing_secret`` keeps on a package config.
+
+    A plain base class, not part of the dataclass: annotations here are not
+    dataclass fields, so neither attribute is an ``__init__`` argument, a
+    ``repr`` entry or compared by ``==`` (equality must not depend on whether a
+    package has been signed yet).  They have class-level defaults, so an object
+    that never ran this module's constructor -- one unpickled from a release
+    that stored neither, a subclass whose ``__init__`` or ``__post_init__`` does
+    not chain up -- reads ``None`` instead of raising ``AttributeError``; the
+    base release declared the memo as a defaulted dataclass field, which had
+    the same property.
+    """
+
+    # ``(public_key identity, secret_key identity, normalized secret)``.
+    #
+    # Keyed on the identity of the two ELEMENTS, not of the container: the
+    # runtime validator admits a list, whose identity survives element
+    # replacement, and a container-identity memo kept returning the previous
+    # key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
+    # immutable, so element identity implies element value.
+    #
+    # Written by ``_normalized_signing_secret`` on first use of a
+    # ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
+    # keygen pairwise consistency test it drags in) is paid once per identity
+    # instead of once per package (cost: see ``_normalized_signing_secret``).
+    _normalized_signing_memo: Optional[Tuple[bytes, SecretBytes, SecretBytes]] = None
+    # The part of the memo that is a secret the library minted: the expansion,
+    # or ``None`` where the "normalized" secret is the caller's own key (which
+    # this object must never wipe).
+    _signing_expansion: Optional[bytearray] = None
+
+
+@constant_time_equality(secret=("signing_keypair",))
 @dataclass
-class CryptoPackageConfig:
+class CryptoPackageConfig(_SigningExpansionCache):
     """
     Configuration for create_crypto_package() algorithm selection.
 
@@ -2369,7 +2484,28 @@ class CryptoPackageConfig:
         num_derived_keys: Number of HKDF-derived keys to generate (default: 3)
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
         tsa_mode: TSA mode — "online", "mock", or "disabled" (default: "online")
+
+    A config that has signed a package holds a second, expanded copy of the
+    ``signing_keypair`` secret key (see ``_normalized_signing_secret``).  It
+    is the config's own and :meth:`wipe` zeroes it, as does the config's
+    collection; the ``signing_keypair`` the caller supplied is the caller's
+    and is never touched.  The wipe leaves the config usable: the next
+    package re-expands from the caller's key.
+
+    Several threads may create packages from one config: the first use of a
+    key is serialized and the expansion shared.  Replacing ``signing_keypair``
+    while another thread is signing with the config is not supported (the
+    replaced key's expansion is zeroed).  A ``CryptoPackageResult`` owns its
+    own copy of the signing key's secret half; the key passed in stays the
+    caller's through ``result.wipe()``.
     """
+
+    # The cached expansion of ``signing_keypair`` (INVARIANT-6): the one secret
+    # buffer this object owns.  ``==`` compares the key the caller supplied,
+    # ``signing_keypair``, in constant time (named explicitly above: the
+    # default would compare ``_SECRET_ATTRS``, which is a cache and not a
+    # field, and the claim would be vacuous).
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("_signing_expansion",)
 
     use_kyber: bool = False
     use_sphincs: bool = False
@@ -2379,7 +2515,7 @@ class CryptoPackageConfig:
     num_derived_keys: int = 3
     tsa_url: Optional[str] = None
     tsa_mode: str = "online"
-    signing_keypair: Optional[Tuple[bytes, SecretBytes]] = None
+    signing_keypair: Optional[Tuple[bytes, SecretBytes]] = field(default=None, repr=False)
     """Pre-generated signing keypair (public_key, secret_key) to reuse.
 
     When provided, ``create_crypto_package()`` skips keypair generation and
@@ -2395,24 +2531,30 @@ class CryptoPackageConfig:
     When ``None`` (default), a fresh keypair is generated per call.
     """
 
-    _normalized_signing_memo: Optional[Tuple[bytes, SecretBytes, SecretBytes]] = field(
-        default=None, init=False, repr=False, compare=False
-    )
-    """``(public_key identity, secret_key identity, normalized secret)`` memo.
+    def _drop_signing_memo(self) -> None:
+        """Forget the memo and zero the expansion it cached."""
+        self._normalized_signing_memo = None
+        expansion, self._signing_expansion = self._signing_expansion, None
+        zeroize(expansion)
 
-    Keyed on the identity of the two ELEMENTS, not of the container: the
-    runtime validator admits a list, whose identity survives element
-    replacement, and a container-identity memo kept returning the previous
-    key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
-    immutable, so element identity implies element value.
+    def wipe(self) -> None:
+        """Zero the cached signing-key expansion and forget it.
 
-    Written by ``_normalized_signing_secret`` on first use of a
-    ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
-    keygen pairwise consistency test it drags in) is paid once per identity
-    instead of once per package.  Lives on this object deliberately: the
-    caller already owns the secret key stored two fields up, so the memo
-    introduces no new key-material retention class.
-    """
+        Explicit, so unconditional.  The caller's ``signing_keypair`` is theirs
+        and is left as it is; a later package re-expands from it.
+
+        ``SecretMaterial.wipe`` is not chained to: the one attribute it would
+        zero is already zeroed and cleared here.  What this adds over the mixin
+        is forgetting the memo, without which a ``bytes`` key -- trusted by
+        identity alone -- would be served the zeroed expansion.
+        """
+        self._drop_signing_memo()
+
+    def __del__(self) -> None:
+        # The memo tuple names the expansion too, which reads as a second
+        # owner; it dies with this object, so release it first.
+        self.__dict__.pop("_normalized_signing_memo", None)
+        super().__del__()
 
 
 @constant_time_equality()
@@ -2747,38 +2889,20 @@ def _expansion_still_matches(
     )
 
 
-def _normalized_signing_secret(
+#: Serializes the MISS path of :func:`_normalized_signing_secret` (check, build,
+#: store).  Process-wide rather than per config: a lock held in a config's
+#: ``__dict__`` would make the config unpicklable and uncopyable, and a miss
+#: is a once-per-key event.  Re-entrant, so the same thread coming back in
+#: cannot deadlock itself.  A memo HIT never takes it.  Known limits: a child
+#: forked while another thread holds it inherits it locked, and replacing a
+#: config's ``signing_keypair`` while another thread signs with it is unsupported.
+_SIGNING_EXPANSION_LOCK = threading.RLock()
+
+
+def _memoized_signing_secret(
     config: CryptoPackageConfig, public_key: bytes, secret_key: SecretBytes
-) -> SecretBytes:
-    """Normalize a pre-generated signing secret once per config object.
-
-    HYBRID_SIG and ED25519 secret keys embed the Ed25519 secret as its
-    32-byte seed.  :meth:`Ed25519Provider.sign` expands a seed to the
-    64-byte native form on every call, and that expansion is a key
-    *generation* (``native_ed25519_keypair_from_seed``), so it also re-ran
-    the INVARIANT-41 pairwise consistency test per signature — measured at
-    ~0.2 ms per package on the agent flow the ``signing_keypair`` option
-    exists for, a cost with no security payoff after the first call.
-
-    The expansion is done once here and memoized on the *config object*,
-    which the caller already owns and which already holds the secret key —
-    the cached expansion is derivable from what the object stores, so this
-    creates no new key-material retention class (contrast module-level
-    caches, which INVARIANT-41's continuous-RNG fix removed).  The memo is
-    keyed on the identity of the two bytes ELEMENTS (immutable, so
-    identity implies value), so replacing the tuple or swapping an element
-    inside an admitted list container (e.g. after ``KeypairCache.rotate()``)
-    re-normalizes.
-
-    Normalization also *strengthens* validation: the Ed25519 public key
-    derived from the seed must equal the supplied public-key component,
-    which previously went unchecked — a mismatched pair produced packages
-    whose signatures could never verify, discovered only downstream.
-
-    Signing behaviour is unchanged: the native signer derives its scalar
-    from the seed and reads the public-key half from the expanded form,
-    which this function guarantees is the seed's own derived key.
-    """
+) -> Optional[SecretBytes]:
+    """The normalized secret ``config`` has memoized for exactly this key, or ``None``."""
     # Memo hit requires ELEMENT identity, not container identity.  The
     # runtime validator in create_crypto_package deliberately admits a list
     # container, and a list's identity survives element replacement — so a
@@ -2807,40 +2931,142 @@ def _normalized_signing_secret(
         )
     ):
         return cached[2]
+    return None
 
+
+def _expand_signing_secret(
+    algorithm: AlgorithmType, public_key: bytes, secret_key: SecretBytes
+) -> SecretBytes:
+    """Expand ``secret_key`` to the form the native signer takes, checking it against
+    ``public_key``; ``secret_key`` itself where there is nothing to expand.  Records
+    nothing: the caller owns the memo.
+    """
     from ama_cryptography.secure_memory import constant_time_compare
 
-    algorithm = config.signature_algorithm
     normalized = secret_key
+    seed_size = HybridSignatureProvider.ED25519_SK_SIZE
     if (
         algorithm is AlgorithmType.HYBRID_SIG
-        and len(secret_key)
-        == HybridSignatureProvider.ED25519_SK_SIZE + HybridSignatureProvider.DILITHIUM_SK_SIZE
+        and len(secret_key) == seed_size + HybridSignatureProvider.DILITHIUM_SK_SIZE
     ):
-        seed = secret_key[: HybridSignatureProvider.ED25519_SK_SIZE]
-        derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
-        if not constant_time_compare(
-            derived_pk, public_key[: HybridSignatureProvider.ED25519_PK_SIZE]
-        ):
-            raise ValueError(
-                "signing_keypair mismatch: the Ed25519 public-key component does "
-                "not correspond to the supplied Ed25519 seed"
-            )
-        normalized = full_sk + secret_key[HybridSignatureProvider.ED25519_SK_SIZE :]
-    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == 32:
-        derived_pk, full_sk = native_ed25519_keypair_from_seed(secret_key)
-        if not constant_time_compare(derived_pk, public_key):
-            raise ValueError(
-                "signing_keypair mismatch: the Ed25519 public key does not "
-                "correspond to the supplied seed"
-            )
-        normalized = full_sk
+        # The seed is borrowed, the expanded Ed25519 key is zeroed once its 64
+        # bytes are in place, and the result is assembled once in a buffer sized
+        # for it: slicing the seed out and concatenating
+        # ``full_sk + secret_key[32:]`` left the seed, the 64-byte expansion and a
+        # 4,000-byte copy of the ML-DSA key populated and unowned.
+        with _Borrowed(secret_key, (0, seed_size)) as (seed,):
+            derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
+        try:
+            if not constant_time_compare(
+                derived_pk, public_key[: HybridSignatureProvider.ED25519_PK_SIZE]
+            ):
+                raise ValueError(
+                    "signing_keypair mismatch: the Ed25519 public-key component does "
+                    "not correspond to the supplied Ed25519 seed"
+                )
+            # Nothing here can fail once the buffer exists -- both slices are
+            # sized from the two lengths just read -- so the buffer needs no
+            # scrub-on-raise of its own (an unreachable guard is one no test
+            # can protect).
+            normalized = bytearray(len(full_sk) + len(secret_key) - seed_size)
+            with (
+                memoryview(normalized) as view,
+                memoryview(secret_key) as whole,
+                whole[seed_size:] as tail,
+            ):
+                view[: len(full_sk)] = full_sk
+                view[len(full_sk) :] = tail
+        finally:
+            zeroize(full_sk)
+    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == seed_size:
+        with _Borrowed(secret_key, (0, seed_size)) as (seed,):
+            derived_pk, expanded = native_ed25519_keypair_from_seed(seed)
+        # The expansion is what is memoized, so it is zeroed only if the check
+        # refuses it (a mismatch used to leave it populated).
+        with ScrubOnRaise() as held:
+            normalized = held(expanded)
+            if not constant_time_compare(derived_pk, public_key):
+                raise ValueError(
+                    "signing_keypair mismatch: the Ed25519 public key does not "
+                    "correspond to the supplied seed"
+                )
+    return normalized
 
-    if cached is not None and cached[2] is not cached[1] and isinstance(cached[2], bytearray):
-        # The superseded expansion is a copy of the old key: zero it rather
-        # than leave it for the collector.
-        _kc_secure_memzero(cached[2])
-    config._normalized_signing_memo = (public_key, secret_key, normalized)
+
+def _normalized_signing_secret(
+    config: CryptoPackageConfig, public_key: bytes, secret_key: SecretBytes
+) -> SecretBytes:
+    """Normalize a pre-generated signing secret once per config object.
+
+    HYBRID_SIG and ED25519 secret keys embed the Ed25519 secret as its
+    32-byte seed.  :meth:`Ed25519Provider.sign` expands a seed to the
+    64-byte native form on every call, and that expansion is a key
+    *generation* (``native_ed25519_keypair_from_seed``), so it also re-ran
+    the INVARIANT-41 pairwise consistency test per signature, a cost with no
+    security payoff after the first call.
+
+    The memo saves 0.85-0.89 M retired instructions per package (miss minus hit),
+    about 60% of a memo-warm Ed25519 package (Cachegrind, Intel Xeon 2.80 GHz,
+    Release -O3 LTO, gcc 13.3.0).
+
+    Thread safety.  A miss -- check, build, store -- runs under one
+    process-wide lock (a hit takes none), and the second thread to ask for a
+    key finds it already expanded.  The expansion a new one supersedes is read
+    BEFORE the build: read after it, it can be a sibling's fresh expansion,
+    which that sibling is signing with.  Replacing ``signing_keypair`` while
+    another thread signs with the same config is not supported -- its old
+    expansion is zeroed.
+
+    The expansion is done once here and memoized on the *config object*,
+    which the caller already owns and which already holds the secret key —
+    the cached expansion is derivable from what the object stores (contrast
+    module-level caches, which INVARIANT-41's continuous-RNG fix removed).
+    It is nonetheless a second copy of the key that the caller cannot reach
+    to wipe, so the config owns it as INVARIANT-6 secret material:
+    ``config.wipe()`` zeroes it, the config's collection zeroes it, and a
+    superseding memo zeroes the one it replaces.  The memo is
+    keyed on the identity of the two bytes ELEMENTS (immutable, so
+    identity implies value), so replacing the tuple or swapping an element
+    inside an admitted list container (e.g. after ``KeypairCache.rotate()``)
+    re-normalizes.
+
+    Normalization also *strengthens* validation: the Ed25519 public key
+    derived from the seed must equal the supplied public-key component,
+    which previously went unchecked — a mismatched pair produced packages
+    whose signatures could never verify, discovered only downstream.
+
+    Signing behaviour is unchanged: the native signer derives its scalar
+    from the seed and reads the public-key half from the expanded form,
+    which this function guarantees is the seed's own derived key.
+    """
+    served = _memoized_signing_secret(config, public_key, secret_key)
+    if served is not None:
+        return served
+    with _SIGNING_EXPANSION_LOCK:
+        # A thread that waited here found the key it was waiting for already
+        # expanded by the one that held the lock.
+        served = _memoized_signing_secret(config, public_key, secret_key)
+        if served is not None:
+            return served
+        # The expansion this one replaces is read BEFORE the build, so what is
+        # zeroed below is only what this call saw in place.  Read after, it is
+        # whatever a sibling stored in the meantime -- an expansion that sibling
+        # is signing with.  The lock keeps a sibling out; the early read is what
+        # keeps a nested call that does get in (the same thread, through the
+        # re-entrant lock) from having its fresh expansion zeroed under it.
+        superseded = config._signing_expansion
+        normalized = _expand_signing_secret(config.signature_algorithm, public_key, secret_key)
+        # The expansion is a copy of the key that this object owns; the previous one
+        # is a copy of the key it used to hold, and is zeroed rather than left for
+        # the collector.  (It is never the new one: every miss builds a fresh buffer
+        # or records ``None``.)
+        config._normalized_signing_memo = (public_key, secret_key, normalized)
+        config._signing_expansion = (
+            normalized
+            if isinstance(normalized, bytearray) and normalized is not secret_key
+            else None
+        )
+        zeroize(superseded)
     return normalized
 
 
@@ -2981,7 +3207,8 @@ def create_crypto_package(
     # Each secret this call mints is registered as it is minted and zeroed if
     # anything later raises -- a refused signing key, a timestamp failure, the
     # signature itself.  A caller-supplied signing key is not registered: it
-    # is the caller's (PR #415 review).
+    # is the caller's (PR #415 review); the copy of it the result's keypair
+    # holds is this call's and is.
     with ScrubOnRaise() as held:
         # ========================================================================
         # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
@@ -3024,11 +3251,19 @@ def create_crypto_package(
                 _sk, b"\x00" * len(_sk)
             ):
                 raise ValueError("signing_keypair keys must not be all-zero")
-            primary_keypair = KeyPair(
-                public_key=_pk,
-                secret_key=_sk,
-                algorithm=config.signature_algorithm,
-                metadata={"source": "pre-generated"},
+            # The result's keypair holds its OWN copy of the secret half.  Adopting
+            # the caller's buffer made ``result.wipe()`` (and the keypair's
+            # collection) zero the key the caller supplied and still signs with:
+            # the caller keeps ownership of what it passes in, the result owns
+            # what the library puts in it, and this copy is the library's, so a
+            # refusal below zeroes it with the rest of what this call minted.
+            primary_keypair = held(
+                KeyPair(
+                    public_key=_pk,
+                    secret_key=bytearray(_sk),
+                    algorithm=config.signature_algorithm,
+                    metadata={"source": "pre-generated"},
+                )
             )
             _signing_secret: SecretBytes = _normalized_signing_secret(config, _pk, _sk)
         else:
@@ -3226,7 +3461,19 @@ def _derived_keys_commitment(derived_keys: Sequence[SecretBytes]) -> str:
     unchanged and Layer 4 is self-consistent, and the keys are the only thing
     that moved.  Layer 4 compares them with this commitment.
     """
-    return native_sha3_256(_DERIVED_KEYS_COMMITMENT_DOMAIN + _canonical(list(derived_keys))).hex()
+    # The preimage is the domain and the transcript's encoding of the key list,
+    # assembled in one buffer this function owns and zeroes.  ``DOMAIN +
+    # canonical(list(derived_keys))`` made a ``bytes`` of each key, joined them
+    # into another, and hashed that: an unwipeable object holding every derived
+    # key, on each package created and each one verified.  The bytes hashed are
+    # identical (pinned by tests/test_signing_path_secrets.py), so packages
+    # signed before this change still verify.
+    preimage = bytearray(_DERIVED_KEYS_COMMITMENT_DOMAIN)
+    try:
+        _append_byte_strings(preimage, derived_keys)
+        return native_sha3_256(preimage).hex()
+    finally:
+        zeroize(preimage)
 
 
 def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:

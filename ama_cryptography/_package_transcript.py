@@ -71,9 +71,9 @@ signing time rather than silently omitted and discovered by an auditor.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence, Tuple
+from typing import Any, Mapping, Sequence, Tuple, Union
 
-__all__ = ["DOMAIN", "canonical", "transcript"]
+__all__ = ["DOMAIN", "append_canonical_byte_strings", "canonical", "transcript"]
 
 #: Domain separator.  A signature over a transcript must never be mistakable
 #: for a signature over anything else this project signs — see INVARIANT-1's
@@ -166,6 +166,47 @@ def canonical(value: Any) -> bytes:
         f"{type(value).__name__} cannot appear in a signed transcript: the "
         "signature could not bind it"
     )
+
+
+def append_canonical_byte_strings(
+    out: bytearray, items: Sequence[Union[bytes, bytearray, memoryview]]
+) -> None:
+    """Append ``canonical(list(items))`` to ``out``, byte for byte.
+
+    For a sequence of SECRET octet strings.  :func:`canonical` turns a
+    ``bytearray`` into an immutable ``bytes`` (``bytes(value)``), joins those,
+    and returns the result, so the encoding of a list of keys is an
+    unwipeable object holding every one of them.  This writes the same bytes
+    straight into a buffer the caller owns and zeroes, with no immutable
+    intermediate: the tag, the 8-byte count, then per item the ``bytes`` tag,
+    its 8-byte length and its octets -- exactly the sequence and ``bytes``
+    arms of :func:`canonical`.
+
+    Strict, as :func:`canonical` is: every item must be ``bytes``,
+    ``bytearray`` or ``memoryview``, else :class:`TypeError`, raised before
+    anything is written so ``out`` is untouched.  Anything else would be
+    appended as whatever ``len()`` and ``+=`` make of it (a list of small ints
+    becomes octets, a ``str`` is refused only by accident), and a signed
+    commitment must not depend on that.  The length is the octet count
+    (``nbytes``), which is what ``bytes(value)`` measures for a ``memoryview``
+    of wider elements; a non-contiguous ``memoryview`` is refused by the
+    ``+=`` (``BufferError``) rather than encoded differently from ``canonical``.
+
+    ``tests/test_signing_path_secrets.py`` pins the two equal against a
+    reference written independently of both, and pins the refusals.
+    """
+    for item in items:
+        if not isinstance(item, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                f"{type(item).__name__} cannot be appended as a byte string: only "
+                "bytes, bytearray and memoryview are encoded here"
+            )
+    out += _TAG_SEQ
+    out += len(items).to_bytes(_LEN, "big")
+    for item in items:
+        out += _TAG_BYTES
+        out += memoryview(item).nbytes.to_bytes(_LEN, "big")
+        out += item
 
 
 def transcript(fields: Sequence[Tuple[str, Any]]) -> bytes:

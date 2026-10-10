@@ -339,13 +339,14 @@ def _secrets_equal(a: Any, b: Any) -> bool:
     """Equality of two secret field values, constant-time in their octets.
 
     Presence (``None``), type and length are public; the octets are compared
-    by the native constant-time comparison, and a list element by element
-    with no early exit.
+    by the native constant-time comparison, and a list or a tuple element by
+    element with no early exit.  A list never equals a tuple, as in Python.
     """
     if a is None or b is None:
         return a is None and b is None
-    if isinstance(a, list) or isinstance(b, list):
-        if not (isinstance(a, list) and isinstance(b, list)) or len(a) != len(b):
+    if isinstance(a, (list, tuple)) or isinstance(b, (list, tuple)):
+        kind = list if isinstance(a, list) else tuple
+        if not (isinstance(a, kind) and isinstance(b, kind)) or len(a) != len(b):
             return False
         verdict = True
         for left, right in zip(a, b):
@@ -366,11 +367,19 @@ def constant_time_equality(
     ``_SECRET_ATTRS``.  Every field is compared, so where two values differ
     does not decide how much work is done.  ``__hash__`` is left as the
     dataclass set it.
+
+    A secret named here that is not a dataclass field -- an ``InitVar`` bound
+    to a plain attribute in ``__post_init__``, which is how a secret is kept
+    out of ``repr`` and ``asdict`` -- is compared too, after the fields, read
+    as an attribute (``None`` where an object never had it).  Named and then
+    skipped, the secret would be exactly what ``==`` ignores: two sessions
+    holding different keys compared equal.
     """
 
     def apply(cls: type[_C]) -> type[_C]:
         names = tuple(f.name for f in dataclasses.fields(cast(Any, cls)))
         secret_names = frozenset(secret or getattr(cls, "_SECRET_ATTRS", ()))
+        attribute_secrets = tuple(sorted(secret_names.difference(names)))
 
         def equal(self: Any, other: Any) -> Any:
             if other.__class__ is not self.__class__:
@@ -382,6 +391,8 @@ def constant_time_equality(
                     verdict &= _secrets_equal(left, right)
                 else:
                     verdict &= bool(left == right)
+            for name in attribute_secrets:
+                verdict &= _secrets_equal(getattr(self, name, None), getattr(other, name, None))
             return verdict
 
         equal.__name__ = "__eq__"
