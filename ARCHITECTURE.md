@@ -269,6 +269,7 @@ ama_cryptography/
 ├── key_management.py      # HD derivation, KeyRotationManager, SecureKeyStorage, HSMKeyStorage
 ├── key_formats.py         # PKCS#8 / SPKI / PEM / JWK / COSE_Key
 ├── _asn1.py               # DER codec
+├── _secret_writer.py      # exact-size writer for private-key encodings
 ├── hybrid_combiner.py     # Hybrid KEM combiner (X25519 + ML-KEM-1024)
 ├── adaptive_posture.py    # 3R signals → key rotation / algorithm escalation
 ├── agent_binding.py       # Agent-instance binding (INVARIANT-30)
@@ -789,7 +790,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
 | Wycheproof | Adversarial vectors | 15 vendored corpora | `wycheproof_vectors/run_wycheproof.py` |
 
-**Total:** 7,020 Python test functions across 277 test files, plus the
+**Total:** 7,111 Python test functions across 283 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the set of C tests depends on `AMA_USE_NATIVE_PQC`, `AMA_AES_CONSTTIME`, the ISA

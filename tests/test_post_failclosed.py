@@ -1105,7 +1105,7 @@ class TestKeyFormatsInhibitsSecretExport:
             # private-key PEM header, so the repository secret-scanner does not
             # flag a marker that guards no actual key.
             pem = priv.to_pem()
-            assert pem.startswith("-----BEGIN") and "PRIVATE KEY" in pem
+            assert pem.startswith(b"-----BEGIN") and b"PRIVATE KEY" in pem
 
             st._set_error("simulated POST failure")
             leaked = []

@@ -189,6 +189,12 @@ RETURN_TYPE_CONTRACTS: tuple[tuple[str, str, str], ...] = (
     ("ama_cryptography.secure_memory", "secure_memzero", "NoneType"),
     ("ama_cryptography.secure_memory", "is_available", "bool"),
     ("ama_cryptography.secure_memory", "get_status", "dict"),
+    # The private-key encodings are returned in a self-zeroing bytearray
+    # (INVARIANT-6): not `bytes`, `str` or `dict`, none of which a caller can
+    # wipe.  `encode_pem` has one return type whatever it is handed.
+    ("ama_cryptography.key_formats", "encode_pem", "ZeroizingBytearray"),
+    ("ama_cryptography.key_formats", "private_key_to_jwk", "ZeroizingBytearray"),
+    ("ama_cryptography.key_formats", "private_key_to_cose", "ZeroizingBytearray"),
 )
 
 #: ``(module, name, constructor args, type __enter__ must yield)``.
@@ -362,11 +368,22 @@ def check_signatures(report: Report) -> None:
         report.ok()
 
 
-_RETURN_CALL_ARGS: dict[str, tuple[Any, ...]] = {
+def _private_key_args() -> tuple[Any, ...]:
+    """A P-256 ``PrivateKey``, for the exporters that take one."""
+    from ama_cryptography import key_formats, pqc_backends
+
+    public, secret = pqc_backends.native_nistp_keypair("P-256")
+    return (key_formats.PrivateKey("P-256", secret, public),)
+
+
+_RETURN_CALL_ARGS: dict[str, Any] = {
     "get_pqc_status": (),
     "get_pqc_backend_info": (),
     "is_available": (),
     "get_status": (),
+    "encode_pem": (b"\x30\x00", "PRIVATE KEY"),
+    "private_key_to_jwk": _private_key_args,
+    "private_key_to_cose": _private_key_args,
 }
 
 
@@ -383,7 +400,8 @@ def check_return_types(report: Report) -> None:
             report.fail(f"{module_name} no longer provides {name!r}")
             continue
         if name in _RETURN_CALL_ARGS:
-            args: tuple[Any, ...] = _RETURN_CALL_ARGS[name]
+            declared = _RETURN_CALL_ARGS[name]
+            args: tuple[Any, ...] = declared() if callable(declared) else declared
         else:
             # The memory primitives take a buffer; give each its own so a wipe
             # in one check cannot mask a failure in another.

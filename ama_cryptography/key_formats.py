@@ -26,6 +26,15 @@ permissive parser means two byte strings decode to the same key, which is the
 same defect class as signature malleability and reachable by anyone who can
 hand you a key file.
 
+**Private-key output is wipeable.** The PKCS#8, PEM, JWK and COSE_Key
+encodings of a private key are returned in a ``bytearray`` that zeroes itself
+when collected, built once at its final size by
+``ama_cryptography._secret_writer`` with no immutable copy of the key on the
+way; ``bytes``, ``str`` and ``dict`` cannot be wiped, so none is returned. The
+loaders read a PEM, DER or COSE_Key in place from a work copy they zero.
+Anything the caller makes from a result (``bytes(x)``, ``x.decode()``,
+``json.loads``) is theirs, and so is a ``str`` they pass in.
+
 **Every algorithm is real.** Nothing here is a placeholder. Where a format has
 no finished standard for an algorithm, the call raises
 ``UnsupportedKeyFormatError`` naming the reason rather than inventing an
@@ -102,19 +111,19 @@ import contextlib
 import contextvars
 import json
 import os
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, TypeVar, Union
 
 import ama_cryptography.pqc_backends as _pb
 from ama_cryptography._asn1 import (
+    TAG_OCTET_STRING,
+    TAG_SEQUENCE,
     DerReader,
     cbor_decode_canonical,
     cbor_encode_canonical,
     der_bit_string,
     der_integer,
-    der_octet_string,
     der_sequence,
     der_tagged,
     oid_from_string,
@@ -127,9 +136,21 @@ from ama_cryptography._secret_material import (
 from ama_cryptography._secret_material import (
     SecretBytes,
     SecretMaterial,
+    ZeroizingBytearray,
     constant_time_equality,
 )
 from ama_cryptography._secret_material import zeroize as _zero
+from ama_cryptography._secret_writer import (
+    Lit,
+    Piece,
+    Sec,
+    Wrapped,
+    build,
+    cat,
+    cbor_bytes,
+    cbor_map,
+    tlv,
+)
 from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatError
 from ama_cryptography.secure_memory import constant_time_compare
 
@@ -157,6 +178,9 @@ __all__ = [
     "public_key_to_jwk",
     "set_pq_import_consistency",
 ]
+
+#: What the loaders accept as "bytes": the three buffer types, read in place.
+BytesLike = Union[bytes, bytearray, memoryview]
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +605,9 @@ class PublicKey:
         return _encode_spki(self)
 
     def to_pem(self) -> str:
-        return encode_pem(self.to_spki(), "PUBLIC KEY")
+        # Public text: the armour is ASCII by construction, and nothing in it
+        # is secret, so the immutable `str` is the right type.
+        return encode_pem(self.to_spki(), "PUBLIC KEY").decode("ascii")
 
     def to_jwk(self) -> dict[str, Any]:
         return public_key_to_jwk(self)
@@ -703,8 +729,14 @@ class PrivateKey(SecretMaterial):
         *,
         include_public_key: bool | None = None,
         pq_format: str = "auto",
-    ) -> bytes:
+    ) -> bytearray:
         """Encode as an unencrypted PKCS#8 ``OneAsymmetricKey`` (RFC 5958).
+
+        Returns a ``bytearray`` -- the DER, built once into a buffer of
+        exactly its size with no immutable copy of the key along the way --
+        that zeroes itself when it is collected.  ``docs/KEY_FORMATS.md``
+        ("Wiping private-key output") states what the caller must still do and
+        what the guarantee does not cover (``bytes(der)`` is a copy).
 
         Args:
             include_public_key: Whether to carry the public half. ``True`` and
@@ -750,16 +782,32 @@ class PrivateKey(SecretMaterial):
         *,
         include_public_key: bool | None = None,
         pq_format: str = "auto",
-    ) -> str:
-        return encode_pem(
-            self.to_pkcs8(include_public_key=include_public_key, pq_format=pq_format),
-            "PRIVATE KEY",
-        )
+    ) -> bytearray:
+        """Encode as a strict RFC 7468 ``PRIVATE KEY`` block: ASCII text in a
+        ``bytearray``, not a ``str`` (a ``str`` cannot be wiped).
 
-    def to_jwk(self) -> dict[str, Any]:
+        Write it with ``Path.write_bytes``; call ``.decode("ascii")`` only
+        where text is genuinely required, knowing that the ``str`` is a copy
+        the library cannot reach.
+        """
+        der = self.to_pkcs8(include_public_key=include_public_key, pq_format=pq_format)
+        try:
+            return _pem_armor(der, "PRIVATE KEY")
+        finally:
+            _zero(der)
+
+    def to_jwk(self) -> bytearray:
+        """Encode as a JWK: compact UTF-8 JSON in a ``bytearray``, members in
+        the order ``kty``, ``crv``, ``x``, (``y``), ``d``.
+
+        Not a ``dict``: a ``dict`` carrying ``d`` holds it in an immutable
+        ``str``.  Use ``json.loads(bytes(jwk))`` where a mapping is needed --
+        that creates copies the library cannot wipe.
+        """
         return private_key_to_jwk(self)
 
-    def to_cose(self) -> bytes:
+    def to_cose(self) -> bytearray:
+        """Encode as a deterministic COSE_Key (RFC 9052 §7) in a ``bytearray``."""
         return private_key_to_cose(self)
 
 
@@ -820,97 +868,217 @@ def _derive_public(alg: _Alg, secret: bytes | bytearray) -> bytes:
 # PEM (RFC 7468, strict)
 # ---------------------------------------------------------------------------
 # RFC 7468 §3's ABNF is `strictbase64text = *strictbase64line strictbase64finl`
-# where *both* line productions end in `eol` — so the newline before `-----END`
-# is required, not optional. Spelling the body as "zero or more newline-
-# terminated lines" enforces that; `[A-Za-z0-9+/=\n]*` did not, and accepted a
-# file whose last base64 line was glued directly to the footer:
+# where *both* line productions end in `eol` -- so the newline before `-----END`
+# is required, not optional.  A file whose last base64 line is glued directly to
+# the footer parsed to a perfectly good key which then re-encoded to *different*
+# bytes -- one key with two textual encodings, the malleability class the rest
+# of this module refuses.  Found by fuzz/python/fuzz_key_formats.py.
 #
-#     ...DpTAgqnXmlf37FN6D9YW04BLgpdFo7GS-----END PUBLIC KEY-----
+# The block is scanned **in place, by index, in a bytearray** -- no ``str``, no
+# regular expression, no ``split``/``join``/``group``:
 #
-# That parsed to a perfectly good key which then re-encoded to *different*
-# bytes — one key with two textual encodings, the malleability class the rest
-# of this module refuses. Found by fuzz/python/fuzz_key_formats.py.
-#
-# The body is matched as lines of anything but '\n' and '-', NOT as
-# ``[A-Za-z0-9+/=]``.  The body of a private-key PEM is the key, and the regex
-# engine compiles a many-range character class to a 256-bit bitmap indexed by
-# each character -- a memory address chosen by the secret, which INVARIANT-12
-# rule 4 forbids.  Two literals compile to two equality tests, whose outcome
-# for every body that is accepted is "not a delimiter": public structure.  The
-# alphabet itself is enforced by the native constant-time decoder, which
-# refuses anything else.  ``tests/test_key_formats.py`` pins the compiled
-# pattern to contain no charset opcode.
-_PEM_RE = re.compile(
-    r"^-----BEGIN (?P<label>[A-Z0-9 ]+)-----\n(?P<body>(?:[^\n-]*\n)*)"
-    r"-----END (?P=label)-----\n?$"
-)
+# * the body of a private-key PEM is the key.  Every ``str`` made from it is an
+#   immutable copy nothing can zero, and ``re.Match.group`` on a ``bytearray``
+#   subject returns ``bytes``, so the scanner keeps to spans;
+# * a regex engine compiles a many-range character class to a 256-bit bitmap
+#   indexed by each character -- a memory address chosen by the secret, which
+#   INVARIANT-12 rule 4 forbids.  The scanner never classifies a body octet:
+#   the one thing it asks of one is whether it is ``-`` (the delimiter), whose
+#   outcome for every body that is accepted is "no".  The alphabet itself is
+#   enforced by the native constant-time decoder, which refuses anything else.
+_PEM_BEGIN = b"-----BEGIN "
+_PEM_END = b"-----END "
+_PEM_DASHES = b"-----"
+#: The four octets RFC 7468 §3 allows around a block.  `str.strip()` is
+#: Unicode-aware (it also removes U+001C..U+001F, U+0085, U+00A0 ...), which
+#: silently salvaged a key file with an unexplained trailing octet; exactly
+#: these four are removed, by index.
+_PEM_BLANK = (0x20, 0x09, 0x0D, 0x0A)
+_PEM_STRICT = "not a single strict RFC 7468 PEM block"
 
 
-def encode_pem(der: Union[bytes, bytearray], label: str) -> str:
-    """Wrap DER in a strict RFC 7468 textual encoding (64-character lines).
+def _pem_armor(der: BytesLike, label: str) -> ZeroizingBytearray:
+    """RFC 7468 armour for ``der``: header, 64-column Base64 lines, footer.
 
-    The Base64 is produced by the native constant-time codec: for a private
-    key, a table-driven encoder would index its alphabet by the key.  The
-    working characters are zeroed once the text is built; the returned
-    ``str`` is the encoding the caller asked for.
+    The Base64 is produced by the native constant-time codec -- a
+    table-driven encoder would index its alphabet by the key.  The characters
+    are the key, so they are written straight from their scratch buffer into
+    the exact-size output (see :mod:`ama_cryptography._secret_writer`) and the
+    scratch is zeroed on every exit.
     """
+    try:
+        name = label.encode("ascii")
+    except UnicodeEncodeError:
+        raise KeyFormatError("a PEM label must be ASCII (RFC 7468 §2)") from None
     chars = _pb.native_base64_encode(der, _pb.BASE64_STANDARD_PADDED)
     try:
-        view = memoryview(chars)
-        lines = [view[i : i + 64].tobytes().decode("ascii") for i in range(0, len(chars), 64)]
+        return build(
+            cat(
+                Lit(_PEM_BEGIN + name + _PEM_DASHES + b"\n"),
+                Wrapped(lambda: chars, 64),
+                Lit(_PEM_END + name + _PEM_DASHES + b"\n"),
+            )
+        )
     finally:
         _zero(chars)
-    return f"-----BEGIN {label}-----\n" + "\n".join(lines or [""]) + f"\n-----END {label}-----\n"
 
 
-def decode_pem(text: str, expected_label: str | None = None) -> tuple[str, bytes]:
+def encode_pem(der: BytesLike, label: str) -> bytearray:
+    """Wrap DER in a strict RFC 7468 textual encoding (64-character lines).
+
+    Returns ASCII text in a ``bytearray``, whatever the label: this function
+    cannot know whether the DER it is handed is a private key, so it has one
+    return type, and a ``str`` cannot be wiped.  ``bytes(pem)`` or
+    ``pem.decode("ascii")`` is the caller's explicit, unwiped copy.
+
+    The Base64 is produced by the native constant-time codec and the working
+    characters are zeroed; the returned buffer is written once, at its final
+    size, and zeroes itself when collected.
+    """
+    return _pem_armor(der, label)
+
+
+def decode_pem(
+    text: Union[str, BytesLike], expected_label: str | None = None
+) -> tuple[str, bytearray]:
     """Parse a single strict RFC 7468 block. Returns ``(label, der)``.
 
-    Rejects the "lax" forms RFC 7468 §3 permits a *parser* to accept —
+    ``text`` is a ``str`` or bytes-like (``bytes``, ``bytearray``,
+    ``memoryview``); anything else raises :class:`KeyFormatError`.  ``der`` is
+    a ``bytearray`` that zeroes itself when collected -- for a private-key
+    block it is the key.  The caller's buffer is read in place and never
+    modified or wiped.
+
+    Rejects the "lax" forms RFC 7468 §3 permits a *parser* to accept --
     explanatory text before the header, whitespace inside the base64,
     mismatched labels. A key file with unexplained bytes around it is one a
     caller should look at, not one this layer should quietly salvage.
     """
     label, der = _decode_pem_der(text, expected_label)
     try:
-        return label, bytes(der)
+        return label, ZeroizingBytearray(der)
     finally:
         _zero(der)
 
 
-def _decode_pem_der(text: str, expected_label: str | None) -> tuple[str, bytearray]:
-    """:func:`decode_pem`, returning the DER in a wipeable ``bytearray``.
+def _work_copy(data: BytesLike) -> bytearray:
+    """``data``, which the caller has already established is ``bytes``,
+    ``bytearray`` or ``memoryview``, copied into a ``bytearray`` the loader
+    can read and zero.
+
+    A ``memoryview`` that was released is still an instance of ``memoryview``
+    but cannot be read: ``bytearray()`` of it raises a bare ``ValueError``,
+    which would escape every loader's ``KeyFormatError`` boundary.  It is a
+    malformed argument, not a malformed key, and is reported as one.
+    """
+    try:
+        return bytearray(data)
+    except ValueError:
+        raise KeyFormatError(
+            f"the {type(data).__name__} given cannot be read (a released memoryview?)"
+        ) from None
+
+
+def _pem_work_copy(text: Union[str, BytesLike]) -> bytearray:
+    """``text`` as octets in a ``bytearray`` the scanner can read and zero.
+
+    A ``str`` is the caller's immutable copy and cannot be wiped by any
+    design; ``bytearray(text, "ascii")`` makes one more, transient, that
+    CPython frees but does not zero -- there is no portable spelling that
+    avoids it.  Bytes-like input has no such copy.
+    """
+    if isinstance(text, str):
+        try:
+            return bytearray(text, "ascii")
+        except UnicodeEncodeError:
+            raise KeyFormatError(
+                "PEM text must be ASCII (RFC 7468 §2); this is not a single strict "
+                "RFC 7468 PEM block"
+            ) from None
+    if isinstance(text, (bytes, bytearray, memoryview)):
+        return _work_copy(text)
+    raise KeyFormatError(f"expected a PEM string or bytes, got {type(text).__name__}")
+
+
+def _decode_pem_der(
+    text: Union[str, BytesLike], expected_label: str | None
+) -> tuple[str, bytearray]:
+    """:func:`decode_pem`, returning the DER in a plain ``bytearray``.
 
     The private-key loaders use this form and zero the DER once parsed.
     """
-    # `str.strip()` with no argument was wrong here, and quietly so. Python's
-    # notion of whitespace is Unicode's: it includes U+001C..U+001F (the file,
-    # group, record and unit separators), U+000B, U+000C, U+0085, U+00A0 and
-    # several Unicode space characters. None of those is whitespace in
-    # RFC 7468, which is defined over a printable-ASCII alphabet plus CR and LF.
-    # So a key file with a trailing 0x1F — or a NO-BREAK SPACE, or a LINE
-    # SEPARATOR — was silently accepted by a parser whose stated position is
-    # that "a key file with unexplained bytes around it is one a caller should
-    # look at, not one this layer should quietly salvage".
-    #
-    # Stripping exactly the four characters RFC 7468 allows to surround a block
-    # closes that. Found by fuzz/python/fuzz_key_formats.py.
-    #
-    # CRLF is folded line by line -- split on '\n', drop one trailing '\r' --
-    # rather than with ``str.replace("\r\n", "\n")``: the replace runs
-    # CPython's fast search over the whole text, private key included, and its
-    # skip loop branches on a bloom filter of each character's low bits.  The
-    # split compares each character with '\n' only, and the '\r' test reads
-    # the last character of each line; both outcomes are line structure.
-    stripped = text.strip(" \t\r\n")
-    normalised = (
-        "\n".join(line[:-1] if line.endswith("\r") else line for line in stripped.split("\n"))
-        + "\n"
-    )
-    match = _PEM_RE.match(normalised)
-    if not match:
-        raise KeyFormatError("not a single strict RFC 7468 PEM block")
-    label = match.group("label")
+    work = _pem_work_copy(text)
+    try:
+        return _pem_scan(work, expected_label)
+    finally:
+        _zero(work)
+
+
+def _pem_line_spans(work: bytearray) -> list[tuple[int, int]]:
+    """``(start, stop)`` of each line of the block, with the block's
+    surrounding blanks removed and one trailing CR folded off each line.
+
+    CRLF is folded line by line -- find LF, drop one CR -- rather than with a
+    whole-text replace: a replace runs CPython's fast search over the whole
+    text, private key included, and its skip loop branches on a bloom filter
+    of each character's low bits.  Looking for LF compares each octet with LF
+    only, and the CR test reads the last octet of each line; both outcomes are
+    line structure.
+    """
+    first, last = 0, len(work)
+    while first < last and work[first] in _PEM_BLANK:
+        first += 1
+    while last > first and work[last - 1] in _PEM_BLANK:
+        last -= 1
+    spans: list[tuple[int, int]] = []
+    position = first
+    while True:
+        newline = work.find(b"\n", position, last)
+        end = last if newline < 0 else newline
+        stop = end - 1 if end > position and work[end - 1] == 0x0D else end
+        spans.append((position, stop))
+        if newline < 0:
+            return spans
+        position = newline + 1
+
+
+def _pem_header_label(work: bytearray, span: tuple[int, int]) -> bytes:
+    """The label of a ``-----BEGIN <label>-----`` line, as public octets.
+
+    The label is checked against ``[A-Z0-9 ]+`` *before* it is copied or
+    echoed anywhere, so a first line that is not a header -- a bare Base64
+    body, which is the key -- is refused without ever being reproduced.
+    """
+    start, stop = span
+    if (
+        not work.startswith(_PEM_BEGIN, start, stop)
+        or not work.endswith(_PEM_DASHES, start, stop)
+        or stop - start <= len(_PEM_BEGIN) + len(_PEM_DASHES)
+    ):
+        raise KeyFormatError(_PEM_STRICT)
+    label_start, label_stop = start + len(_PEM_BEGIN), stop - len(_PEM_DASHES)
+    for index in range(label_start, label_stop):
+        octet = work[index]
+        if not (0x41 <= octet <= 0x5A or 0x30 <= octet <= 0x39 or octet == 0x20):
+            raise KeyFormatError(_PEM_STRICT)
+    return bytes(work[label_start:label_stop])
+
+
+def _pem_scan(work: bytearray, expected_label: str | None) -> tuple[str, bytearray]:
+    """The label and DER of the single strict PEM block in ``work``."""
+    spans = _pem_line_spans(work)
+    name = _pem_header_label(work, spans[0])
+    footer = _PEM_END + name + _PEM_DASHES
+    foot_start, foot_stop = spans[-1]
+    if foot_stop - foot_start != len(footer) or not work.startswith(footer, foot_start, foot_stop):
+        raise KeyFormatError(_PEM_STRICT)
+    body = spans[1:-1]
+    for start, stop in body:
+        # The delimiter.  A body line holding one is a second block, a glued
+        # footer or a header in the wrong place -- never Base64.
+        if work.find(b"-", start, stop) != -1:
+            raise KeyFormatError(_PEM_STRICT)
+    label = name.decode("ascii")
     if expected_label is not None and label != expected_label:
         raise KeyFormatError(f"expected PEM label {expected_label!r}, found {label!r}")
 
@@ -919,45 +1087,58 @@ def _decode_pem_der(text: str, expected_label: str | None) -> tuple[str, bytearr
     # each line consists of exactly 64 characters except for the final line",
     # so every line but the last is exactly 64 and the last is 1..64.
     #
-    # Only the maximum was checked, which let a *short* line through — including
+    # Only the maximum was checked, which let a *short* line through -- including
     # an empty one. A blank line after the BEGIN header produced a second valid
     # encoding of the same key, because joining the lines discards it: the same
     # malleability class as the padding-bit hole below, reached a different way.
     # Found by fuzz/python/fuzz_key_formats.py after 18.1 million executions.
-    lines = match.group("body").split("\n")
-    if lines and lines[-1] == "":
-        lines = lines[:-1]  # the trailing newline before -----END
-    if not lines or not any(lines):
-        # No base64 at all, however it was spelled — checked before the line
+    if not body or all(start == stop for start, stop in body):
+        # No base64 at all, however it was spelled -- checked before the line
         # widths so the diagnostic names the real problem rather than reporting
         # a zero-length final line.
         raise KeyFormatError("empty PEM body")
-    for line in lines[:-1]:
-        if len(line) != 64:
+    for start, stop in body[:-1]:
+        if stop - start != 64:
             raise KeyFormatError(
-                f"PEM line is {len(line)} characters; RFC 7468 §2 requires exactly "
+                f"PEM line is {stop - start} characters; RFC 7468 §2 requires exactly "
                 "64 on every line but the last. One key must have one encoding."
             )
-    if not 1 <= len(lines[-1]) <= 64:
+    last_width = body[-1][1] - body[-1][0]
+    if not 1 <= last_width <= 64:
         raise KeyFormatError(
-            f"final PEM line is {len(lines[-1])} characters; RFC 7468 §2 allows 1 to 64"
+            f"final PEM line is {last_width} characters; RFC 7468 §2 allows 1 to 64"
         )
-    # One canonical encoding per key: the native decoder refuses a character
-    # outside the alphabet, misplaced padding, and non-zero pad bits (RFC 4648
-    # §3.5) -- `...Of3N=` and `...Of3M=` decoding to the same octets was a
-    # second encoding of one key, found by fuzz/python/fuzz_key_formats.py
-    # after 7.5 million executions, and closed here earlier by re-encoding and
-    # comparing.  The native decoder enforces the same rule directly, in
-    # constant time, and reports all three as one verdict so that which check
-    # failed is not itself a side channel.
+
+    # The lines are joined by copying memoryview to memoryview into one
+    # exact-size scratch buffer, which is zeroed whichever way the decode goes.
+    joined = bytearray(sum(stop - start for start, stop in body))
     try:
-        der = _pb.native_base64_decode("".join(lines).encode("ascii"), _pb.BASE64_STANDARD_PADDED)
-    except (ValueError, UnicodeEncodeError):
-        raise KeyFormatError(
-            "invalid or non-canonical base64 in PEM body: a character outside the "
-            "alphabet, misplaced padding, or non-zero padding bits (RFC 4648 §3.5). "
-            "One key must have one encoding."
-        ) from None
+        source = memoryview(work)
+        target = memoryview(joined)
+        try:
+            offset = 0
+            for start, stop in body:
+                target[offset : offset + (stop - start)] = source[start:stop]
+                offset += stop - start
+        finally:
+            source.release()
+            target.release()
+        # One canonical encoding per key: the native decoder refuses a character
+        # outside the alphabet, misplaced padding, and non-zero pad bits (RFC 4648
+        # §3.5) -- `...Of3N=` and `...Of3M=` decoding to the same octets was a
+        # second encoding of one key.  It enforces the rule directly, in
+        # constant time, and reports all three as one verdict so that which
+        # check failed is not itself a side channel.
+        try:
+            der = _pb.native_base64_decode(joined, _pb.BASE64_STANDARD_PADDED)
+        except ValueError:
+            raise KeyFormatError(
+                "invalid or non-canonical base64 in PEM body: a character outside the "
+                "alphabet, misplaced padding, or non-zero padding bits (RFC 4648 §3.5). "
+                "One key must have one encoding."
+            ) from None
+    finally:
+        _zero(joined)
     if not der:
         raise KeyFormatError("empty PEM body")
     return label, der
@@ -985,17 +1166,28 @@ def _encode_spki(key: PublicKey) -> bytes:
     return der_sequence(_algorithm_identifier(alg), der_bit_string(payload))
 
 
-def load_spki(data: Union[bytes, str]) -> PublicKey:
+def load_spki(data: Union[str, BytesLike]) -> PublicKey:
     """Parse a SubjectPublicKeyInfo, in DER or strict PEM.
+
+    A caller can hand this a *private* key by mistake, and the refusal then
+    happens after the document was copied.  So it is parsed from one
+    ``bytearray`` work copy, and that copy and every octet string sliced from
+    it are zeroed on success and on refusal alike: a refused private key
+    leaves no library-made copy of itself.
 
     Raises:
         KeyFormatError: malformed, non-minimal, or internally inconsistent.
         UnsupportedKeyFormatError: well-formed but names an algorithm or curve
             this library does not implement.
     """
-    # Public material: held as bytes, as a PublicKey's fields are.
-    der = bytes(_as_der(data, "PUBLIC KEY"))
-    outer = DerReader(der)
+    der = _as_der(data, "PUBLIC KEY")
+    try:
+        return _spki_public_key(DerReader(der))
+    finally:
+        _zero(der)
+
+
+def _spki_public_key(outer: DerReader[bytearray]) -> PublicKey:
     seq = outer.read_sequence()
     outer.finish()
 
@@ -1014,9 +1206,11 @@ def load_spki(data: Union[bytes, str]) -> PublicKey:
                 f"{sorted(a.name for a in _BY_CURVE_OID.values())}"
             )
         point = seq.read_bit_string()
-        seq.finish()
-        raw = _decode_sec1_point(alg, point)
-        return PublicKey(alg.name, raw)
+        try:
+            seq.finish()
+            return PublicKey(alg.name, bytes(_decode_sec1_point(alg, point)))
+        finally:
+            _zero(point)
 
     alg = _BY_OID.get(oid)
     if alg is None:
@@ -1027,16 +1221,19 @@ def load_spki(data: Union[bytes, str]) -> PublicKey:
         )
     alg_id.finish()
     payload = seq.read_bit_string()
-    seq.finish()
-    if len(payload) != alg.public_bytes:
-        raise KeyFormatError(
-            f"{alg.name} public key must be {alg.public_bytes} bytes, got {len(payload)}"
-        )
-    _validate_pq_public(alg, payload)
-    return PublicKey(alg.name, payload)
+    try:
+        seq.finish()
+        if len(payload) != alg.public_bytes:
+            raise KeyFormatError(
+                f"{alg.name} public key must be {alg.public_bytes} bytes, got {len(payload)}"
+            )
+        _validate_pq_public(alg, payload)
+        return PublicKey(alg.name, bytes(payload))
+    finally:
+        _zero(payload)
 
 
-def _validate_pq_public(alg: _Alg, public: bytes) -> None:
+def _validate_pq_public(alg: _Alg, public: bytes | bytearray) -> None:
     """FIPS 203 §7.2 input validation for an imported ML-KEM encapsulation key.
 
     The EC curves have had import-time validation since this module was written,
@@ -1055,6 +1252,7 @@ def _validate_pq_public(alg: _Alg, public: bytes) -> None:
     """
     if alg.pq_family != "ml-kem":
         return
+    public = bytes(public)  # public material, whatever buffer it was sliced from
     if not _pb.native_ml_kem_pubkey_check(alg.pq_set, public):
         raise KeyFormatError(
             f"{alg.name} encapsulation key fails the FIPS 203 §7.2 modulus "
@@ -1065,7 +1263,7 @@ def _validate_pq_public(alg: _Alg, public: bytes) -> None:
         )
 
 
-def _decode_sec1_point(alg: _Alg, point: bytes) -> bytes:
+def _decode_sec1_point(alg: _Alg, point: bytes | bytearray) -> bytes:
     """Decode a SEC 1 point to AMA's ``X || Y`` form, validating it.
 
     Validation is not optional here. A public key that is not on the named
@@ -1073,7 +1271,11 @@ def _decode_sec1_point(alg: _Alg, point: bytes) -> bytes:
     weaker curve recovers the private scalar from the results. So every path
     out of this function has proved curve membership, non-identity, and that
     both coordinates are canonical field elements in ``[0, p)`` (INVARIANT-29).
+
+    A SEC 1 point is public, so it is taken as ``bytes`` here whatever buffer
+    it was sliced from (a ``bytearray`` work copy of the document).
     """
+    point = bytes(point)
     if not point:
         raise KeyFormatError("empty EC point")
     if point[0] == 0x00:
@@ -1153,8 +1355,31 @@ def conventional_include_public_key(algorithm: str) -> bool:
 _PQ_FORMATS = ("auto", "seed", "expandedKey", "both")
 
 
-def _encode_pq_private_key(key: PrivateKey, alg: _Alg, pq_format: str) -> bytes:
-    """The ML-DSA/ML-KEM private-key CHOICE (RFC 9881 §6)."""
+def _secret_buffer(value: bytes | bytearray | None) -> bytearray:
+    """The key's own ``bytearray``.
+
+    A ``PrivateKey`` adopts its secrets into one at construction, so anything
+    else means a field was replaced behind the dataclass's back.  Refused
+    rather than copied: a copy would be an immutable secret nothing can wipe.
+    """
+    if not isinstance(value, bytearray):
+        raise TypeError("a private key's secret octets are held in a bytearray")
+    return value
+
+
+def _key_secret(key: PrivateKey) -> Sec:
+    """The key's secret octets as a writer piece.  The piece holds the
+    *key*, not its buffer: the buffer is bound only while it is being copied
+    (see :mod:`ama_cryptography._secret_writer`)."""
+    return Sec(lambda: _secret_buffer(key.key))
+
+
+def _seed_secret(key: PrivateKey) -> Sec:
+    return Sec(lambda: _secret_buffer(key.seed))
+
+
+def _pq_private_key_piece(key: PrivateKey, alg: _Alg, pq_format: str) -> Piece:
+    """The ML-DSA/ML-KEM private-key CHOICE (RFC 9881 §6), as a writer piece."""
     if pq_format not in _PQ_FORMATS:
         raise KeyFormatError(
             f"unknown pq_format {pq_format!r}; expected one of {list(_PQ_FORMATS)}"
@@ -1168,59 +1393,71 @@ def _encode_pq_private_key(key: PrivateKey, alg: _Alg, pq_format: str) -> bytes:
             "(RFC 9881 §8.1). Use pq_format='expandedKey'."
         )
     if pq_format == "expandedKey":
-        return der_octet_string(key.key)
-    seed = key.seed
-    if seed is None:  # pragma: no cover - the guard above already returned
-        raise KeyFormatError(f"{alg.name} key has no seed")
+        return tlv(TAG_OCTET_STRING, _key_secret(key))
     if pq_format == "seed":
         # IMPLICIT [0] OCTET STRING: the tag replaces the OCTET STRING's own,
         # so the seed octets follow the header directly.
-        return der_tagged(0, seed, constructed=False)
-    return der_sequence(der_octet_string(seed), der_octet_string(key.key))
+        return tlv(0x80, _seed_secret(key))
+    return tlv(
+        TAG_SEQUENCE,
+        tlv(TAG_OCTET_STRING, _seed_secret(key)),
+        tlv(TAG_OCTET_STRING, _key_secret(key)),
+    )
 
 
-def _encode_pkcs8(key: PrivateKey, *, include_public_key: bool | None, pq_format: str) -> bytes:
+def _encode_pkcs8(
+    key: PrivateKey, *, include_public_key: bool | None, pq_format: str
+) -> ZeroizingBytearray:
     # FIPS 140-3 §4.9.2: a module in the error state must not output secret key
     # material.  This is the single choke point for private-key serialisation —
     # PrivateKey.to_pkcs8() and .to_pem() both route through here — so gating it
     # refuses PKCS#8 / PEM export of a secret key while POST has failed, rather
     # than emitting a full private-key PEM block from a faulted module.
     # Public-key and parse paths are deliberately not gated: they emit no
-    # secret material.
+    # secret material.  The check is the first statement, before anything is
+    # allocated.
     check_crypto_permitted()
     alg = _lookup(key.algorithm)
     if include_public_key is None:
         include_public_key = _CONVENTIONAL_PUBLIC[alg.kind]
 
-    extra: list[bytes] = []
+    # The structure is described as pieces and written once, into a buffer of
+    # exactly its size, with the secret copied buffer-to-buffer: no layer of
+    # the DER is ever an immutable `bytes` holding the key.  The public
+    # fragments are the ordinary `_asn1` encoders' output.
+    extra: list[Piece] = []
     version = _PKCS8_V1
+    inner: Piece
 
     if alg.kind == "ec":
         # RFC 5915 ECPrivateKey inside the privateKey OCTET STRING. The
         # curve lives in the outer AlgorithmIdentifier, so [0] parameters are
         # omitted here per RFC 5915 §3.
-        elements = [der_integer(1), der_octet_string(key.key)]
+        elements: list[Piece] = [Lit(der_integer(1)), tlv(TAG_OCTET_STRING, _key_secret(key))]
         if include_public_key:
             public = key.public_key or _derive_public(alg, key.key)
-            elements.append(der_tagged(1, der_bit_string(b"\x04" + public)))
-        inner = der_sequence(*elements)
+            elements.append(Lit(der_tagged(1, der_bit_string(b"\x04" + public))))
+        inner = tlv(TAG_SEQUENCE, *elements)
     else:
         if alg.kind == "okp":
             # RFC 8410 §7: CurvePrivateKey ::= OCTET STRING, wrapped again.
-            inner = der_octet_string(key.key)
+            inner = tlv(TAG_OCTET_STRING, _key_secret(key))
         else:
-            inner = _encode_pq_private_key(key, alg, pq_format)
+            inner = _pq_private_key_piece(key, alg, pq_format)
         if include_public_key:
             public = key.public_key or _derive_public(alg, key.key)
             # RFC 5958 [1] IMPLICIT publicKey, which bumps the version to v2.
-            extra = [der_tagged(1, b"\x00" + public, constructed=False)]
+            extra = [Lit(der_tagged(1, b"\x00" + public, constructed=False))]
             version = _PKCS8_V2
 
-    return der_sequence(
-        der_integer(version),
-        _algorithm_identifier(alg),
-        der_octet_string(inner),
-        *extra,
+    return build(
+        tlv(
+            TAG_SEQUENCE,
+            Lit(der_integer(version)),
+            Lit(_algorithm_identifier(alg)),
+            tlv(TAG_OCTET_STRING, inner),
+            *extra,
+        )
     )
 
 
@@ -1309,7 +1546,9 @@ def _read_pkcs8_trailer(seq: DerReader[Any], alg: _Alg, version: int) -> bytes |
     return outer_public
 
 
-def load_pkcs8(data: Union[bytes, str], *, verify_pq_consistency: bool | None = None) -> PrivateKey:
+def load_pkcs8(
+    data: Union[str, BytesLike], *, verify_pq_consistency: bool | None = None
+) -> PrivateKey:
     """Parse a PKCS#8 OneAsymmetricKey, in DER or strict PEM.
 
     The encrypted form (``EncryptedPrivateKeyInfo``) is not supported and is
@@ -1673,7 +1912,14 @@ def _expand_pq_seed(alg: _Alg, seed: bytes) -> tuple[bytes, bytes]:
     if alg.pq_family == "ml-dsa":
         public, secret = _pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
     else:
-        public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
+        # `d` and `z` are slices of the seed: for a `bytearray` seed, independent
+        # copies of it, zeroed here whichever way the expansion ends.
+        d, z = seed[:32], seed[32:]
+        try:
+            public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, d, z)
+        finally:
+            _zero(d)
+            _zero(z)
     return secret, public
 
 
@@ -1691,31 +1937,31 @@ def _check_public_matches(alg: _Alg, secret: SecretBytes, public: bytes) -> None
         )
 
 
-def _as_der(data: Union[bytes, str], label: str) -> bytearray:
+def _as_der(data: Union[str, BytesLike], label: str) -> bytearray:
     """The DER of ``data`` -- DER as given, or a strict PEM block -- in a
     ``bytearray`` the caller zeroes once parsed (for a private key, it is the
-    key)."""
+    key).
+
+    The caller's buffer is only ever read: the work happens on a copy made
+    here, which for a PEM is zeroed before this returns.  A PEM given as
+    bytes-like is scanned in place, so no ``str`` of it is ever made.
+    """
     if isinstance(data, str):
         return _decode_pem_der(data, label)[1]
     if isinstance(data, (bytes, bytearray, memoryview)):
-        raw = bytearray(data)
-        if raw[:5] == b"-----":
+        raw = _work_copy(data)
+        if raw.startswith(b"-----"):
             # A caller who read a key file in binary mode gets the same answer
-            # as one who read it as text. But `bytes.decode("ascii")` raises
-            # UnicodeDecodeError — a ValueError subclass, not a KeyFormatError —
-            # so a file that begins with a PEM header and then contains a
-            # non-ASCII octet escaped this layer entirely. Anything a caller
-            # cannot reasonably catch is a defect here, not an edge case: the
-            # whole point of a single error type is that `except KeyFormatError`
-            # is sufficient at the boundary. Found by
-            # fuzz/python/fuzz_key_formats.py.
+            # as one who read it as text.  Anything a caller cannot reasonably
+            # catch is a defect here, not an edge case: the whole point of a
+            # single error type is that `except KeyFormatError` is sufficient
+            # at the boundary (a non-ASCII octet in a PEM made by bytes once
+            # escaped as a UnicodeDecodeError; found by
+            # fuzz/python/fuzz_key_formats.py).
             try:
-                text = raw.decode("ascii", "strict")
-            except UnicodeDecodeError as exc:
-                raise KeyFormatError(f"PEM text must be ASCII (RFC 7468 §2): {exc}") from None
+                return _pem_scan(raw, label)[1]
             finally:
                 _zero(raw)
-            return _decode_pem_der(text, label)[1]
         return raw
     raise KeyFormatError(f"expected bytes or a PEM string, got {type(data).__name__}")
 
@@ -1724,10 +1970,11 @@ def _as_der(data: Union[bytes, str], label: str) -> bytearray:
 # JWK — RFC 7517 / 7518 / 8037 / 8812
 # ---------------------------------------------------------------------------
 def _b64u(data: bytes | bytearray) -> str:
-    """Unpadded Base64url (RFC 7515 §2) by the native constant-time codec.
-
-    For the private member ``d`` the characters are the key; the working
-    buffer is zeroed once the ``str`` the JWK carries has been made.
+    """Unpadded Base64url (RFC 7515 §2) by the native constant-time codec,
+    for the *public* members of a JWK (``x``, ``y``): the result is a ``str``,
+    which cannot be wiped, so a secret never goes through here -- the private
+    member ``d`` is written by :func:`private_key_to_jwk` straight into a
+    ``bytearray``.  The working buffer is zeroed once the ``str`` is made.
     """
     chars = _pb.native_base64_encode(data, _pb.BASE64_URL_UNPADDED)
     try:
@@ -1791,19 +2038,39 @@ def public_key_to_jwk(key: PublicKey) -> dict[str, Any]:
     }
 
 
-def private_key_to_jwk(key: PrivateKey) -> dict[str, Any]:
-    """Encode a private key as a JWK — includes the public members per RFC 7518."""
+def private_key_to_jwk(key: PrivateKey) -> bytearray:
+    """Encode a private key as a JWK -- includes the public members per RFC 7518.
+
+    The result is compact UTF-8 JSON in a ``bytearray``, members in the order
+    ``kty``, ``crv``, ``x``, (``y``), ``d``.  It is not a ``dict``: a JSON
+    string member is an immutable ``str``, so a ``dict`` carrying ``d`` holds
+    the private scalar where nothing can zero it.  The text is written once,
+    at its final size, with ``d`` copied from the native Base64url codec's
+    scratch buffer (zeroed on every exit) and no ``str`` of it ever made.
+    """
     # FIPS 140-3 §4.9.2: no secret-key output from a module in the error state.
     # The ``d`` member below is the private scalar.
     check_crypto_permitted()
     alg = _lookup(key.algorithm)
     _require_jwk_support(alg, "JWK")
-    jwk = public_key_to_jwk(key.public())
-    jwk["d"] = _b64u(key.key)
-    return jwk
+    # Public text: the object up to its closing brace.  `json.dumps` of the
+    # public dict is today's member order and escaping, so the bytes are
+    # unchanged by the move from a dict to text.
+    opening = json.dumps(public_key_to_jwk(key.public()), separators=(",", ":"))
+    chars = _pb.native_base64_encode(_secret_buffer(key.key), _pb.BASE64_URL_UNPADDED)
+    try:
+        return build(
+            cat(
+                Lit(opening[:-1].encode("ascii") + b',"d":"'),
+                Sec(lambda: chars),
+                Lit(b'"}'),
+            )
+        )
+    finally:
+        _zero(chars)
 
 
-def jwk_to_public_key(jwk: Union[dict[str, Any], str]) -> PublicKey:
+def jwk_to_public_key(jwk: Union[dict[str, Any], str, BytesLike]) -> PublicKey:
     """Parse a JWK public key, rejecting one that carries a private member."""
     obj = _load_jwk(jwk)
     if "d" in obj:
@@ -1812,8 +2079,17 @@ def jwk_to_public_key(jwk: Union[dict[str, Any], str]) -> PublicKey:
     return PublicKey(alg.name, _jwk_public_bytes(alg, obj, members))
 
 
-def jwk_to_private_key(jwk: Union[dict[str, Any], str]) -> PrivateKey:
-    """Parse a JWK private key."""
+def jwk_to_private_key(jwk: Union[dict[str, Any], str, BytesLike]) -> PrivateKey:
+    """Parse a JWK private key.
+
+    ``jwk`` is a mapping, JSON text, or the UTF-8 bytes a private key's
+    ``to_jwk()`` returns.  The decoded ``d`` is a ``bytearray`` the returned key
+    owns and wipes.  Parsing JSON text necessarily creates ``str`` copies of
+    the document and of ``d`` -- the standard library's parser builds one --
+    and there is no portable way to make or discard one without leaving an
+    immutable copy; those are outside what this library can wipe, and
+    documented as such (``docs/KEY_FORMATS.md``).
+    """
     obj = _load_jwk(jwk)
     if "d" not in obj:
         raise KeyFormatError("JWK has no private key member 'd'")
@@ -1847,15 +2123,20 @@ def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return seen
 
 
-def _load_jwk(jwk: Union[dict[str, Any], str]) -> dict[str, Any]:
+def _load_jwk(jwk: Union[dict[str, Any], str, BytesLike]) -> dict[str, Any]:
     if isinstance(jwk, (bytes, bytearray, memoryview)):
         # json.loads accepts bytes, but only UTF-8/16/32; anything else raises
         # UnicodeDecodeError, which is not in this module's contract. Decode
-        # here so the failure is a KeyFormatError like every other one.
+        # here so the failure is a KeyFormatError like every other one.  The
+        # decode is from one work copy that is zeroed straight after, so the
+        # library's own octet copy of a private JWK does not outlive it.
+        work = _work_copy(jwk)
         try:
-            jwk = bytes(jwk).decode("utf-8")
+            jwk = work.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise KeyFormatError(f"JWK is not valid UTF-8: {exc}") from None
+        finally:
+            _zero(work)
     if isinstance(jwk, str):
         try:
             obj = json.loads(jwk, object_pairs_hook=_reject_duplicate_members)
@@ -1949,7 +2230,9 @@ def _validate_ec_public(alg: _Alg, public: bytes) -> None:
         raise KeyFormatError(f"{alg.name} public key is not a valid curve point")
 
 
-def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256") -> bytes:
+def jwk_thumbprint(
+    jwk: Union[dict[str, Any], str, BytesLike], *, hash_name: str = "sha256"
+) -> bytes:
     """RFC 7638 JWK thumbprint.
 
     Built from the required members only, in lexicographic order, with no
@@ -2035,32 +2318,50 @@ def public_key_to_cose(key: PublicKey) -> bytes:
     )
 
 
-def private_key_to_cose(key: PrivateKey) -> bytes:
-    """Encode a private key as a COSE_Key with the ``d`` (-4) member."""
+def private_key_to_cose(key: PrivateKey) -> bytearray:
+    """Encode a private key as a COSE_Key with the ``d`` (-4) member.
+
+    Deterministic CBOR (RFC 8949 §4.2.1), in a ``bytearray``.  The public
+    members are encoded as before; ``d`` is a byte-string head followed by the
+    key's own octets, copied buffer to buffer -- never routed through
+    :func:`cbor_encode_canonical`, whose ``bytes(value)`` is an immutable copy.
+    """
     # FIPS 140-3 §4.9.2: no secret-key output from a module in the error state.
     # The ``d`` (-4) member below is the private scalar.
     check_crypto_permitted()
     alg = _lookup(key.algorithm)
     _require_jwk_support(alg, "COSE")
-    decoded = cbor_decode_canonical(public_key_to_cose(key.public()))
-    decoded[_COSE_LBL_D] = key.key
-    return cbor_encode_canonical(decoded)
+    public = cbor_decode_canonical(public_key_to_cose(key.public()))
+    members: list[tuple[bytes, Piece]] = [
+        (cbor_encode_canonical(label), Lit(cbor_encode_canonical(value)))
+        for label, value in public.items()
+    ]
+    members.append((cbor_encode_canonical(_COSE_LBL_D), cbor_bytes(_key_secret(key))))
+    return build(cbor_map(members))
 
 
-def cose_to_public_key(data: bytes) -> PublicKey:
-    """Parse a COSE_Key public key, rejecting one that carries ``d``."""
+def cose_to_public_key(data: BytesLike) -> PublicKey:
+    """Parse a COSE_Key public key, rejecting one that carries ``d``.
+
+    A caller can hand this a private COSE_Key by mistake.  It is decoded from
+    a ``bytearray`` work copy and every byte string sliced from it -- ``d``
+    among them -- is zeroed whichever way the call ends.
+    """
     obj = _load_cose(data)
-    if _COSE_LBL_D in obj:
-        raise KeyFormatError(
-            "this COSE_Key carries a private key member (-4); use cose_to_private_key"
-        )
-    alg = _cose_algorithm(obj)
-    return PublicKey(alg.name, _cose_public_bytes(alg, obj))
+    try:
+        if _COSE_LBL_D in obj:
+            raise KeyFormatError(
+                "this COSE_Key carries a private key member (-4); use cose_to_private_key"
+            )
+        alg = _cose_algorithm(obj)
+        return PublicKey(alg.name, _cose_public_bytes(alg, obj))
+    finally:
+        scrub_decoded(obj)
 
 
-def cose_to_private_key(data: bytes) -> PrivateKey:
+def cose_to_private_key(data: BytesLike) -> PrivateKey:
     """Parse a COSE_Key private key."""
-    obj = _load_cose(data, wipeable=True)
+    obj = _load_cose(data)
     # Every byte string in `obj` is a bytearray slice; `d` is the secret.  It
     # is zeroed if anything below refuses it, and adopted by the key if not.
     with _ScrubOnRaise() as held:
@@ -2080,19 +2381,18 @@ def cose_to_private_key(data: bytes) -> PrivateKey:
         return PrivateKey(alg.name, secret, public)
 
 
-def _load_cose(data: bytes, *, wipeable: bool = False) -> dict[Any, Any]:
+def _load_cose(data: BytesLike) -> dict[Any, Any]:
     # A COSE_Key is octets, not text. `_asn1`'s reader slices and compares the
     # buffer directly, so a `str` argument reaches it and fails with a TypeError
     # from inside the CBOR head parser — outside this module's contract. Same
     # guard, and the same reason, as `_as_der`'s.
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise KeyFormatError(f"a COSE_Key must be bytes, got {type(data).__name__}")
-    if not wipeable:
-        return _cose_map(bytes(data))
-    # A private COSE_Key: decode from a bytearray copy, so its byte strings --
-    # ``d`` among them -- come back as independent bytearray slices the caller
-    # can zero, and zero the copy itself here, whatever the decode decided.
-    buf = bytearray(data)
+    # Decoded from a bytearray copy, so every byte string -- a private
+    # COSE_Key's ``d`` among them -- comes back as an independent bytearray
+    # slice the caller can zero, and the copy itself is zeroed here, whatever
+    # the decode decided.  The caller's buffer is only read.
+    buf = _work_copy(data)
     try:
         return _cose_map(buf)
     finally:

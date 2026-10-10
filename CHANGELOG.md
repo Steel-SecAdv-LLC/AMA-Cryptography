@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-08 |
+| Last Updated | 2026-10-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -33,6 +33,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### Private-key exports return wipeable buffers -- 2026-10-10
+
+**BREAKING:** `PrivateKey.to_pkcs8()`, `to_pem()`, `to_jwk()`, `to_cose()`, `private_key_to_jwk()`, `private_key_to_cose()` and `encode_pem()` return a `ZeroizingBytearray` (was `bytes`, `str`, `dict`); `decode_pem()` returns `(label, bytearray)`. A `bytes`, `str` or `dict` cannot be zeroed (INVARIANT-6); the buffer is built once with no immutable copy of the key and wipes itself when collected. Migrate with `write_bytes`, `json.loads(key.to_jwk())` and `startswith(b"...")`; loaders are unchanged.
+Exports cost 1.4x to 2.4x the instructions, tens of microseconds (P-256 `to_pkcs8` 176,488 -> 307,293 per call, Intel Xeon 2.80 GHz, gcc 13.3.0 Release). Copies you make from the result, and an asynchronous exception between the native Base64 codec returning and binding its buffer, stay outside the guarantee.
 
 ### Review round on `8f61a789`: an out-of-band verifier blind below the top level, secrets dropped on refused imports — 2026-10-08
 

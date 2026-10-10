@@ -69,20 +69,110 @@ def _as_wipeable(value: Any) -> Any:
     return value
 
 
+#: The octets a wipe copies over a secret, in one run no longer than
+#: ``_ZERO_RUN``: a pre-built read-only ``memoryview`` of zeros.  Assigning a
+#: slice of it into a ``memoryview`` of the secret copies octets once and
+#: allocates nothing the size of the secret -- ``bytes(len(value))``, which this
+#: replaced, made a key-sized all-zero object for every wipe, so a wipe running
+#: under the very memory pressure that aborted an export could itself fail with
+#: ``MemoryError`` and leave the secret in place.
+_ZERO_RUN = 4096
+_ZEROS = memoryview(bytes(_ZERO_RUN))
+
+
 def zeroize(value: Any) -> None:
     """Zero ``value`` in place: a ``bytearray``, or a list of them.
 
     Anything else -- ``bytes``, ``None`` -- is immutable or empty and is left
     alone, so this can sit in a ``finally`` over a value of either kind.
+
+    Allocates nothing proportional to ``len(value)``: the zeros come from a
+    fixed run, copied over the secret one run at a time.
     """
     if isinstance(value, bytearray):
-        memoryview(value)[:] = bytes(len(value))
+        size = len(value)
+        target = memoryview(value)
+        try:
+            if size <= _ZERO_RUN:  # one run: the common case, without the loop
+                target[:] = _ZEROS[:size]
+            else:
+                for start in range(0, size, _ZERO_RUN):
+                    stop = min(start + _ZERO_RUN, size)
+                    target[start:stop] = _ZEROS[: stop - start]
+        finally:
+            target.release()
     elif isinstance(value, list):
         for item in value:
             zeroize(item)
 
 
 _zero = zeroize
+
+
+class ZeroizingBytearray(bytearray):
+    """A ``bytearray`` that zeroes its own contents when it is collected.
+
+    What the library returns where it mints a secret in a *serialised* form --
+    a private key's PKCS#8, PEM, JWK and COSE_Key encodings -- and the caller
+    has no container to hold it in.  It is a ``bytearray`` in every way that
+    matters to a consumer (``isinstance(x, bytearray)``, the buffer protocol,
+    ``==`` against ``bytes``, slicing, ``bytes(x)``, ``Path.write_bytes``), and
+    differs in four, each of them a way a secret leaks by accident:
+
+    * **Collection zeroes it.**  ``__del__`` runs only when the reference
+      count reaches zero -- a live ``memoryview`` or ctypes export keeps the
+      object alive, so it is never zeroed under a holder -- which is why no
+      last-owner test is needed here (contrast :func:`_wipe_if_last_owner`,
+      whose container shares its buffer).  ``Path.write_bytes(key.to_pem())``
+      therefore no longer frees an unwiped temporary.
+    * **``repr`` and ``str`` print the length, never the content.**  CPython's
+      ``bytearray.__str__`` calls the C repr directly, so ``__repr__`` alone
+      would still leak through ``str(x)``, ``f"{x}"`` and ``"%s" % x``.
+    * **No implicit copies.**  ``pickle``, ``copy.copy`` and ``copy.deepcopy``
+      raise ``TypeError``: each would mint a second buffer nothing wipes.
+    * Equality is ``bytearray`` equality (``memcmp``, not constant time), and
+      it stays unhashable.  Compare secrets with
+      :func:`ama_cryptography.secure_memory.constant_time_compare`.
+
+    What it cannot do, stated so the type is not read as a guarantee it does
+    not make: a *derived* object is a plain ``bytearray`` -- ``x[:n]``,
+    ``x.copy()``, ``x + y``, ``bytearray(x)`` -- and so is every ``bytes`` and
+    ``str`` made from it (``bytes(x)``, ``x.decode()``, ``json.loads``).  Those
+    copies are the caller's, and outside what the library can wipe.  Growing
+    the buffer (``extend``, ``+=``, ``append``) can move it and strand the old
+    block unwiped; the library never does, and callers should not.
+    """
+
+    __slots__ = ()
+
+    def __del__(self) -> None:
+        # Never raises: a failure is recorded where it can be observed
+        # (INVARIANT-3, as `finalize_secret` does).  `_zero` is a module
+        # global, so at interpreter shutdown it can already be None; the
+        # TypeError that causes lands here, and `record_finalizer_error` is
+        # itself shutdown-safe.
+        try:
+            _zero(self)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise
+            record_finalizer_error("ZeroizingBytearray", f"wipe() failed: {exc}")
+
+    def __repr__(self) -> str:
+        return f"ZeroizingBytearray(<{len(self)} octets redacted>)"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def __reduce__(self) -> Any:
+        raise TypeError("a ZeroizingBytearray holds a secret and is not pickled or copied")
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a ZeroizingBytearray holds a secret and is not pickled or copied")
+
+    def __copy__(self) -> Any:
+        raise TypeError("a ZeroizingBytearray holds a secret and is not pickled or copied")
+
+    def __deepcopy__(self, memo: Any) -> Any:
+        raise TypeError("a ZeroizingBytearray holds a secret and is not pickled or copied")
 
 
 def _refs_in_dict(namespace: Dict[str, Any], name: str) -> int:

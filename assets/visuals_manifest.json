@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1159,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4026,
-      "PQC Backends\n& Integration": 805,
+      "Other": 4094,
+      "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 277,
-    "total_tests": 7020,
+    "n_files": 283,
+    "total_tests": 7111,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -130,6 +130,9 @@
       "test_precommit_mypy_scope.py",
       "test_precommit_verbatim_bytes.py",
       "test_preload_native_digest.py",
+      "test_private_key_export.py",
+      "test_private_key_process_residue.py",
+      "test_private_key_structural.py",
       "test_property_based_crypto.py",
       "test_public_api_export_declarations.py",
       "test_published_benchmark_artefacts_are_current.py",
@@ -158,6 +161,7 @@
       "test_secret_scan_config.py",
       "test_secret_scanner.py",
       "test_secret_wipeability.py",
+      "test_secret_writer.py",
       "test_secure_wipe_byte_length.py",
       "test_selector_strictness.py",
       "test_semgrep_severity_gate.py",
@@ -193,7 +197,8 @@
       "test_wycheproof_gate.py",
       "test_wycheproof_vector_embedding.py",
       "test_x25519_canonical_u.py",
-      "test_x25519_dispatch_policy.py"
+      "test_x25519_dispatch_policy.py",
+      "test_zeroizing_bytearray.py"
     ]
   },
   "version": "5.0.0"

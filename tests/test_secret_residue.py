@@ -43,7 +43,7 @@ def test_no_operation_leaves_a_live_copy_of_its_secret() -> None:
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     rows = json.loads(proc.stdout)
-    assert len(rows) >= 13, "the inventory shrank"
+    assert len(rows) >= 17, "the inventory shrank"
     leaking = {row["operation"]: row["copies"] for row in rows if row["copies"]}
     assert not leaking, f"live copies of a secret survived the wipe: {leaking}"
 

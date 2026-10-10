@@ -105,7 +105,7 @@ LAST_PINNED_GLANCE_ROW = 23
 #: exactly once, so the row can follow the newest entry while
 #: :data:`BASE_CHANGELOG_SHA256` stays the hash of the pre-relocation file.
 #: A stamp that moves without moving this row fails the exactly-once check.
-PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-08 |"),)
+PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-10 |"),)
 
 
 _GLANCE_ROW_RE = re.compile(r"^\| (\d+) \| .*\n", re.M)

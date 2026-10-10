@@ -28,6 +28,7 @@ import ctypes
 import dataclasses
 import gc
 import importlib
+import json
 import sys
 from typing import Any, Callable, ClassVar
 
@@ -212,6 +213,16 @@ _SECRET_OUTPUTS: dict[str, Callable[[], Any]] = {
     "frost dealt share": lambda: pb.frost_keygen_trusted_dealer(2, 3)[1][0],
     "secure_token_bytearray": lambda: ms.secure_token_bytearray(32),
     "ascon.generate_key": lambda: importlib.import_module("ama_cryptography.ascon").generate_key(),
+    "PrivateKey.to_pkcs8": lambda: _p256()[1].to_pkcs8(),
+    "PrivateKey.to_pem": lambda: _p256()[1].to_pem(),
+    "PrivateKey.to_jwk": lambda: _p256()[1].to_jwk(),
+    "PrivateKey.to_cose": lambda: _p256()[1].to_cose(),
+    "private_key_to_jwk": lambda: kf.private_key_to_jwk(_p256()[1]),
+    "private_key_to_cose": lambda: kf.private_key_to_cose(_p256()[1]),
+    "encode_pem": lambda: kf.encode_pem(b"\x30\x03\x02\x01\x01", "PRIVATE KEY"),
+    "decode_pem": lambda: kf.decode_pem(
+        kf.encode_pem(b"\x30\x03\x02\x01\x01", "PRIVATE KEY"), "PRIVATE KEY"
+    )[1],
 }
 
 
@@ -434,51 +445,20 @@ def test_a_key_whose_test_could_not_run_is_zeroed_too() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The PEM body regex classifies no secret character through a table
+# The PEM body is scanned, not matched: no table indexed by a secret character
 # ---------------------------------------------------------------------------
 
 
-def _parser() -> Any:
-    # re._parser from 3.11; sre_parse (deprecated there) before it.
-    name = "re._parser" if sys.version_info >= (3, 11) else "sre_parse"
-    return importlib.import_module(name)
-
-
-def _character_sets(node: Any) -> list[list[Any]]:
-    """Every IN (character set) under a parsed subpattern."""
-    found: list[list[Any]] = []
-    for op, arg in node:
-        name = str(op)
-        if name == "IN":
-            found.append(arg)
-        elif name in ("SUBPATTERN",):
-            found.extend(_character_sets(arg[-1]))
-        elif name in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"):
-            found.extend(_character_sets(arg[2]))
-        elif name == "BRANCH":
-            for alternative in arg[1]:
-                found.extend(_character_sets(alternative))
-    return found
-
-
-def test_the_pem_body_is_matched_without_a_character_class_table() -> None:
-    """PIN.  The regex engine compiles a set of more than two runs to a
-    256-bit bitmap indexed by each character -- for a private-key PEM, by the
-    key.  The body set must be a negation of at most two literals, which
-    compiles to equality tests.  Restoring ``[A-Za-z0-9+/=]`` fails this."""
-    parsed = _parser().parse(kf._PEM_RE.pattern)
-    body_group = parsed.state.groupdict["body"]
-    body = None
-    for op, arg in parsed:
-        if str(op) == "SUBPATTERN" and arg[0] == body_group:
-            body = arg[-1]
-    assert body is not None, "no body group in the PEM pattern"
-    sets = _character_sets(body)
-    assert sets, "the body matches no character set at all"
-    for items in sets:
-        kinds = [str(op) for op, _ in items]
-        assert set(kinds) <= {"NEGATE", "LITERAL"}, kinds
-        assert kinds.count("LITERAL") <= 2, kinds
+def test_the_pem_block_is_scanned_without_a_regular_expression() -> None:
+    """PIN.  A regex engine compiles a set of more than two runs to a 256-bit
+    bitmap indexed by each character -- for a private-key PEM, by the key
+    (INVARIANT-12 rule 4) -- and ``re.Match.group`` on a ``bytearray`` subject
+    returns ``bytes``.  The block is now scanned by index in a ``bytearray``
+    (``tests/test_private_key_export.py`` pins the scanner's calls); the
+    module holds no ``re`` and no compiled PEM pattern.  Reintroducing either
+    fails this."""
+    assert "re" not in vars(kf), "key_formats imports re again"
+    assert not hasattr(kf, "_PEM_RE"), "a compiled PEM pattern is back"
 
 
 def test_crlf_pem_is_still_accepted() -> None:
@@ -532,7 +512,7 @@ def test_an_unknown_variant_is_refused() -> None:
 
 def test_a_pem_with_a_space_in_its_body_is_refused() -> None:
     public, _ = _p256()
-    pem = kf.encode_pem(public.to_spki(), "PUBLIC KEY")
+    pem = kf.encode_pem(public.to_spki(), "PUBLIC KEY").decode("ascii")
     lines = pem.split("\n")
     lines[1] = lines[1][:10] + " " + lines[1][11:]
     with pytest.raises(KeyFormatError, match="base64"):
@@ -853,7 +833,7 @@ def test_a_refused_jwk_zeroes_its_decoded_d(zeroed_values: list[bytes]) -> None:
     """PIN.  ``d`` decodes into a fresh bytearray; ``x``/``y`` name another
     key.  Removing ``held(...)`` from ``jwk_to_private_key`` fails this."""
     a, b = _two_p256()
-    jwk = kf.private_key_to_jwk(a)
+    jwk = json.loads(kf.private_key_to_jwk(a))
     jwk.update({k: v for k, v in kf.public_key_to_jwk(b.public()).items() if k in "xy"})
     with pytest.raises(KeyFormatError, match="inconsistent"):
         kf.jwk_to_private_key(jwk)
@@ -2015,7 +1995,6 @@ def test_a_key_store_holds_the_kdf_output_itself(
     """PIN per row.  The store wrapped the KDF's wipeable output in a second
     ``bytearray``, keeping a copy and dropping the original unwiped.
     Restoring the wrap fails its row."""
-    import json
     import warnings
 
     km = importlib.import_module("ama_cryptography.key_management")

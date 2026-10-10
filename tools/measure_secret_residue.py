@@ -39,7 +39,11 @@ What it measures, and what it does not
   in that class before it scans.  So a zero here says no copy is *reachable*;
   it does not say none was ever *made*.  That half is held by construction
   (``_take_secret``, ``_borrow`` and the ``bytearray`` contracts) and by code
-  review, not by this instrument.
+  review, not by this instrument.  That is a limit of an *in-process* scan: a
+  scan from a second process, of a child that allocates nothing between a free
+  and the scan, does see a freed unwiped copy, as a differential against the
+  count with the key live.  ``tests/test_private_key_process_residue.py`` pins
+  the private-key exports that way (Linux, CPython).
 * Linux only (``/proc/self/mem``).
 
 This is a measurement instrument producing an inventory, not a gate with an
@@ -61,7 +65,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -237,6 +241,62 @@ def _ed25519_keypair() -> bytearray:
     return secret
 
 
+def _p256_private_key() -> Any:
+    import ama_cryptography.key_formats as kf
+    import ama_cryptography.pqc_backends as pb
+
+    public, secret = pb.native_nistp_keypair("P-256")
+    return kf.PrivateKey("P-256", secret, public)
+
+
+def _live_copy_of_the_scalar(key: Any, *held: Any) -> bytearray:
+    """The key's scalar as the secret to look for; the key and everything the
+    operation held are wiped first, so what the scan finds is what the
+    operation left behind.  These rows are LIVE-copy checks: a freed copy is not
+    reliably visible (see the module docstring), and the scratch-buffer
+    guarantees of the private-key encodings are pinned by captured buffers in
+    ``tests/test_private_key_export.py``, not by this instrument."""
+    scalar = bytearray(key.key)
+    key.wipe()
+    for buffer in held:
+        memoryview(buffer)[:] = bytes(len(buffer))
+    return scalar
+
+
+def _export_pkcs8() -> bytearray:
+    key = _p256_private_key()
+    der = key.to_pkcs8()
+    return _live_copy_of_the_scalar(key, der)
+
+
+def _export_cose() -> bytearray:
+    key = _p256_private_key()
+    cose = key.to_cose()
+    return _live_copy_of_the_scalar(key, cose)
+
+
+def _import_pkcs8_from_pem() -> bytearray:
+    import ama_cryptography.key_formats as kf
+
+    key = _p256_private_key()
+    pem = key.to_pem()
+    loaded = kf.load_pkcs8(pem)
+    scalar = _live_copy_of_the_scalar(key, pem)
+    loaded.wipe()
+    return scalar
+
+
+def _import_cose() -> bytearray:
+    import ama_cryptography.key_formats as kf
+
+    key = _p256_private_key()
+    cose = key.to_cose()
+    loaded = kf.cose_to_private_key(cose)
+    scalar = _live_copy_of_the_scalar(key, cose)
+    loaded.wipe()
+    return scalar
+
+
 def _hybrid_kem_decapsulate() -> bytearray:
     from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -269,6 +329,10 @@ OPERATIONS: dict[str, Callable[[], bytearray]] = {
     "native_ed25519_keypair": _ed25519_keypair,
     "hybrid KEM decapsulate": _hybrid_kem_decapsulate,
     "frost_keygen_trusted_dealer share": _frost_dealt_share,
+    "PrivateKey.to_pkcs8 (P-256)": _export_pkcs8,
+    "PrivateKey.to_cose (P-256)": _export_cose,
+    "load_pkcs8 (PEM bytearray, P-256)": _import_pkcs8_from_pem,
+    "cose_to_private_key (P-256)": _import_cose,
 }
 
 
