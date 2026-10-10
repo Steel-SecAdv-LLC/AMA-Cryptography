@@ -24,6 +24,15 @@
         # Low).
         ama_ascon_permutation_for_test;
 
+        # Test observers of the repeated-output check (src/c/ama_rng_repeat.c),
+        # compiled only under AMA_TESTING_MODE.  A baseline observer or reset
+        # in the shipped ABI would read or blind process-wide RNG state.
+        ama_rng_repeat_baseline_for_test;
+        ama_rng_repeat_reset_for_test;
+        ama_rng_repeat_lock_busy_for_test;
+        ama_rng_repeat_compare_for_test;
+        ama_rng_repeat_instrument_probe_for_test;
+
         # FIPS 205 §9 internal interface (slh_sign_internal /
         # slh_verify_internal).  §9 says these shall not be exposed to
         # applications other than for testing, and while

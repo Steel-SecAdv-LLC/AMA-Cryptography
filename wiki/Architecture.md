@@ -226,6 +226,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 | `ama_consttime.c` | Constant-time operations | — |
 | `ama_core.c` | Context management, CSPRNG | — |
 | `ama_platform_rand.c` | Platform-native CSPRNG | — |
+| `ama_rng_repeat.c` | Repeated-output check on the OS CSPRNG (not a FIPS 140-3 health test) | — |
 
 ---
 

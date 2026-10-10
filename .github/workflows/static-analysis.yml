@@ -777,15 +777,20 @@ jobs:
       # (nistp_mulx_gate, src/c/ama_nistp.c) sat under this green lane.
       # tests/c/test_concurrent_init.c is what the lane observes; if it stops
       # running, the lane is decorative again and must fail rather than pass.
+      # tests/c/test_rng_repeat_concurrent.c is the second: eight threads on the
+      # repeated-output check's baseline lock (src/c/ama_rng_repeat.c).
+      # tests/test_rng_repeat_c_contract.py pins this step.
       - name: Assert the lane had concurrency to observe
         run: |
           cd build-tsan
-          if ! ctest -N | grep -q 'Test *#[0-9]*: *test_concurrent_init'; then
-            echo "::error::test_concurrent_init is not registered — the TSan lane"
-            echo "::error::has no concurrent test to observe and cannot fail on a race."
-            exit 1
-          fi
-          echo "OK  test_concurrent_init is registered; the lane is non-vacuous"
+          for name in test_concurrent_init test_rng_repeat_concurrent; do
+            if ! ctest -N | grep -q "Test *#[0-9]*: *${name}\$"; then
+              echo "::error::${name} is not registered — the TSan lane"
+              echo "::error::has no concurrent test to observe and cannot fail on a race."
+              exit 1
+            fi
+            echo "OK  ${name} is registered; the lane is non-vacuous"
+          done
 
   valgrind-memcheck:
     name: Valgrind memcheck (defense-in-depth)

@@ -240,7 +240,8 @@ instruction count and was reported by the taint gate at the jump.
 `--taint` drivers exist for `x25519`, `x25519-batch`, `ed25519-sign`,
 `ed25519-sign-expanded`, `ed25519-sign-sse2fold`, `secp256k1-scalarmult`,
 `ecdsa`, `nistp-ecdsa`, `kyber-decaps`, `consttime`, `ghash`, `ascon-encrypt`,
-`agent-binding`, `slhdsa-sign`, `base64`, `secp256k1-seckey` and `aead-verify`.
+`agent-binding`, `slhdsa-sign`, `base64`, `secp256k1-seckey`,
+`rng-repeat`, and `aead-verify`.
 `slhdsa-sign` is the one target with a taint driver and no instruction-count
 driver: SLH-DSA signing does different work per key by construction (the
 WOTS+ chain lengths are digits of values derived from SK.seed), so a count

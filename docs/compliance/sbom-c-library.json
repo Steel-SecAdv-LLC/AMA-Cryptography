@@ -170,6 +170,14 @@
     },
     {
       "type": "library",
+      "name": "ama_rng_repeat",
+      "version": "5.0.0",
+      "description": "Repeated-output check on the OS CSPRNG draw (ama_random_bytes_repeat_checked); defence in depth, not a FIPS 140-3 health test",
+      "scope": "required",
+      "purl": "pkg:generic/ama_rng_repeat@5.0.0"
+    },
+    {
+      "type": "library",
       "name": "ama_secp256k1",
       "version": "5.0.0",
       "description": "secp256k1 elliptic curve operations",

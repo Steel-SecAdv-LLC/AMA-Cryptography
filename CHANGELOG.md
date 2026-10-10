@@ -34,6 +34,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Repeat-checked CSPRNG draw in C -- 2026-10-10
+
+New `src/c/ama_rng_repeat.c` exports `ama_random_bytes_repeat_checked(buf, len)`, which draws like `ama_random_bytes` and refuses the draw (`AMA_ERROR_RNG_REPEAT = -10`, buffer zeroed) if a 32-byte window of it repeats the previous draw's, and `ama_rng_repeat_check(window)`, the comparison alone. Additive ABI (the code is appended after -9); the Python layer is not yet bound to either.
+It is a stuck-source check, not a FIPS 140-3 health test: one process-wide SHA-256 baseline, the first call unchecked, nothing latches, consecutive windows only. Compare and store are one critical section under a static lock, with `pthread_atfork` handlers so a forked child cannot inherit it held; a lock or registration failure refuses the draw.
+The AArch64 shared object registers through `__register_atfork` because glibc's `pthread_atfork` stub would strip its BTI/PAC property. The `rng-repeat` constant-time target is 0/0 in count and taint on gcc 13.3 and clang 18 (5,639,112 Ir per run, gcc 13.3.0 Release, x86-64 without SHA-NI); `tests/c/test_rng_repeat*.c` fail when any guard is removed.
+
 ### Signing path: no unwiped copies of the signing key or the derived keys -- 2026-10-10
 
 **BREAKING:** the `KeyPair` in a `create_crypto_package` result holds its own copy of a supplied `signing_keypair` secret key, so `result.wipe()` no longer zeroes the caller's key; `CryptoPackageConfig` gains `wipe()`, zeroes its cached seed expansion on collection, keeps `signing_keypair` out of `repr` and compares it in constant time (as `SecureSession` now does for its session keys).

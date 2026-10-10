@@ -701,6 +701,11 @@ new NIST or IETF algorithm, and none extends the §3.1 verdict table.
 - `ama_random_bytes` in `src/c/ama_platform_rand.c` — the public form of the
   OS CSPRNG draw, which zeroes the buffer on any failure. It is the source
   §4.5 describes; it is not an SP 800-90A DRBG.
+- `ama_random_bytes_repeat_checked` / `ama_rng_repeat_check` in
+  `src/c/ama_rng_repeat.c` — the §4.5 repeated-output check in C, fused with
+  the draw: a draw whose 32-byte window repeats the previous one is refused
+  (`AMA_ERROR_RNG_REPEAT`). Defence in depth, **not** a FIPS 140-3 RNG health
+  test; the header lists what it does not provide.
 - `ama_secp256k1_seckey_verify` / `ama_secp256k1_seckey_tweak_add` in
   `src/c/ama_secp256k1.c` — the BIP32 child-key scalar step on the existing
   constant-time mod-n arithmetic (`secp256k1-seckey` target of the same gate).

@@ -78,6 +78,11 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
     ("ama_pbkdf2", "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)"),
     ("ama_platform_rand", "OS CSPRNG draw, zeroed on failure (ama_random_bytes)"),
+    (
+        "ama_rng_repeat",
+        "Repeated-output check on the OS CSPRNG draw (ama_random_bytes_repeat_checked); "
+        "defence in depth, not a FIPS 140-3 health test",
+    ),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_sha3", "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)"),
     ("ama_sha512", "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)"),

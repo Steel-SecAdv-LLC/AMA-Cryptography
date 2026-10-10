@@ -146,6 +146,7 @@ Core primitives:
 - `src/c/ama_sha256.c`, `src/c/ama_sha256_ni.c` - SHA-256 (FIPS 180-4), scalar and the x86 SHA-NI kernel selected on CPUID
 - `src/c/ama_hmac_sha256.c`, `src/c/ama_hmac_sha384.c`, `src/c/ama_sha512.c`, `src/c/ama_pbkdf2.c` - HMAC-SHA-256/384, SHA-384/512 one-shots, PBKDF2 (SP 800-132)
 - `src/c/ama_platform_rand.c` - Platform-native CSPRNG
+- `src/c/ama_rng_repeat.c` - Repeated-output check on the OS CSPRNG, fused with the draw (defence in depth; not a FIPS 140-3 health test)
 - `src/c/ama_hkdf.c` - HKDF with HMAC-SHA3-256 (RFC 5869)
 - `src/c/ama_consttime.c` - Constant-time utilities (memcmp, memzero, swap, lookup, copy)
 - `src/c/internal/ama_sha2.h` - header-only SHA-512/384 core and HMAC shared by Ed25519, FROST, SLH-DSA, HKDF, HMAC-SHA-384, SHA-512 and PBKDF2
@@ -781,7 +782,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | `--cov` floor 75% (`pyproject.toml`) | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 96 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
+| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 103 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | Adversarial and residue tests | `test_crypto_core_penetration.py`, `test_memory_security.py`, `tests/c/test_csprng_failure_residue.c`, `tests/c/test_slhdsa_fault_residue.c` |
@@ -790,7 +791,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
 | Wycheproof | Adversarial vectors | 15 vendored corpora | `wycheproof_vectors/run_wycheproof.py` |
 
-**Total:** 7,230 Python test functions across 288 test files, plus the
+**Total:** 7,252 Python test functions across 289 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the set of C tests depends on `AMA_USE_NATIVE_PQC`, `AMA_AES_CONSTTIME`, the ISA

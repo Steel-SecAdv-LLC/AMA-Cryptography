@@ -147,6 +147,11 @@ FAMILY_REGISTRY_TOKENS: dict[str, str | tuple[str, ...] | None] = {
     # getentropy, BCryptGenRandom): an interface, not an approved DRBG, which
     # CSRC_STANDARDS.md section 3 states.
     "random": None,
+    # ama_rng_repeat_check: the repeated-output check on that same OS CSPRNG
+    # (src/c/ama_rng_repeat.c).  A defence-in-depth comparison of two SHA-256
+    # digests, not an algorithm and not a FIPS 140-3 health test
+    # (docs/compliance/CSRC_ALIGN_REPORT.md section 4.5).
+    "rng": None,
     # RFC 4648 Base64 / Base64url: an encoding, not a cryptographic algorithm.
     # Native so private-key PEM and JWK bodies are encoded in constant time.
     "base64": None,

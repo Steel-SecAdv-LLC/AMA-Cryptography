@@ -95,7 +95,11 @@ typedef enum {
      *   "AGENT-INSTANCE BINDING" below).  Distinct from
      *   AMA_ERROR_INVALID_PARAM: the arguments were well-formed, the
      *   *policy* said no. */
-    AMA_ERROR_ETHICAL_BINDING = -9
+    AMA_ERROR_ETHICAL_BINDING = -9,
+    /**< A draw repeated the previous draw's 32-byte window and was refused
+     *   (ama_random_bytes_repeat_checked, ama_rng_repeat_check).  Appended
+     *   after -9, so no existing value moves. */
+    AMA_ERROR_RNG_REPEAT = -10
 } ama_error_t;
 
 /* ============================================================================
@@ -437,6 +441,80 @@ AMA_API void ama_secure_memzero(void* ptr, size_t len);
  *         AMA_ERROR_CRYPTO if the OS source fails (buf is then all zero).
  */
 AMA_API ama_error_t ama_random_bytes(uint8_t *buf, size_t len);
+
+/**
+ * @brief ama_random_bytes() with a repeated-output check on the draw.
+ *
+ * Draws like ama_random_bytes() and then refuses the draw if it repeats the
+ * previous one.  This is a defence-in-depth repeated-output check, not a
+ * FIPS 140-3 health test: it catches an operating-system source that has
+ * become stuck and returns the same block twice in a row, and nothing else
+ * (docs/compliance/CSRC_ALIGN_REPORT.md section 4.5).
+ *
+ * The check runs over a 32-byte window of the draw.  For len >= 32 the draw
+ * is made straight into @p buf and its first 32 bytes are the window.  For
+ * len < 32, including len == 0, a separate 32-byte draw is the window and
+ * @p buf receives its first len bytes.  SHA-256 of the window is compared in
+ * constant time with the digest of the window of the previous draw; equal
+ * digests return AMA_ERROR_RNG_REPEAT.  Only that digest is retained, never
+ * a draw.  The comparison and the update are one atomic step, the call is
+ * safe from any number of threads, and on POSIX a fork() while another thread
+ * is inside it leaves the child able to call it (a pthread_atfork handler
+ * pair; a library that has been used must not be dlclose()d).  Windows has no
+ * fork().
+ *
+ * WHAT THIS DOES NOT PROVIDE.  Say no more than this when you cite it:
+ *  - The baseline is ONE value for the whole process.  Every caller and every
+ *    thread shares it, and any code in the process can replace it by calling
+ *    ama_rng_repeat_check().  It detects a stuck source; it is not a control
+ *    against anything that can run code in the process.
+ *  - The first call in a process has no previous window to compare with and
+ *    passes unchecked.  No draw is discarded or withheld.
+ *  - Nothing latches.  After AMA_ERROR_RNG_REPEAT the baseline is unchanged
+ *    and the next call is checked against it afresh; whatever error state
+ *    follows from a repeat belongs to the caller.
+ *  - Only consecutive windows are compared.  A source that alternates between
+ *    two blocks is not detected.
+ *
+ * On any return other than AMA_SUCCESS every byte of @p buf is zero (when it
+ * is non-NULL), including bytes a failing source wrote before it failed, and
+ * a repeated draw never reaches the caller.
+ *
+ * Defined in builds with AMA_USE_NATIVE_PQC=ON, as ama_random_bytes().
+ *
+ * @param buf Output buffer (may be NULL only when len is 0)
+ * @param len Number of bytes to write; 0 still draws and checks a window
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM for NULL with len > 0;
+ *         AMA_ERROR_RNG_REPEAT if the window repeated the previous one;
+ *         AMA_ERROR_CRYPTO if the OS source failed, the lock that makes the
+ *         check atomic could not be taken, or (POSIX) the fork handlers could
+ *         not be registered (the draw is refused, not issued unchecked).
+ */
+AMA_API ama_error_t ama_random_bytes_repeat_checked(uint8_t *buf, size_t len);
+
+/**
+ * @brief The repeated-output comparison of ama_random_bytes_repeat_checked(),
+ *        on a 32-byte window the caller already holds.
+ *
+ * Hashes @p window, compares the digest in constant time with the process-wide
+ * baseline and, unless it is equal, makes it the new baseline.  It exists so
+ * a caller that draws from a source of its own (the Python layer's seam, the
+ * power-on self-test) is checked against the SAME baseline as the draws above
+ * rather than against a second one.  The same limits apply, and the first
+ * one bites harder here: this call replaces the baseline for every other
+ * caller in the process, so a caller that feeds it anything but the window of
+ * a draw it is about to issue blinds the check for the next draw.
+ *
+ * @p window must point to 32 readable bytes; the signature cannot check it.
+ *
+ * @param window The 32-byte window of a draw
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM if @p window is NULL;
+ *         AMA_ERROR_RNG_REPEAT if its digest equals the baseline (which is
+ *         then left unchanged); AMA_ERROR_CRYPTO if the lock could not be
+ *         taken or (POSIX) the fork handlers could not be registered (the
+ *         window is refused, not accepted unchecked).
+ */
+AMA_API ama_error_t ama_rng_repeat_check(const uint8_t window[32]);
 
 /* ============================================================================
  * CONSTANT-TIME BASE64 / BASE64URL (RFC 4648 §4, §5)

@@ -295,6 +295,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_slhdsa.c` | SLH-DSA-SHA2-256f (SPHINCS+ lineage) | FIPS 205 |
 | `ama_consttime.c` | Constant-time utilities | — |
 | `ama_platform_rand.c` | Platform CSPRNG | — |
+| `ama_rng_repeat.c` | Repeated-output check on the OS CSPRNG (not a FIPS 140-3 health test) | — |
 | `ama_x25519.c` | X25519 key exchange | RFC 7748 |
 | `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |

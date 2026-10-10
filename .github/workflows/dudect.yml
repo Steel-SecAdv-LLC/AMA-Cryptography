@@ -1012,6 +1012,16 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target secp256k1-seckey
 
+      - name: Repeated-output check instruction count must not depend on the CSPRNG output
+        # ama_random_bytes_repeat_checked / ama_rng_repeat_check hash and compare
+        # the 32-byte window of every draw (the CSPRNG's output, secret).  The
+        # classes vary the window, not the call sequence.  An early-exit compare
+        # or a branch on the window ahead of the verdict retires a
+        # class-dependent count.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target rng-repeat
+
       # ---- Secret-taint lane ---------------------------------------------
       # Instruction, data-reference and cache-miss counts cannot see a
       # secret-indexed load that stays cache-resident, a conditional move on
@@ -1045,7 +1055,7 @@ jobs:
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding aead-verify \
-                        base64 secp256k1-seckey slhdsa-sign; do
+                        base64 secp256k1-seckey rng-repeat slhdsa-sign; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done
@@ -1058,7 +1068,7 @@ jobs:
       # builds the shared object the way the wheel does and runs the taint
       # gate against it for every target whose driver uses only public
       # symbols (ghash and aead-verify need the test-only scalar-forcing hook;
-      # ecdsa, nistp-ecdsa, base64 and secp256k1-seckey carry declassification
+      # ecdsa, nistp-ecdsa, base64, secp256k1-seckey and rng-repeat carry declassification
       # points that are no-ops outside AMA_TESTING_MODE and would be reported
       # here by design).
       - name: Build the shipped shared library (LTO on, as the wheel ships it)

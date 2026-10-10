@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1159,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4213,
+      "Other": 4235,
       "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 288,
-    "total_tests": 7230,
+    "n_files": 289,
+    "total_tests": 7252,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -154,6 +154,7 @@
       "test_required_status_contexts.py",
       "test_resign_wheel.py",
       "test_rfc8554_vectors.py",
+      "test_rng_repeat_c_contract.py",
       "test_robustness_fixes.py",
       "test_sbom_adapted_sources.py",
       "test_secp256k1_ecdsa.py",
