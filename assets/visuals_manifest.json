@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1159,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4127,
+      "Other": 4157,
       "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 285,
-    "total_tests": 7144,
+    "n_files": 286,
+    "total_tests": 7174,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -105,6 +105,7 @@
       "test_key_formats_seed_borrow.py",
       "test_key_storage_delete_symlink.py",
       "test_keyformat_corpus_provenance.py",
+      "test_keygen_legacy_wipe.py",
       "test_keygen_pct.py",
       "test_keygen_pct_gate.py",
       "test_keypair_conventions.py",

@@ -5333,7 +5333,7 @@ def slhdsa_sign_deterministic(
 def slhdsa_sign_addrnd(
     message: bytes,
     secret_key: Union[bytes, bytearray],
-    addrnd: bytes,
+    addrnd: Union[bytes, bytearray],
     ctx: bytes = b"",
     param_set: str = "SHAKE-128s",
 ) -> bytes:
@@ -5378,37 +5378,32 @@ def slhdsa_sign_addrnd(
         raise ValueError(f"SLH-DSA-{param_set}: addrnd must be {n} bytes, got {len(addrnd)}")
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
-    # INVARIANT-6: route both SK and addrnd through wipeable ctypes scratch
-    # storage. ``addrnd`` is randomness bound into the signature and —
-    # depending on caller policy — may be derived from secret material
-    # (e.g. PRF over SK), so we treat it as sensitive even though it is
-    # ultimately revealed via the resulting signature.
-    # INVARIANT-6: borrow the caller's secret-key storage instead of
-    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
-    # transient _borrow exists to avoid.
+    # INVARIANT-6: ``addrnd`` is randomness bound into the signature and --
+    # depending on caller policy -- may be derived from secret material (e.g.
+    # PRF over SK), so it is treated as sensitive even though it is ultimately
+    # revealed via the resulting signature.  Both it and the secret key are
+    # borrowed from the caller's storage instead of snapshotted:
+    # ``create_string_buffer(bytes(addrnd), n)`` made an immutable copy of a
+    # ``bytearray`` addrnd that no wipe could reach, the shape
+    # ``generate_slhdsa_keypair_from_seed`` already closed with ``_borrow``.
+    # A borrow is the caller's live storage and is NOT wiped here -- wiping it
+    # would zero the caller's own key; the borrow is released at frame exit.
     sk_buf = _borrow(secret_key)
-    addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
-    try:
-        rc = _native_lib.ama_slhdsa_sign_addrnd(
-            ctypes.c_int(enum_id),
-            sig_buf,
-            ctypes.byref(sig_buf_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            ctx if ctx else None,
-            ctypes.c_size_t(len(ctx)),
-            addrnd_buf,
-            sk_buf,
-        )
-        if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
-        return bytes(sig_buf.raw[: sig_buf_len.value])
-    finally:
-        # sk_buf is a BORROW of the caller's storage (see above) and is not
-        # wiped here — wiping it would zero the caller's live key; the borrow
-        # itself is released at frame exit.  The additional-randomness scratch
-        # buffer is this function's own and is scrubbed.
-        ctypes.memset(addrnd_buf, 0, n)
+    addrnd_buf = _borrow(addrnd)
+    rc = _native_lib.ama_slhdsa_sign_addrnd(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        addrnd_buf,
+        sk_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
 # ============================================================================
@@ -7201,12 +7196,24 @@ def hmac_sha3_256(key: _BufferInput, msg: _BufferInput) -> bytes:
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
-class _DilithiumKATKeyPair:
-    """Internal keypair structure for KAT test compatibility."""
+class _DilithiumKATKeyPair(SecretMaterial):
+    """Internal keypair structure for KAT test compatibility.
+
+    Holds a freshly generated secret key, so it is INVARIANT-6 storage like
+    the public key-pair classes: ``wipe()`` zeroes the key, collection zeroes
+    it if this object is its last owner, the key is left out of ``repr``, and
+    two pairs compare their keys in constant time.
+    """
+
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("secret_key",)
 
     public_key: bytes
-    secret_key: Union[bytes, bytearray]
+    secret_key: Union[bytes, bytearray] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class DilithiumProvider:
@@ -7264,12 +7271,24 @@ class DilithiumProvider:
         return dilithium_verify(message, signature, public_key)
 
 
+@constant_time_equality()
 @dataclass
-class _KyberKATKeyPair:
-    """Internal keypair structure for KAT test compatibility."""
+class _KyberKATKeyPair(SecretMaterial):
+    """Internal keypair structure for KAT test compatibility.
+
+    Holds a freshly generated secret key, so it is INVARIANT-6 storage like
+    the public key-pair classes: ``wipe()`` zeroes the key, collection zeroes
+    it if this object is its last owner, the key is left out of ``repr``, and
+    two pairs compare their keys in constant time.
+    """
+
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("secret_key",)
 
     public_key: bytes
-    secret_key: Union[bytes, bytearray]
+    secret_key: Union[bytes, bytearray] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class KyberProvider:
@@ -9088,19 +9107,29 @@ def native_x25519_keypair() -> tuple:
     # into this very test): a health-tested scalar draw, public half derived
     # by one base-point multiplication.  The kernel clamps scalars per
     # RFC 7748 §5, so a raw 32-byte draw is a valid private key.
-    eph_secret = secure_token_bytearray(32)
+    #
+    # ``secret_key`` exists from here on, so everything up to the release is
+    # under one guard: the pairwise helper zeroes the key only once it is
+    # entered, and a refused ephemeral draw (error state, continuous RNG test)
+    # or a failing base-point multiplication before that point would
+    # otherwise drop the minted key intact (INVARIANT-6, every exit path).
     try:
-        # X25519(k, 9) is a public key.
-        eph_public = bytes(native_x25519_key_exchange(eph_secret, _X25519_BASEPOINT_U))
-        pairwise_test_agreement(
-            native_x25519_key_exchange,
-            (eph_public, eph_secret),
-            secret_key,
-            public_key,
-            "X25519",
-        )
-    finally:
-        _secure_memzero(eph_secret)
+        eph_secret = secure_token_bytearray(32)
+        try:
+            # X25519(k, 9) is a public key.
+            eph_public = bytes(native_x25519_key_exchange(eph_secret, _X25519_BASEPOINT_U))
+            pairwise_test_agreement(
+                native_x25519_key_exchange,
+                (eph_public, eph_secret),
+                secret_key,
+                public_key,
+                "X25519",
+            )
+        finally:
+            _secure_memzero(eph_secret)
+    except BaseException:
+        zeroize(secret_key)
+        raise
     return public_key, secret_key
 
 

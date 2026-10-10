@@ -446,7 +446,11 @@ def generate_ed25519_keypair(seed: Optional[SecretBytes] = None) -> Ed25519KeyPa
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
         public_bytes, sk_bytes = native_ed25519_keypair_from_seed(seed)
-        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
+        # Held until the container adopts it, as the unseeded branch below
+        # does: a refused construction must not drop the expansion populated.
+        with ScrubOnRaise() as held:
+            held(sk_bytes)
+            return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
     else:
         public_bytes, sk_bytes = native_ed25519_keypair()
         with ScrubOnRaise() as held:
@@ -466,8 +470,13 @@ def ed25519_sign(message: bytes, private_key: SecretBytes) -> bytes:
     if len(private_key) == 64:
         return native_ed25519_sign(message, private_key)
     elif len(private_key) == 32:
+        # The 64-byte expansion of the seed is minted here, so this call owns
+        # it and zeroes it on success and on a failing sign (INVARIANT-6).
         _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
-        return native_ed25519_sign(message, sk_bytes)
+        try:
+            return native_ed25519_sign(message, sk_bytes)
+        finally:
+            secure_memzero(sk_bytes)
     else:
         raise ValueError("Ed25519 private key must be 32 bytes (seed) or 64 bytes (expanded)")
 
@@ -740,18 +749,24 @@ def derive_keys(
     else:
         hkdf_salt = secure_token_bytes(32)  # INVARIANT-41 health-tested draw
 
-    derived_keys = []
-    for i in range(num_keys):
-        base_context = f"{info}:{i}".encode("utf-8")
-        enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
+    derived_keys: List[bytearray] = []
+    # A later derivation that raises leaves the keys already derived with no
+    # owner and no later point at which to zero them; each is registered the
+    # moment it exists (INVARIANT-6, every exit path).
+    with ScrubOnRaise() as held:
+        for i in range(num_keys):
+            base_context = f"{info}:{i}".encode("utf-8")
+            enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
 
-        derived_key = native_hkdf(
-            ikm=master_secret,
-            length=32,
-            salt=hkdf_salt,
-            info=enhanced_context,
-        )
-        derived_keys.append(derived_key)
+            derived_key = held(
+                native_hkdf(
+                    ikm=master_secret,
+                    length=32,
+                    salt=hkdf_salt,
+                    info=enhanced_context,
+                )
+            )
+            derived_keys.append(derived_key)
 
     return derived_keys, hkdf_salt
 

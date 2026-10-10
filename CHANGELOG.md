@@ -34,6 +34,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Key generation and legacy paths zero what they mint on every exit -- 2026-10-10
+
+BIP32 master and child keys, the legacy Ed25519 and HKDF helpers and `native_x25519_keypair` left a minted secret populated when a later step raised anything other than the case they handled; each is now registered with `ScrubOnRaise` or a `finally` the moment it exists (INVARIANT-6).
+BIP39 mnemonics and key-store passwords reach their KDF as a `bytearray` zeroed afterwards, `slhdsa_sign_addrnd` borrows `addrnd` and the secret key instead of copying them, and the ML-KEM and ML-DSA KAT key pairs are wipeable `SecretMaterial`.
+`tests/test_keygen_legacy_wipe.py` fails when any of these guards is removed.
+
 ### ML-KEM seed import borrows the seed instead of slicing it -- 2026-10-10
 
 `_expand_pq_seed` sliced the 64-octet ML-KEM seed into two 32-octet copies, `d` and `z`, for the backend. It now passes writable `memoryview`s of the one seed buffer (the loaded key's `PrivateKey.seed`), so no extra copy of the seed exists to be tracked or wiped (INVARIANT-6). ML-DSA already passed the seed through unchanged.

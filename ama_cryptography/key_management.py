@@ -351,9 +351,17 @@ class HDKeyDerivation(SecretMaterial):
             # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
             # against the official BIP39 vector and differentially against
             # hashlib in tests/test_sha2_pbkdf2_native.py.
-            self.master_seed = native_pbkdf2_hmac_sha512(
-                cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
-            )
+            #
+            # The mnemonic is the root secret: it reaches the KDF as a
+            # ``bytearray`` zeroed when the derivation ends, whichever way.
+            # CPython encodes ``bytearray(str, "utf-8")`` through an internal
+            # immutable ``bytes`` it frees without zeroing, and the caller's
+            # own ``str`` stays theirs; Python cannot wipe either.
+            mnemonic = bytearray(cast(str, seed_phrase), "utf-8")
+            try:
+                self.master_seed = native_pbkdf2_hmac_sha512(mnemonic, b"mnemonic", 2048, 64)
+            finally:
+                zeroize(mnemonic)
 
         # Generate master key
         self.master_key, self.master_chain_code = self._generate_master_key()
@@ -378,24 +386,29 @@ class HDKeyDerivation(SecretMaterial):
         finally:
             secure_memzero(hmac_result)
 
-        # BIP32: a master key whose scalar is 0 or >= n is invalid and the
-        # seed must be rejected (probability ~2^-127).  Decided by the native
-        # core in constant time: ``int.from_bytes(master_key) >= n`` was
-        # variable-time arithmetic on the root secret (INVARIANT-12 rule 1).
-        if not native_secp256k1_seckey_verify(master_key):
-            secure_memzero(master_key)
-            secure_memzero(chain_code)
-            raise ValueError(
-                "Invalid BIP32 master key derived from this seed (scalar is 0 "
-                "or >= n; probability ~2^-127). Use a different seed."
-            )
-
-        # FIPS 140-3 pairwise consistency test — the master key is the root
-        # secp256k1 keypair this hierarchy mints (INVARIANT-41).  The test's
-        # own guard zeroes the key on failure; the chain code is zeroed here
-        # (PR #415 review: it was dropped intact).
+        # Both halves are registered the moment they exist.  The checks below
+        # can each refuse -- an invalid scalar (ValueError), or the native
+        # core / module state raising (CryptoModuleError out of the verify, or
+        # out of the first statement of the pairwise test, before its own
+        # key guard is entered) -- and until a result owns them nothing else
+        # would zero them (INVARIANT-6, every exit path).
         with ScrubOnRaise() as held:
+            held(master_key)
             held(chain_code)
+
+            # BIP32: a master key whose scalar is 0 or >= n is invalid and the
+            # seed must be rejected (probability ~2^-127).  Decided by the
+            # native core in constant time: ``int.from_bytes(master_key) >= n``
+            # was variable-time arithmetic on the root secret (INVARIANT-12
+            # rule 1).
+            if not native_secp256k1_seckey_verify(master_key):
+                raise ValueError(
+                    "Invalid BIP32 master key derived from this seed (scalar is 0 "
+                    "or >= n; probability ~2^-127). Use a different seed."
+                )
+
+            # FIPS 140-3 pairwise consistency test -- the master key is the
+            # root secp256k1 keypair this hierarchy mints (INVARIANT-41).
             self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
 
         return master_key, chain_code
@@ -519,34 +532,37 @@ class HDKeyDerivation(SecretMaterial):
         finally:
             secure_memzero(data)
 
-        try:
-            # IL (left 32 bytes) is the tweak, IR (right 32 bytes) the chain code.
-            child_chain = hmac_result[32:]
-            # BIP32: child_key = (IL + parent_key) mod N, refused when IL >= N
-            # or the sum is 0 -- all decided in constant time by the native core.
-            try:
-                child_key = native_secp256k1_seckey_tweak_add(
-                    parent_key, memoryview(hmac_result)[:32]
-                )
-            except ValueError:
-                secure_memzero(child_chain)
-                # Per BIP32: "In case parse256(IL) >= n or ki = 0, the resulting
-                # key is invalid, and one should proceed with the next value for i."
-                raise ValueError(
-                    f"Invalid derived key at index {index}. "
-                    "This is astronomically unlikely (~1 in 2^127). Try next index."
-                ) from None
-        finally:
-            secure_memzero(hmac_result)
-
-        # FIPS 140-3 pairwise consistency test — a derived child is a newly
-        # minted keypair, and derivation-time is when a fault-corrupted
-        # intermediate (a flipped bit in IL, a miscomputed modular sum) is
-        # still caught before release (INVARIANT-41).  The label deliberately
-        # omits the derivation index: a failure writes the label into
-        # operator logs, and wallet-structure metadata does not belong there.
+        # The child key and chain code are registered the moment they exist:
+        # any exception out of the tweak (not only the ValueError it uses for
+        # an invalid child) or out of the pairwise test's first statement
+        # would otherwise drop them populated (INVARIANT-6, every exit path).
         with ScrubOnRaise() as held:
-            held(child_chain)
+            try:
+                # IL (left 32 bytes) is the tweak, IR (right 32 bytes) the chain code.
+                child_chain = held(hmac_result[32:])
+                # BIP32: child_key = (IL + parent_key) mod N, refused when IL >= N
+                # or the sum is 0 -- all decided in constant time by the native core.
+                try:
+                    child_key = held(
+                        native_secp256k1_seckey_tweak_add(parent_key, memoryview(hmac_result)[:32])
+                    )
+                except ValueError:
+                    # Per BIP32: "In case parse256(IL) >= n or ki = 0, the resulting
+                    # key is invalid, and one should proceed with the next value for i."
+                    raise ValueError(
+                        f"Invalid derived key at index {index}. "
+                        "This is astronomically unlikely (~1 in 2^127). Try next index."
+                    ) from None
+            finally:
+                secure_memzero(hmac_result)
+
+            # FIPS 140-3 pairwise consistency test -- a derived child is a
+            # newly minted keypair, and derivation-time is when a
+            # fault-corrupted intermediate (a flipped bit in IL, a miscomputed
+            # modular sum) is still caught before release (INVARIANT-41).  The
+            # label deliberately omits the derivation index: a failure writes
+            # the label into operator logs, and wallet-structure metadata does
+            # not belong there.
             self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
 
         return child_key, child_chain
@@ -1262,14 +1278,20 @@ class SecureKeyStorage(SecretMaterial):
 
                 # A wipeable bytearray already; wrapping it again copied the
                 # key and dropped the original unwiped (PR #415 review sweep).
-                self.encryption_key = native_argon2id(
-                    master_password.encode("utf-8"),
-                    self.salt,
-                    t_cost=t_cost,
-                    m_cost=m_cost,
-                    parallelism=parallelism,
-                    out_len=self.KDF_KEY_BYTES,
-                )
+                # The password goes in as a ``bytearray`` zeroed when the
+                # derivation ends (residual: see the BIP39 site above).
+                password = bytearray(master_password, "utf-8")
+                try:
+                    self.encryption_key = native_argon2id(
+                        password,
+                        self.salt,
+                        t_cost=t_cost,
+                        m_cost=m_cost,
+                        parallelism=parallelism,
+                        out_len=self.KDF_KEY_BYTES,
+                    )
+                finally:
+                    zeroize(password)
             except (ImportError, RuntimeError) as exc:
                 raise RuntimeError(
                     "Argon2id native library required to open this key store "
@@ -1292,12 +1314,16 @@ class SecureKeyStorage(SecretMaterial):
             self.kdf_params["iterations"] = iterations
             # Key-encryption-key derivation on this module's own PBKDF2
             # (INVARIANT-1; see the BIP39 site above for the full rationale).
-            self.encryption_key = native_pbkdf2_hmac_sha256(
-                master_password.encode("utf-8"),
-                self.salt,
-                iterations,
-                self.KDF_KEY_BYTES,
-            )
+            password = bytearray(master_password, "utf-8")
+            try:
+                self.encryption_key = native_pbkdf2_hmac_sha256(
+                    password,
+                    self.salt,
+                    iterations,
+                    self.KDF_KEY_BYTES,
+                )
+            finally:
+                zeroize(password)
 
         # Warn if using legacy parameters
         if version < 2:
@@ -1371,14 +1397,18 @@ class SecureKeyStorage(SecretMaterial):
         # Derive the new key with Argon2id (availability checked above).
         from ama_cryptography.pqc_backends import native_argon2id
 
-        new_encryption_key = native_argon2id(
-            master_password.encode("utf-8"),
-            new_salt,
-            t_cost=self.ARGON2_T_COST,
-            m_cost=self.ARGON2_M_COST,
-            parallelism=self.ARGON2_PARALLELISM,
-            out_len=self.KDF_KEY_BYTES,
-        )
+        password = bytearray(master_password, "utf-8")
+        try:
+            new_encryption_key = native_argon2id(
+                password,
+                new_salt,
+                t_cost=self.ARGON2_T_COST,
+                m_cost=self.ARGON2_M_COST,
+                parallelism=self.ARGON2_PARALLELISM,
+                out_len=self.KDF_KEY_BYTES,
+            )
+        finally:
+            zeroize(password)
         # The new key is zeroed if anything below raises, before or inside the
         # rollback; on success the retired key is (PR #415 review sweep: both
         # were dropped intact).

@@ -641,7 +641,17 @@ def _secret_containers() -> list[type]:
         pending.extend(cls.__subclasses__())
         if dataclasses.is_dataclass(cls) and cls.__module__.startswith("ama_cryptography."):
             found.append(cls)
-    return [*found, pb.DilithiumKeyPair, pb.KyberKeyPair, pb.SphincsKeyPair]
+    # The key pairs below are named, not found: three are plain dataclasses,
+    # and the two KAT pairs are found by the traversal as well (they are
+    # ``SecretMaterial``), so a class already found is not listed twice.
+    named = [
+        pb.DilithiumKeyPair,
+        pb.KyberKeyPair,
+        pb.SphincsKeyPair,
+        pb._DilithiumKATKeyPair,
+        pb._KyberKATKeyPair,
+    ]
+    return [*found, *(cls for cls in named if cls not in found)]
 
 
 @pytest.mark.parametrize("cls", _secret_containers(), ids=lambda c: c.__qualname__)
