@@ -1539,10 +1539,12 @@ python -m ama_cryptography.integrity --verify
 ```
 
 **Repeated-output CSPRNG check:** Draw secrets with
-`ama_cryptography._module_state.secure_token_bytearray(n)` (or
-`secure_random_fill(buf)` into a buffer you own), and public random values
-with `secure_token_bytes(n)`, instead of `secrets.token_bytes(n)`. All three
-read the library's native OS-entropy source (`ama_random_bytes`) and run a
+`ama_cryptography.secure_token_bytearray(n)` (or
+`ama_cryptography.secure_random_fill(buf)` into a buffer you own;
+`ama_cryptography.secure_memory.secure_random_bytes(n)` returns the same
+wipeable `bytearray`), and public random values with
+`ama_cryptography.secure_token_bytes(n)`, instead of `secrets.token_bytes(n)`.
+All of these read the library's native OS-entropy source (`ama_random_bytes`) and run a
 defence-in-depth sanity check: consecutive identical outputs enter the ERROR
 state. The `bytearray` forms leave no immutable copy of a secret
 (INVARIANT-6). It is not the SP 800-90B

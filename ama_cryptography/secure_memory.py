@@ -32,8 +32,12 @@ Implementation notes:
   ``RuntimeError`` when the native library is absent
 - ``lengths_match``: public (non-constant-time) length pre-check, for use
   before ``constant_time_compare`` where the expected size is fixed
-- ``secure_random_bytes``: routed through ``_self_test.secure_token_bytes`` —
-  the error-state-gated, continuous-health-tested draw (not bare ``os.urandom``)
+- ``secure_random_bytes``: routed through ``_module_state.secure_token_bytearray``
+  — the error-state-gated, continuous-health-tested draw (not bare
+  ``os.urandom``), written in place by the native CSPRNG into a wipeable
+  ``bytearray``
+- ``secure_token_bytearray`` / ``secure_random_fill``: the same draw, re-exported
+  so the wipeable forms are public (INVARIANT-6)
 
 Usage::
 
@@ -69,7 +73,21 @@ from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 
-from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._module_state import (
+    secure_random_fill as secure_random_fill,
+)
+from ama_cryptography._module_state import (
+    secure_token_bytearray as secure_token_bytearray,
+)
+
+# Kept importable: this name was bound here before the wipeable draws were
+# re-exported, so ``from ama_cryptography.secure_memory import
+# secure_token_bytes`` keeps working.  It returns immutable ``bytes``: for
+# nonces, salts and identifiers, never secrets (use ``secure_token_bytearray``).
+# Deliberately not in ``__all__``, as before.
+from ama_cryptography._module_state import (
+    secure_token_bytes as secure_token_bytes,
+)
 from ama_cryptography.exceptions import AmaCryptographyError
 
 logger = logging.getLogger(__name__)
@@ -854,12 +872,12 @@ def lengths_match(a: bytes, b: bytes) -> bool:
     return len(a) == len(b)
 
 
-def secure_random_bytes(size: int) -> bytes:
+def secure_random_bytes(size: int) -> bytearray:
     """
-    Generate cryptographically secure random bytes.
+    Generate cryptographically secure random bytes in a wipeable buffer.
 
-    Routed through :func:`ama_cryptography._self_test.secure_token_bytes`, which
-    applies two controls this function previously had neither of:
+    Routed through :func:`ama_cryptography._module_state.secure_token_bytearray`,
+    which applies two controls this function previously had neither of:
 
     * **FIPS 140-3 §4.9.2 output inhibition** — a module in the error state must
       not emit key material, and this function is one of the places key material
@@ -870,11 +888,17 @@ def secure_random_bytes(size: int) -> bytes:
       it, so the test was implemented and never ran against a single real draw.
       Every byte handed out here is now compared against the previous draw.
 
+    The result is a ``bytearray`` written in place by the native CSPRNG, so no
+    immutable copy of it exists and the caller can wipe it with
+    :func:`secure_memzero` (INVARIANT-6).  Before 5.0.0 this returned ``bytes``,
+    which could not be wiped.
+
     Args:
         size: Number of random bytes to generate
 
     Returns:
-        Cryptographically secure random bytes
+        A fresh ``bytearray`` of ``size`` cryptographically secure random bytes
+        (``bytearray()`` for ``size == 0``)
 
     Raises:
         ValueError: If size is negative
@@ -885,9 +909,9 @@ def secure_random_bytes(size: int) -> bytes:
         raise ValueError("size must be non-negative")
 
     if size == 0:
-        return b""
+        return bytearray()
 
-    return secure_token_bytes(size)
+    return secure_token_bytearray(size)
 
 
 class SecureBuffer:
@@ -1179,4 +1203,6 @@ __all__ = [
     "secure_mlock",
     "secure_munlock",
     "secure_random_bytes",
+    "secure_random_fill",
+    "secure_token_bytearray",
 ]

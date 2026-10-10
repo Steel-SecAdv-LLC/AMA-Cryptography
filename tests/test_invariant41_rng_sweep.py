@@ -118,14 +118,6 @@ ALLOWED_BARE_DRAWS: dict[tuple[str, str], tuple[int, str]] = {
             "key material and nothing derives from it"
         ),
     ),
-    ("_build_sign.py", "_generate_keypair_and_sign"): (
-        2,
-        (
-            "build-time ephemeral signer; runs while the package may be mid-"
-            "re-sign with POST structurally unavailable, and carries its own "
-            "two-draw stuck-entropy check at the call site"
-        ),
-    ),
     ("key_management.py", "SecureKeyStorage.delete_key"): (
         1,
         (

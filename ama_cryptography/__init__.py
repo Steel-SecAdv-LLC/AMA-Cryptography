@@ -500,6 +500,12 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.secure_memory import (
     constant_time_compare as _constant_time_compare,
 )
+from ama_cryptography.secure_memory import (
+    secure_random_fill as secure_random_fill,
+)
+from ama_cryptography.secure_memory import (
+    secure_token_bytearray as secure_token_bytearray,
+)
 
 # Every secret comparison below this package's API -- the pairwise tests POST
 # runs, the secret containers' ``__eq__`` -- goes through the native
@@ -999,6 +1005,8 @@ __all__ = [
     "post_duration_ms",
     "reset_module",
     "secure_token_bytes",
+    "secure_token_bytearray",
+    "secure_random_fill",
     "AlgorithmType",
     "AmaCryptography",
     "CryptoPackageConfig",

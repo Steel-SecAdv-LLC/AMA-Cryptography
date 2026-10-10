@@ -72,6 +72,7 @@ from pathlib import Path
 import ama_cryptography
 import ama_cryptography.crypto_api as crypto_api
 import ama_cryptography.pqc_backends as pqc_backends
+import ama_cryptography.secure_memory as secure_memory
 
 _FAILURES: list[str] = []
 
@@ -342,7 +343,17 @@ def check_signatures() -> None:
 def check_aes_gcm() -> None:
     """AES-256-GCM (SP 800-38D): round-trip plus authentication-tag rejection."""
     aead = crypto_api.AESGCMProvider()
-    key = ama_cryptography.secure_token_bytes(32)
+    # The key is drawn into a wipeable bytearray (INVARIANT-6).  AESGCMProvider
+    # takes ``bytes``, so the call boundary makes one copy; the wipeable
+    # original is zeroed on exit.
+    key_buf = ama_cryptography.secure_token_bytearray(32)
+    try:
+        _check_aes_gcm_with(aead, bytes(key_buf))
+    finally:
+        secure_memory.secure_memzero(key_buf)
+
+
+def _check_aes_gcm_with(aead: crypto_api.AESGCMProvider, key: bytes) -> None:
     plaintext = b"ama-cryptography release wheel smoke test"
     aad = b"release-gate"
 
@@ -375,7 +386,17 @@ def check_aes_gcm() -> None:
 
 def check_chacha20_poly1305() -> None:
     """ChaCha20-Poly1305 (RFC 8439): round-trip plus tag rejection."""
-    key = ama_cryptography.secure_token_bytes(32)
+    # The key is a wipeable bytearray (INVARIANT-6) and the ChaCha20 wrappers
+    # accept one directly, so no immutable copy of it is made; it is zeroed on
+    # exit, pass or fail.
+    key = ama_cryptography.secure_token_bytearray(32)
+    try:
+        _check_chacha20_poly1305_with(key)
+    finally:
+        secure_memory.secure_memzero(key)
+
+
+def _check_chacha20_poly1305_with(key: bytearray) -> None:
     nonce = ama_cryptography.secure_token_bytes(12)
     plaintext = b"ama-cryptography release wheel smoke test"
     aad = b"release-gate"

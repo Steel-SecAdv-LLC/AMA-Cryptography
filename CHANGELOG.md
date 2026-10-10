@@ -34,6 +34,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### `secure_random_bytes` returns a wipeable `bytearray` -- 2026-10-10
+
+**BREAKING:** `ama_cryptography.secure_memory.secure_random_bytes()` returns a `bytearray` (was `bytes`), written in place by the native CSPRNG so the caller owns the only copy and can `secure_memzero` it (INVARIANT-6); code that hashes, dict-keys or compares the result as `bytes` must wrap it in `bytes(...)`. `secure_token_bytearray` and `secure_random_fill` are now public from `ama_cryptography` and `ama_cryptography.secure_memory`.
+The build-time integrity signer seeds from `ama_random_bytes` into scrubbed buffers instead of `os.urandom`, and `tests/test_public_generator.py` fails if any of this reverts.
+
 ### Key generation and legacy paths zero what they mint on every exit -- 2026-10-10
 
 BIP32 master and child keys, the legacy Ed25519 and HKDF helpers and `native_x25519_keypair` left a minted secret populated when a later step raised anything other than the case they handled; each is now registered with `ScrubOnRaise` or a `finally` the moment it exists (INVARIANT-6).

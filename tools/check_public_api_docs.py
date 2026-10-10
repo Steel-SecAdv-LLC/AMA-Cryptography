@@ -195,6 +195,8 @@ RETURN_TYPE_CONTRACTS: tuple[tuple[str, str, str], ...] = (
     ("ama_cryptography.key_formats", "encode_pem", "ZeroizingBytearray"),
     ("ama_cryptography.key_formats", "private_key_to_jwk", "ZeroizingBytearray"),
     ("ama_cryptography.key_formats", "private_key_to_cose", "ZeroizingBytearray"),
+    ("ama_cryptography.secure_memory", "secure_random_bytes", "bytearray"),
+    ("ama_cryptography.secure_memory", "secure_token_bytearray", "bytearray"),
 )
 
 #: ``(module, name, constructor args, type __enter__ must yield)``.
@@ -384,6 +386,8 @@ _RETURN_CALL_ARGS: dict[str, Any] = {
     "encode_pem": (b"\x30\x00", "PRIVATE KEY"),
     "private_key_to_jwk": _private_key_args,
     "private_key_to_cose": _private_key_args,
+    "secure_random_bytes": (32,),
+    "secure_token_bytearray": (32,),
 }
 
 

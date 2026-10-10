@@ -515,11 +515,12 @@ class TestSecureRandomBytes:
     """Additional tests for secure random bytes."""
 
     def test_zero_length(self) -> None:
-        """Zero length returns empty bytes."""
+        """Zero length returns an empty bytearray."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(0)
-        assert result == b""
+        assert type(result) is bytearray
+        assert result == bytearray()
 
     def test_large_size(self) -> None:
         """Can generate large random buffers."""
@@ -529,7 +530,7 @@ class TestSecureRandomBytes:
         result = secure_random_bytes(size)
 
         assert len(result) == size
-        assert isinstance(result, bytes)
+        assert type(result) is bytearray
 
     def test_entropy_quality(self) -> None:
         """Random bytes have reasonable entropy."""
@@ -615,6 +616,8 @@ class TestModuleExports:
             "secure_mlock",
             "secure_munlock",
             "secure_random_bytes",
+            "secure_random_fill",
+            "secure_token_bytearray",
         ]
 
         for name in expected_exports:

@@ -214,7 +214,7 @@ EXEMPT: dict[str, str] = {
         "propagation below) to pin pages in RAM. It emits no key material and "
         "produces no cryptographic output, so it is outside INVARIANT-39's "
         "output-inhibition scope (audit M16). The module's actual entropy "
-        "surface, secure_random_bytes, routes through secure_token_bytes and "
+        "surface, secure_random_bytes, routes through secure_token_bytearray and "
         "is gated."
     ),
     "secure_munlock": (
