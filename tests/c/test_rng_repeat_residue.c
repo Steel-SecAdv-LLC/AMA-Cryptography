@@ -217,13 +217,15 @@ int main(void) {
         g_sentinel[i] = (uint8_t)(0xA7u ^ (i * 13u + 3u));
     }
 
-    printf("Repeated-output check: dead-stack residue (INVARIANT-6)%s\n",
 #ifdef AMA_RESIDUE_SHIPPED
-           ", shipped shared library"
+    const char *const variant = ", shipped shared library";
 #else
-           ", testing archive"
+    const char *const variant = ", testing archive";
 #endif
-    );
+    /* The variant is hoisted out of the printf() argument list: under
+     * _FORTIFY_SOURCE printf is a macro, and a preprocessor directive inside a
+     * macro's arguments is undefined behaviour (-Wembedded-directive). */
+    printf("Repeated-output check: dead-stack residue (INVARIANT-6)%s\n", variant);
     printf("==============================================================\n");
 
     /* --- control: the probe must see a value that IS left behind. */

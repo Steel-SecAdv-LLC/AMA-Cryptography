@@ -47,7 +47,10 @@ static int holder_done = 0;
 
 static unsigned long long now_ms(void) {
     struct timespec ts;
-    (void)timespec_get(&ts, TIME_UTC);
+    /* clock_gettime, not C11 timespec_get: MemorySanitizer intercepts the
+     * former and leaves the latter's timespec poisoned, and a monotonic clock
+     * is the right source for the elapsed-time spin loops below. */
+    (void)clock_gettime(CLOCK_MONOTONIC, &ts);
     return (unsigned long long)ts.tv_sec * 1000ull + (unsigned long long)ts.tv_nsec / 1000000ull;
 }
 

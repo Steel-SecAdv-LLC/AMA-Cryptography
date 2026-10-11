@@ -17,8 +17,10 @@
 #define RR_PAIR_A 0xc9535892c2754dull
 #define RR_PAIR_B 0xa9d40100b0e7fdull
 
-/* window(x): x little-endian in bytes 0..7, zeros after. */
-static void rr_pair_window(unsigned long long x, uint8_t w[32]) {
+/* window(x): x little-endian in bytes 0..7, zeros after.  `static inline` so a
+ * translation unit that includes this header without calling it (e.g. a build
+ * that compiles the prefix-pair section out) raises no -Wunused-function. */
+static inline void rr_pair_window(unsigned long long x, uint8_t w[32]) {
     unsigned i;
     memset(w, 0, 32);
     for (i = 0; i < 8u; i++) {

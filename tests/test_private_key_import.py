@@ -468,8 +468,8 @@ def test_a_loader_zeroes_every_work_buffer_when_it_refuses(scratch: Scratch, loa
     try:
         loader(corrupted)
     except KeyFormatError:
-        pass  # refused: what is measured is what it left behind
-    except UnsupportedKeyFormatError:
+        # refused: what is measured is what it left behind.  KeyFormatError
+        # also covers UnsupportedKeyFormatError, its subclass.
         pass
     # A corrupted byte can land somewhere harmless (a public field it ignores);
     # either way nothing may remain, and the capture must have seen the copy.

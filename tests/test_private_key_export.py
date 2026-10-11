@@ -512,12 +512,22 @@ def test_nothing_but_the_key_refers_to_its_buffer_after_a_failed_export(
     except RuntimeError as exc:
         kept = exc
     gc.collect()
-    for which, buffer in _secret_buffers(key).items():
-        holders = [r for r in gc.get_referrers(buffer) if r is not key.__dict__]
-        names = sorted({type(r).__name__ for r in holders})
-        # The test's own frame/locals are not part of the library; everything else is.
-        stray = [r for r in holders if type(r).__name__ not in ("frame", "list", "tuple")]
-        assert not stray, (which, names)
+    # Iterate names first and re-fetch each buffer through a transient mapping
+    # that is freed before ``get_referrers`` runs.  Holding the ``_secret_buffers``
+    # mapping (or its ``items()`` tuples) alive across the check would itself
+    # refer to each buffer; Python 3.14 surfaces those as referrers where 3.13
+    # did not, so the loop must not keep them.  What remains is the key's own
+    # ``__dict__`` and the live test frame -- any library object retaining the
+    # buffer still appears and fails the assertion (the PIN).
+    for which in list(_secret_buffers(key)):
+        buffer = _secret_buffers(key)[which]
+        gc.collect()
+        stray = [
+            r
+            for r in gc.get_referrers(buffer)
+            if r is not key.__dict__ and type(r).__name__ != "frame"
+        ]
+        assert not stray, (which, sorted({type(r).__name__ for r in stray}))
     assert kept.__traceback__ is not None
 
 

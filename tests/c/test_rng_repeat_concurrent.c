@@ -9,6 +9,9 @@
  *        the held-lock violation counter.
  */
 
+/* clock_gettime / CLOCK_MONOTONIC under -std=c11 need a POSIX feature test. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -55,7 +58,10 @@ static void rr_thread_join(rr_thread_t t) { (void)pthread_join(t, NULL); }
 static void rr_yield(void) { (void)sched_yield(); }
 static unsigned long long rr_now_ms(void) {
     struct timespec ts;
-    (void)timespec_get(&ts, TIME_UTC);
+    /* clock_gettime, not C11 timespec_get: MemorySanitizer intercepts the
+     * former and leaves the latter's timespec poisoned, and a monotonic clock
+     * is the right source for the elapsed-time spin loops below. */
+    (void)clock_gettime(CLOCK_MONOTONIC, &ts);
     return (unsigned long long)ts.tv_sec * 1000ull + (unsigned long long)ts.tv_nsec / 1000000ull;
 }
 #endif

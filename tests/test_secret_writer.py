@@ -268,10 +268,9 @@ def test_the_piece_tree_holds_no_reference_to_the_secret_after_a_failed_build() 
             raise RuntimeError("injected")
 
     piece = sw.cat(sw.Sec(lambda: body), Boom())
-    try:
+    with pytest.raises(RuntimeError) as excinfo:
         sw.build(piece)
-    except RuntimeError as exc:
-        kept = exc  # the traceback, with every frame's locals, stays alive
+    kept = excinfo.value  # the traceback, with every frame's locals, stays alive
     referrers = [type(r).__name__ for r in _holders(body)]
     assert "Sec" not in referrers and "Framed" not in referrers, referrers
     assert kept.__traceback__ is not None
@@ -294,10 +293,9 @@ def test_a_failed_copy_releases_its_view_of_the_secret() -> None:
     already released, so the key's buffer can still be resized."""
     body = secret(32)
     piece = sw.cat(_Overrun(), sw.Sec(lambda: body))
-    try:
+    with pytest.raises(ValueError) as excinfo:
         sw.build(piece)
-    except ValueError as exc:
-        kept = exc  # frames, with their locals, stay alive
+    kept = excinfo.value  # frames, with their locals, stay alive
     body.extend(b"\x00")  # raises BufferError while any export is live
     assert kept.__traceback__ is not None
 
@@ -307,10 +305,9 @@ def test_a_failed_wrapped_copy_releases_its_view_of_the_characters() -> None:
     characters is already released."""
     chars = bytearray(b"A" * 100)
     piece = sw.cat(_Overrun(), sw.Wrapped(lambda: chars, 64))
-    try:
+    with pytest.raises((ValueError, IndexError)) as excinfo:
         sw.build(piece)
-    except (ValueError, IndexError) as exc:
-        kept = exc  # frames, with their locals, stay alive
+    kept = excinfo.value  # frames, with their locals, stay alive
     chars.extend(b"\x00")  # raises BufferError while any export is live
     assert kept.__traceback__ is not None
 
