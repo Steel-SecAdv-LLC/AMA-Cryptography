@@ -197,6 +197,7 @@ def _verify_against_native(name: str, payload: dict[str, Any]) -> None:
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     import ama_cryptography.pqc_backends as pb
+    from ama_cryptography.secure_memory import constant_time_compare
 
     # Explicit raises rather than asserts: this is verification logic, and
     # ``python -O`` strips asserts.  A vector must never be pinned unless the
@@ -205,39 +206,58 @@ def _verify_against_native(name: str, payload: dict[str, Any]) -> None:
         if not condition:
             raise RuntimeError(f"{name}: {message}")
 
-    if payload["algorithm"] == "ML-KEM-1024":
-        pk, sk = pb.native_ml_kem_keypair_from_seed(
-            1024, bytes.fromhex(payload["d_hex"]), bytes.fromhex(payload["z_hex"])
-        )
-        _require(pk.hex() == payload["pk_hex"], "ML-KEM keygen pk mismatch")
-        _require(sk.hex() == payload["sk_hex"], "ML-KEM keygen sk mismatch")
-        ss = pb.native_ml_kem_decapsulate(
-            1024, bytes.fromhex(payload["ct_hex"]), bytes.fromhex(payload["sk_hex"])
-        )
-        _require(ss.hex() == payload["ss_hex"], "ML-KEM decaps ss mismatch")
-    elif payload["algorithm"] == "ML-DSA-65":
-        pk, sk = pb.native_ml_dsa_keypair_from_seed(65, bytes.fromhex(payload["seed_hex"]))
-        _require(pk.hex() == payload["pk_hex"], "ML-DSA keygen pk mismatch")
-        _require(sk.hex() == payload["sk_hex"], "ML-DSA keygen sk mismatch")
-        ok = pb.native_ml_dsa_verify(
-            65,
-            bytes.fromhex(payload["msg_hex"]),
-            bytes.fromhex(payload["sig_hex"]),
-            bytes.fromhex(payload["pk_hex"]),
-            ctx=bytes.fromhex(payload["ctx_hex"]),
-        )
-        _require(ok, "ML-DSA verify rejected a valid signature")
-    elif payload["algorithm"] == "SLH-DSA-SHA2-256f":
-        ok = pb.slhdsa_verify(
-            bytes.fromhex(payload["message_hex"]),
-            bytes.fromhex(payload["signature_hex"]),
-            bytes.fromhex(payload["pk_hex"]),
-            bytes.fromhex(payload["context_hex"]),
-            param_set="SHA2-256f",
-        )
-        _require(ok, "SLH-DSA-SHA2-256f verify rejected a valid signature")
-    else:  # pragma: no cover - defensive
-        raise RuntimeError(f"no native verification wired for {payload['algorithm']}")
+    # Seeds, secret keys and shared secrets are held as bytearrays, compared
+    # in constant time and zeroed in the finally below on every exit, never
+    # rendered as hex (INVARIANT-6).  The vectors are published, but the tool
+    # must not teach the pattern the library's POST had to unlearn.
+    held: list[bytearray] = []
+
+    def _secret(hex_text: str) -> bytearray:
+        buf = bytearray.fromhex(hex_text)
+        held.append(buf)
+        return buf
+
+    def _same(actual: Any, expected: bytearray) -> bool:
+        return bool(constant_time_compare(actual, expected))
+
+    try:
+        if payload["algorithm"] == "ML-KEM-1024":
+            pk, sk = pb.native_ml_kem_keypair_from_seed(
+                1024, _secret(payload["d_hex"]), _secret(payload["z_hex"])
+            )
+            held.append(sk)
+            _require(pk.hex() == payload["pk_hex"], "ML-KEM keygen pk mismatch")
+            _require(_same(sk, _secret(payload["sk_hex"])), "ML-KEM keygen sk mismatch")
+            ss = pb.native_ml_kem_decapsulate(1024, bytes.fromhex(payload["ct_hex"]), sk)
+            held.append(ss)
+            _require(_same(ss, _secret(payload["ss_hex"])), "ML-KEM decaps ss mismatch")
+        elif payload["algorithm"] == "ML-DSA-65":
+            pk, sk = pb.native_ml_dsa_keypair_from_seed(65, _secret(payload["seed_hex"]))
+            held.append(sk)
+            _require(pk.hex() == payload["pk_hex"], "ML-DSA keygen pk mismatch")
+            _require(_same(sk, _secret(payload["sk_hex"])), "ML-DSA keygen sk mismatch")
+            ok = pb.native_ml_dsa_verify(
+                65,
+                bytes.fromhex(payload["msg_hex"]),
+                bytes.fromhex(payload["sig_hex"]),
+                bytes.fromhex(payload["pk_hex"]),
+                ctx=bytes.fromhex(payload["ctx_hex"]),
+            )
+            _require(ok, "ML-DSA verify rejected a valid signature")
+        elif payload["algorithm"] == "SLH-DSA-SHA2-256f":
+            ok = pb.slhdsa_verify(
+                bytes.fromhex(payload["message_hex"]),
+                bytes.fromhex(payload["signature_hex"]),
+                bytes.fromhex(payload["pk_hex"]),
+                bytes.fromhex(payload["context_hex"]),
+                param_set="SHA2-256f",
+            )
+            _require(ok, "SLH-DSA-SHA2-256f verify rejected a valid signature")
+        else:  # pragma: no cover - defensive
+            raise RuntimeError(f"no native verification wired for {payload['algorithm']}")
+    finally:
+        for buf in held:
+            buf[:] = bytes(len(buf))
 
 
 def _serialise(payload: dict[str, Any]) -> str:

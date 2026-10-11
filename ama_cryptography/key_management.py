@@ -29,11 +29,12 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type, cast
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography import _owner_only
 from ama_cryptography._finalizer_health import record_finalizer_error
-from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
+from ama_cryptography._secret_material import ScrubOnRaise, SecretBytes, SecretMaterial, zeroize
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
@@ -49,7 +50,7 @@ from ama_cryptography.exceptions import (
 )
 from ama_cryptography.pqc_backends import (
     _HMAC_SHA512_NATIVE_AVAILABLE,
-    native_hmac_sha512,
+    native_hmac_sha512_prf,
     native_pbkdf2_hmac_sha256,
     native_pbkdf2_hmac_sha512,
     native_sha3_256,
@@ -160,18 +161,18 @@ def _enforce_invariant7_km() -> None:
         )
 
 
-def _hmac_sha512(key: bytes, data: bytes) -> bytes:
-    """HMAC-SHA-512 via native C backend (RFC 2104).
+def _hmac_sha512(key: SecretBytes, data: SecretBytes) -> bytearray:
+    """HMAC-SHA-512 via native C backend (RFC 2104), as BIP32's PRF.
 
     INVARIANT-7 revised: no pure-Python fallback.  The import-time
     guard above ensures the native backend is always available.
     INVARIANT-12: Secret-dependent operation delegated to native
-    constant-time backend.
+    constant-time backend.  INVARIANT-6: the 64-byte output is a key and a
+    chain code, so it is returned wipeable.
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
     _enforce_invariant7_km()
-    result: bytes = native_hmac_sha512(key, data)
-    return result
+    return native_hmac_sha512_prf(key, data)
 
 
 # Configure module logger
@@ -275,7 +276,7 @@ class KeyMetadata:
     metadata: Dict[str, Any]
 
 
-class HDKeyDerivation:
+class HDKeyDerivation(SecretMaterial):
     """BIP32-style child key derivation over an AMA-specific root.
 
     **This is not BIP32, and it is not interoperable with a BIP32 wallet.**
@@ -314,6 +315,8 @@ class HDKeyDerivation:
         arithmetic and the key/chain-code split regression-tested.
     """
 
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("master_seed", "master_key", "master_chain_code")
+
     HARDENED_OFFSET = 2**31
 
     # secp256k1 curve order (N) - used for modular arithmetic in BIP32
@@ -333,7 +336,7 @@ class HDKeyDerivation:
             # health-tested CSPRNG draw — this seed determines every key in
             # the hierarchy, so a raw secrets.token_bytes (no error-state
             # gate, no continuous repeated-output check) is not enough.
-            self.master_seed = secure_token_bytes(64)
+            self.master_seed: SecretBytes = secure_token_bytearray(64)
         elif seed is not None:
             self.master_seed = seed
         else:
@@ -348,14 +351,25 @@ class HDKeyDerivation:
             # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
             # against the official BIP39 vector and differentially against
             # hashlib in tests/test_sha2_pbkdf2_native.py.
-            self.master_seed = native_pbkdf2_hmac_sha512(
-                cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
-            )
+            #
+            # The mnemonic is the root secret: it reaches the KDF as a
+            # ``bytearray`` zeroed when the derivation ends, whichever way.
+            # CPython encodes ``bytearray(str, "utf-8")`` through an internal
+            # immutable ``bytes`` it frees without zeroing, and the caller's
+            # own ``str`` stays theirs; Python cannot wipe either.
+            mnemonic = bytearray(cast(str, seed_phrase), "utf-8")
+            try:
+                self.master_seed = native_pbkdf2_hmac_sha512(mnemonic, b"mnemonic", 2048, 64)
+            finally:
+                zeroize(mnemonic)
 
         # Generate master key
         self.master_key, self.master_chain_code = self._generate_master_key()
+        # Seed, key and chain code held wipeable (INVARIANT-6): wipe() zeroes
+        # them, and collection zeroes whatever no caller still holds.
+        self._adopt_secrets()
 
-    def _generate_master_key(self) -> Tuple[bytes, bytes]:
+    def _generate_master_key(self) -> Tuple[bytearray, bytearray]:
         """Generate the master key and chain code from the seed.
 
         AMA-specific: BIP32 specifies the HMAC key ``b"Bitcoin seed"`` here.
@@ -363,30 +377,44 @@ class HDKeyDerivation:
         class docstring.  The split of the 64-byte HMAC output into
         ``key = I[:32]`` and ``chain_code = I[32:]`` follows BIP32.
         """
+        from ama_cryptography.pqc_backends import native_secp256k1_seckey_verify
+
         hmac_result = _hmac_sha512(b"AMA Cryptography Master Key", self.master_seed)
+        try:
+            master_key = hmac_result[:32]
+            chain_code = hmac_result[32:]
+        finally:
+            secure_memzero(hmac_result)
 
-        master_key = hmac_result[:32]
-        chain_code = hmac_result[32:]
+        # Both halves are registered the moment they exist.  The checks below
+        # can each refuse -- an invalid scalar (ValueError), or the native
+        # core / module state raising (CryptoModuleError out of the verify, or
+        # out of the first statement of the pairwise test, before its own
+        # key guard is entered) -- and until a result owns them nothing else
+        # would zero them (INVARIANT-6, every exit path).
+        with ScrubOnRaise() as held:
+            held(master_key)
+            held(chain_code)
 
-        # BIP32: a master key whose scalar is 0 or >= n is invalid and the
-        # seed must be rejected (probability ~2^-127).  This check predates
-        # nothing — it was silently absent, and an invalid scalar would have
-        # surfaced later as an unexplained signing failure.
-        master_int = int.from_bytes(master_key, "big")
-        if master_int == 0 or master_int >= self.SECP256K1_N:
-            raise ValueError(
-                "Invalid BIP32 master key derived from this seed (scalar is 0 "
-                "or >= n; probability ~2^-127). Use a different seed."
-            )
+            # BIP32: a master key whose scalar is 0 or >= n is invalid and the
+            # seed must be rejected (probability ~2^-127).  Decided by the
+            # native core in constant time: ``int.from_bytes(master_key) >= n``
+            # was variable-time arithmetic on the root secret (INVARIANT-12
+            # rule 1).
+            if not native_secp256k1_seckey_verify(master_key):
+                raise ValueError(
+                    "Invalid BIP32 master key derived from this seed (scalar is 0 "
+                    "or >= n; probability ~2^-127). Use a different seed."
+                )
 
-        # FIPS 140-3 pairwise consistency test — the master key is the root
-        # secp256k1 keypair this hierarchy mints (INVARIANT-41).
-        self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
+            # FIPS 140-3 pairwise consistency test -- the master key is the
+            # root secp256k1 keypair this hierarchy mints (INVARIANT-41).
+            self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
 
         return master_key, chain_code
 
     @staticmethod
-    def _pairwise_consistency_test(private_key: bytes, label: str) -> None:
+    def _pairwise_consistency_test(private_key: SecretBytes, label: str) -> None:
         """Sign/verify pairwise consistency test for a freshly minted secp256k1 key.
 
         The public key is re-derived from the private scalar (compressed, then
@@ -453,15 +481,17 @@ class HDKeyDerivation:
         )
 
     def _ckd_private(
-        self, parent_key: bytes, parent_chain: bytes, index: int
-    ) -> Tuple[bytes, bytes]:
+        self, parent_key: SecretBytes, parent_chain: SecretBytes, index: int
+    ) -> Tuple[bytearray, bytearray]:
         """
         Child Key Derivation (Private), following the BIP32 formulae.
 
         The CKD function itself is BIP32's; the tree it operates on is not,
         because the master key it descends from uses an AMA-specific HMAC
-        key (see the class docstring).  Modular arithmetic is over the
-        secp256k1 curve order (N), as BIP32 specifies.
+        key (see the class docstring).  The modular addition over the
+        secp256k1 group order is done by the native core in constant time
+        (``ama_secp256k1_seckey_tweak_add``); it was Python integer arithmetic
+        on two secrets, which INVARIANT-12 rule 1 forbids.
 
         Args:
             parent_key: Parent private key (32 bytes)
@@ -469,7 +499,10 @@ class HDKeyDerivation:
             index: Child index (>= 2^31 for hardened)
 
         Returns:
-            (child_key, child_chain_code)
+            (child_key, child_chain_code), each a wipeable ``bytearray``.
+            Every intermediate -- the HMAC input, which for a hardened child
+            holds the parent key, and the 64-byte HMAC output -- is zeroed
+            before this returns.
 
         Raises:
             ValueError: If derived key is invalid (extremely rare, ~1 in 2^127)
@@ -479,54 +512,62 @@ class HDKeyDerivation:
             the index should be incremented and derivation retried.
             This is astronomically unlikely (~1 in 2^127 probability).
         """
-        if index >= self.HARDENED_OFFSET:
-            # Hardened derivation: HMAC-SHA512(Key = cpar, Data = 0x00 || ser256(kpar) || ser32(i))
-            data = b"\x00" + parent_key + index.to_bytes(4, "big")
-        else:
-            # Non-hardened derivation: HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i))
-            # BIP32 requires the compressed secp256k1 public key (33 bytes).
-            from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
+        from ama_cryptography.pqc_backends import (
+            native_secp256k1_pubkey_from_privkey,
+            native_secp256k1_seckey_tweak_add,
+        )
 
-            compressed_pubkey = native_secp256k1_pubkey_from_privkey(parent_key)
-            data = compressed_pubkey + index.to_bytes(4, "big")
+        # 33 octets of key or point, then ser32(i): 37 either way.
+        data = bytearray(37)
+        try:
+            if index >= self.HARDENED_OFFSET:
+                # Hardened: HMAC-SHA512(Key = cpar, Data = 0x00 || ser256(kpar) || ser32(i))
+                data[1:33] = parent_key
+            else:
+                # Non-hardened: HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i)).
+                # BIP32 requires the compressed secp256k1 public key (33 bytes).
+                data[:33] = native_secp256k1_pubkey_from_privkey(parent_key)
+            data[33:] = index.to_bytes(4, "big")
+            hmac_result = _hmac_sha512(parent_chain, data)
+        finally:
+            secure_memzero(data)
 
-        hmac_result = _hmac_sha512(parent_chain, data)
+        # The child key and chain code are registered the moment they exist:
+        # any exception out of the tweak (not only the ValueError it uses for
+        # an invalid child) or out of the pairwise test's first statement
+        # would otherwise drop them populated (INVARIANT-6, every exit path).
+        with ScrubOnRaise() as held:
+            try:
+                # IL (left 32 bytes) is the tweak, IR (right 32 bytes) the chain code.
+                child_chain = held(hmac_result[32:])
+                # BIP32: child_key = (IL + parent_key) mod N, refused when IL >= N
+                # or the sum is 0 -- all decided in constant time by the native core.
+                try:
+                    child_key = held(
+                        native_secp256k1_seckey_tweak_add(parent_key, memoryview(hmac_result)[:32])
+                    )
+                except ValueError:
+                    # Per BIP32: "In case parse256(IL) >= n or ki = 0, the resulting
+                    # key is invalid, and one should proceed with the next value for i."
+                    raise ValueError(
+                        f"Invalid derived key at index {index}. "
+                        "This is astronomically unlikely (~1 in 2^127). Try next index."
+                    ) from None
+            finally:
+                secure_memzero(hmac_result)
 
-        # Split HMAC result: IL (left 32 bytes) and IR (right 32 bytes)
-        il = hmac_result[:32]
-        child_chain = hmac_result[32:]
-
-        # Convert to integers for modular arithmetic
-        il_int = int.from_bytes(il, "big")
-        parent_key_int = int.from_bytes(parent_key, "big")
-
-        # BIP32: child_key = (IL + parent_key) mod N
-        # This is the critical fix: proper modular addition, not XOR
-        child_key_int = (il_int + parent_key_int) % self.SECP256K1_N
-
-        # Check for invalid key (extremely rare edge case per BIP32 spec)
-        if il_int >= self.SECP256K1_N or child_key_int == 0:
-            # Per BIP32: "In case parse256(IL) >= n or ki = 0, the resulting
-            # key is invalid, and one should proceed with the next value for i."
-            raise ValueError(
-                f"Invalid derived key at index {index}. "
-                "This is astronomically unlikely (~1 in 2^127). Try next index."
-            )
-
-        # Convert back to 32-byte big-endian representation
-        child_key = child_key_int.to_bytes(32, "big")
-
-        # FIPS 140-3 pairwise consistency test — a derived child is a newly
-        # minted keypair, and derivation-time is when a fault-corrupted
-        # intermediate (a flipped bit in IL, a miscomputed modular sum) is
-        # still caught before release (INVARIANT-41).  The label deliberately
-        # omits the derivation index: a failure writes the label into
-        # operator logs, and wallet-structure metadata does not belong there.
-        self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
+            # FIPS 140-3 pairwise consistency test -- a derived child is a
+            # newly minted keypair, and derivation-time is when a
+            # fault-corrupted intermediate (a flipped bit in IL, a miscomputed
+            # modular sum) is still caught before release (INVARIANT-41).  The
+            # label deliberately omits the derivation index: a failure writes
+            # the label into operator logs, and wallet-structure metadata does
+            # not belong there.
+            self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
 
         return child_key, child_chain
 
-    def derive_path(self, path: str) -> Tuple[bytes, bytes]:
+    def derive_path(self, path: str) -> Tuple[bytearray, bytearray]:
         """
         Derive key from BIP32-style path
 
@@ -534,7 +575,9 @@ class HDKeyDerivation:
             path: Derivation path (e.g., "m/44'/0'/0'/0/0")
 
         Returns:
-            (derived_key, chain_code)
+            (derived_key, chain_code), each a fresh wipeable ``bytearray``
+            the caller owns.  The keys and chain codes of the levels between
+            the master and the result are zeroed as the walk passes them.
 
         Example:
             >>> hd = HDKeyDerivation()
@@ -543,26 +586,32 @@ class HDKeyDerivation:
         if not path.startswith("m"):
             raise ValueError("Path must start with 'm'")
 
-        # Parse path
-        parts = path.split("/")[1:]  # Skip 'm'
-        key = self.master_key
-        chain = self.master_chain_code
-
-        for part in parts:
-            # Check for hardened derivation (')
+        # Parse path first, so a malformed component refuses before any key
+        # material is derived.
+        indices = []
+        for part in path.split("/")[1:]:  # Skip 'm'
             hardened = part.endswith("'")
-            if hardened:
-                part = part[:-1]
+            index = int(part[:-1] if hardened else part)
+            indices.append(index + self.HARDENED_OFFSET if hardened else index)
 
-            index = int(part)
-            if hardened:
-                index += self.HARDENED_OFFSET
-
-            key, chain = self._ckd_private(key, chain, index)
-
+        # The master's own storage is never handed out: "m" returns copies.
+        key = bytearray(self.master_key)
+        chain = bytearray(self.master_chain_code)
+        try:
+            for index in indices:
+                child_key, child_chain = self._ckd_private(key, chain, index)
+                secure_memzero(key)
+                secure_memzero(chain)
+                key, chain = child_key, child_chain
+        except BaseException:
+            secure_memzero(key)
+            secure_memzero(chain)
+            raise
         return key, chain
 
-    def derive_key(self, purpose: int, account: int = 0, change: int = 0, index: int = 0) -> bytes:
+    def derive_key(
+        self, purpose: int, account: int = 0, change: int = 0, index: int = 0
+    ) -> bytearray:
         """
         Derive key using fully-hardened path structure.
 
@@ -579,10 +628,11 @@ class HDKeyDerivation:
             index: Address index
 
         Returns:
-            Derived key (32 bytes)
+            Derived key (32 bytes), in a wipeable ``bytearray``
         """
         path = f"m/{purpose}'/{account}'/{change}'/{index}'"
-        key, _ = self.derive_path(path)
+        key, chain = self.derive_path(path)
+        secure_memzero(chain)
         return key
 
 
@@ -780,7 +830,7 @@ class KeyRotationManager:
         return export_data
 
 
-class SecureKeyStorage:
+class SecureKeyStorage(SecretMaterial):
     """
     Secure key storage with encryption at rest
 
@@ -802,6 +852,10 @@ class SecureKeyStorage:
         - Legacy AES-CFB records are recognised and refused with a re-store
           instruction; they are not decrypted
     """
+
+    # The key-encryption key protects every stored key: it is zeroed when the
+    # store dies, not only on an explicit close.
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("encryption_key",)
 
     def __init__(
         self,
@@ -877,7 +931,7 @@ class SecureKeyStorage:
             # through the health-tested, error-state-gated CSPRNG, not a bare
             # secrets.token_bytes (which neither detects a stuck DRBG nor
             # refuses to mint key material while the module is in ERROR).
-            self.encryption_key = bytearray(secure_token_bytes(32))
+            self.encryption_key = secure_token_bytearray(32)
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     @staticmethod
@@ -1222,16 +1276,22 @@ class SecureKeyStorage:
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
 
-                self.encryption_key = bytearray(
-                    native_argon2id(
-                        master_password.encode("utf-8"),
+                # A wipeable bytearray already; wrapping it again copied the
+                # key and dropped the original unwiped (PR #415 review sweep).
+                # The password goes in as a ``bytearray`` zeroed when the
+                # derivation ends (residual: see the BIP39 site above).
+                password = bytearray(master_password, "utf-8")
+                try:
+                    self.encryption_key = native_argon2id(
+                        password,
                         self.salt,
                         t_cost=t_cost,
                         m_cost=m_cost,
                         parallelism=parallelism,
                         out_len=self.KDF_KEY_BYTES,
                     )
-                )
+                finally:
+                    zeroize(password)
             except (ImportError, RuntimeError) as exc:
                 raise RuntimeError(
                     "Argon2id native library required to open this key store "
@@ -1254,14 +1314,16 @@ class SecureKeyStorage:
             self.kdf_params["iterations"] = iterations
             # Key-encryption-key derivation on this module's own PBKDF2
             # (INVARIANT-1; see the BIP39 site above for the full rationale).
-            self.encryption_key = bytearray(
-                native_pbkdf2_hmac_sha256(
-                    master_password.encode("utf-8"),
+            password = bytearray(master_password, "utf-8")
+            try:
+                self.encryption_key = native_pbkdf2_hmac_sha256(
+                    password,
                     self.salt,
                     iterations,
                     self.KDF_KEY_BYTES,
                 )
-            )
+            finally:
+                zeroize(password)
 
         # Warn if using legacy parameters
         if version < 2:
@@ -1294,25 +1356,40 @@ class SecureKeyStorage:
         # name "migrate", and reported success.
         self._require_argon2id("migrate the key store")
 
-        # Read all existing keys with old parameters
-        old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
-        for key_file in self.storage_path.glob("*.json"):
-            if key_file.name.startswith("."):
-                continue
-            key_id = key_file.stem
-            key_data = self.retrieve_key(key_id)
-            # `is not None`, not truthiness.  A zero-length stored value —
-            # a tombstone, a placeholder provisioned before its material
-            # arrives, an empty result from an upstream serializer — is
-            # falsy, so `if key_data:` skipped it.  The migration then
-            # rotated the salt and metadata around it, leaving that record
-            # encrypted under a key the new password no longer derives:
-            # permanently unreadable, while list_keys() went on reporting it.
-            # Silent, and not recoverable once the old salt is gone.
-            if key_data is not None:
-                with open(key_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f).get("metadata", {})
-                old_keys[key_id] = (key_data, metadata)
+        # Read all existing keys with old parameters.  Each is decrypted into a
+        # wipeable bytearray and zeroed when the migration ends, whichever way
+        # (PR #415 review sweep: they were dropped intact).
+        old_keys: Dict[str, Tuple[bytearray, Dict[str, Any]]] = {}
+        try:
+            for key_file in self.storage_path.glob("*.json"):
+                if key_file.name.startswith("."):
+                    continue
+                key_id = key_file.stem
+                key_data = self.retrieve_key(key_id)
+                # `is not None`, not truthiness.  A zero-length stored value —
+                # a tombstone, a placeholder provisioned before its material
+                # arrives, an empty result from an upstream serializer — is
+                # falsy, so `if key_data:` skipped it.  The migration then
+                # rotated the salt and metadata around it, leaving that record
+                # encrypted under a key the new password no longer derives:
+                # permanently unreadable, while list_keys() went on reporting it.
+                # Silent, and not recoverable once the old salt is gone.
+                if key_data is not None:
+                    # Registered before its metadata is read, so a failed read
+                    # still leaves the decrypted key where the finally zeroes it.
+                    old_keys[key_id] = (key_data, {})
+                    with open(key_file, "r", encoding="utf-8") as f:
+                        old_keys[key_id] = (key_data, json.load(f).get("metadata", {}))
+            return self._reencrypt_under_current_kdf(master_password, old_keys)
+        finally:
+            for key_data, _metadata in old_keys.values():
+                zeroize(key_data)
+
+    def _reencrypt_under_current_kdf(
+        self, master_password: str, old_keys: Dict[str, Tuple[bytearray, Dict[str, Any]]]
+    ) -> bool:
+        """Re-encrypt ``old_keys`` under a new salt and an Argon2id key; see
+        :meth:`migrate_kdf`."""
 
         # Generate new salt
         new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
@@ -1320,99 +1397,116 @@ class SecureKeyStorage:
         # Derive the new key with Argon2id (availability checked above).
         from ama_cryptography.pqc_backends import native_argon2id
 
-        new_encryption_key = bytearray(
-            native_argon2id(
-                master_password.encode("utf-8"),
+        password = bytearray(master_password, "utf-8")
+        try:
+            new_encryption_key = native_argon2id(
+                password,
                 new_salt,
                 t_cost=self.ARGON2_T_COST,
                 m_cost=self.ARGON2_M_COST,
                 parallelism=self.ARGON2_PARALLELISM,
                 out_len=self.KDF_KEY_BYTES,
             )
-        )
+        finally:
+            zeroize(password)
+        # The new key is zeroed if anything below raises, before or inside the
+        # rollback; on success the retired key is (PR #415 review sweep: both
+        # were dropped intact).
+        with ScrubOnRaise() as held:
+            held(new_encryption_key)
 
-        # Re-encrypt all keys under the new key.  This is the dangerous part:
-        # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
-        # while the persisted ``.salt`` still selects the *old* key until the
-        # very end.  If the process dies partway through, the keys already
-        # rewritten are encrypted under a key that the on-disk salt can no longer
-        # reproduce — i.e. permanently undecryptable.  The previous rollback
-        # restored only ``self.encryption_key`` (not ``self.salt``, and not the
-        # rewritten files), so any interrupted migration lost data.
-        #
-        # Crash-safety strategy:
-        #   * snapshot the raw bytes of every file the migration overwrites,
-        #   * write each key + the salt + metadata via ``_atomic_write_bytes``
-        #     (atomic replace, so no file is ever torn),
-        #   * on any exception restore the exact prior on-disk state from the
-        #     snapshot and restore both ``encryption_key`` and ``salt`` in memory.
-        old_key = self.encryption_key
-        old_salt = self.salt
+            # Re-encrypt all keys under the new key.  This is the dangerous part:
+            # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
+            # while the persisted ``.salt`` still selects the *old* key until the
+            # very end.  If the process dies partway through, the keys already
+            # rewritten are encrypted under a key that the on-disk salt can no longer
+            # reproduce — i.e. permanently undecryptable.  The previous rollback
+            # restored only ``self.encryption_key`` (not ``self.salt``, and not the
+            # rewritten files), so any interrupted migration lost data.
+            #
+            # Crash-safety strategy:
+            #   * snapshot the raw bytes of every file the migration overwrites,
+            #   * write each key + the salt + metadata via ``_atomic_write_bytes``
+            #     (atomic replace, so no file is ever torn),
+            #   * on any exception restore the exact prior on-disk state from the
+            #     snapshot and restore both ``encryption_key`` and ``salt`` in memory.
+            old_key = self.encryption_key
+            old_salt = self.salt
 
-        snapshot: Dict[Path, Optional[bytes]] = {}
-        for key_id in old_keys:
-            key_path = self.storage_path / f"{key_id}.json"
-            snapshot[key_path] = key_path.read_bytes() if key_path.exists() else None
-        snapshot[self.salt_file] = self.salt_file.read_bytes() if self.salt_file.exists() else None
-        snapshot[self.metadata_file] = (
-            self.metadata_file.read_bytes() if self.metadata_file.exists() else None
-        )
+            snapshot: Dict[Path, Optional[bytes]] = {}
+            for key_id in old_keys:
+                key_path = self.storage_path / f"{key_id}.json"
+                snapshot[key_path] = key_path.read_bytes() if key_path.exists() else None
+            snapshot[self.salt_file] = (
+                self.salt_file.read_bytes() if self.salt_file.exists() else None
+            )
+            snapshot[self.metadata_file] = (
+                self.metadata_file.read_bytes() if self.metadata_file.exists() else None
+            )
 
-        old_kdf_params = self.kdf_params
+            old_kdf_params = self.kdf_params
 
-        self.encryption_key = new_encryption_key
-        self.salt = new_salt
-        # Swap the recorded parameters over with the key, so the keys written
-        # below are bound to the parameters they are actually protected by
-        # rather than to the ones being migrated away from.
-        self.kdf_params = {
-            "algorithm": "Argon2id",
-            "t_cost": self.ARGON2_T_COST,
-            "m_cost": self.ARGON2_M_COST,
-            "parallelism": self.ARGON2_PARALLELISM,
-        }
-
-        try:
-            for key_id, (key_data, key_metadata) in old_keys.items():
-                self.store_key(key_id, key_data, key_metadata)
-
-            # Update salt file (atomic, 0600).
-            _atomic_write_bytes(self.salt_file, new_salt)
-
-            # Update metadata (atomic, 0600).
-            metadata = {
-                "version": self.KDF_VERSION,
+            self.encryption_key = new_encryption_key
+            self.salt = new_salt
+            # Swap the recorded parameters over with the key, so the keys written
+            # below are bound to the parameters they are actually protected by
+            # rather than to the ones being migrated away from.
+            self.kdf_params = {
                 "algorithm": "Argon2id",
-                "salt_bytes": self.KDF_SALT_BYTES,
-                "migrated_at": datetime.now(timezone.utc).isoformat(),
                 "t_cost": self.ARGON2_T_COST,
                 "m_cost": self.ARGON2_M_COST,
                 "parallelism": self.ARGON2_PARALLELISM,
             }
-            _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
 
-            return True
-        except Exception:
-            # Restore the prior on-disk state so no key is left encrypted under a
-            # key the persisted salt cannot reproduce, then restore in-memory key
-            # and salt together (the old code left ``self.salt`` inconsistent).
-            for path, original in snapshot.items():
+            try:
+                for key_id, (key_data, key_metadata) in old_keys.items():
+                    self.store_key(key_id, key_data, key_metadata)
+
+                # Update salt file (atomic, 0600).
+                _atomic_write_bytes(self.salt_file, new_salt)
+
+                # Update metadata (atomic, 0600).
+                metadata = {
+                    "version": self.KDF_VERSION,
+                    "algorithm": "Argon2id",
+                    "salt_bytes": self.KDF_SALT_BYTES,
+                    "migrated_at": datetime.now(timezone.utc).isoformat(),
+                    "t_cost": self.ARGON2_T_COST,
+                    "m_cost": self.ARGON2_M_COST,
+                    "parallelism": self.ARGON2_PARALLELISM,
+                }
+                _atomic_write_bytes(
+                    self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8")
+                )
+
+                zeroize(old_key)
+                return True
+            except Exception:
+                # Restore the prior on-disk state so no key is left encrypted under a
+                # key the persisted salt cannot reproduce, then restore in-memory key
+                # and salt together (the old code left ``self.salt`` inconsistent).
+                # The in-memory restore sits in a ``finally``: an exception other
+                # than OSError from a restore write stopped it, leaving the store
+                # on the new, zeroed key (PR #415 review sweep).
                 try:
-                    if original is None:
-                        if path.exists():
-                            path.unlink()
-                    else:
-                        _atomic_write_bytes(path, original)
-                except OSError:
-                    logger.error(
-                        "migrate_kdf rollback could not restore %s; the key store "
-                        "may need manual recovery from backup",
-                        path,
-                    )
-            self.encryption_key = old_key
-            self.salt = old_salt
-            self.kdf_params = old_kdf_params
-            raise
+                    for path, original in snapshot.items():
+                        try:
+                            if original is None:
+                                if path.exists():
+                                    path.unlink()
+                            else:
+                                _atomic_write_bytes(path, original)
+                        except OSError:
+                            logger.error(
+                                "migrate_kdf rollback could not restore %s; the key store "
+                                "may need manual recovery from backup",
+                                path,
+                            )
+                finally:
+                    self.encryption_key = old_key
+                    self.salt = old_salt
+                    self.kdf_params = old_kdf_params
+                raise
 
     @classmethod
     def from_existing(
@@ -1471,7 +1565,7 @@ class SecureKeyStorage:
             raise ValueError("key_id must be non-empty alphanumeric (with - and _ allowed)")
 
     def store_key(
-        self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None
+        self, key_id: str, key_data: SecretBytes, metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         Store key with AES-256-GCM authenticated encryption.
@@ -1523,7 +1617,7 @@ class SecureKeyStorage:
         # process dies mid-write (load-bearing for crash-safe ``migrate_kdf``).
         _atomic_write_bytes(key_file, json.dumps(storage_data, indent=2).encode("utf-8"))
 
-    def retrieve_key(self, key_id: str) -> Optional[bytes]:
+    def retrieve_key(self, key_id: str) -> Optional[bytearray]:
         """
         Retrieve and decrypt key with authentication verification.
 
@@ -1531,12 +1625,13 @@ class SecureKeyStorage:
             key_id: Key identifier
 
         Returns:
-            Decrypted key bytes or None if not found
+            The decrypted key in a wipeable ``bytearray`` (INVARIANT-6), or
+            None if not found
 
         Raises:
             ValueError: If authentication fails (tampering detected) or unknown algorithm
         """
-        from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
+        from ama_cryptography.pqc_backends import _aes256_gcm_decrypt_wipeable
 
         # Same traversal guard as ``store_key`` — a store you cannot write with
         # a malicious id must not be readable with one either.
@@ -1578,11 +1673,12 @@ class SecureKeyStorage:
             aad = self._aad_for(key_id, storage_version, recorded_binding)
 
             # Decrypt with authentication (raises ValueError if tampered);
-            # keep the wipeable bytearray key on the buffer-protocol path.
+            # keep the wipeable bytearray key on the buffer-protocol path.  The
+            # stored key is decrypted straight into a wipeable bytearray: the
+            # public wrapper's ``bytes`` copy left every key the store returned
+            # un-wipeable (PR #415 review sweep).
             try:
-                plaintext: bytes = native_aes256_gcm_decrypt(
-                    self.encryption_key, nonce, ct, tag, aad
-                )
+                plaintext = _aes256_gcm_decrypt_wipeable(self.encryption_key, nonce, ct, tag, aad)
             except ValueError:
                 # A parameter mismatch is the one authentication failure with
                 # a specific, actionable cause: the key was protected at a
@@ -2168,7 +2264,7 @@ if __name__ == "__main__":
     storage = SecureKeyStorage(demo_storage_path, master_password=demo_password)
 
     # Store a key
-    test_key = secrets.token_bytes(32)
+    test_key = secure_token_bytearray(32)  # INVARIANT-41: the health-tested draw
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
     logger.info("[OK] Key stored securely")
 

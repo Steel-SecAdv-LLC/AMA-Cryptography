@@ -95,7 +95,11 @@ typedef enum {
      *   "AGENT-INSTANCE BINDING" below).  Distinct from
      *   AMA_ERROR_INVALID_PARAM: the arguments were well-formed, the
      *   *policy* said no. */
-    AMA_ERROR_ETHICAL_BINDING = -9
+    AMA_ERROR_ETHICAL_BINDING = -9,
+    /**< A draw repeated the previous draw's 32-byte window and was refused
+     *   (ama_random_bytes_repeat_checked, ama_rng_repeat_check).  Appended
+     *   after -9, so no existing value moves. */
+    AMA_ERROR_RNG_REPEAT = -10
 } ama_error_t;
 
 /* ============================================================================
@@ -416,6 +420,169 @@ AMA_API int ama_consttime_memcmp(const void* a, const void* b, size_t len);
  * @param len Length to scrub
  */
 AMA_API void ama_secure_memzero(void* ptr, size_t len);
+
+/**
+ * @brief Fill a caller-owned buffer from the operating system's CSPRNG.
+ *
+ * The library's own entropy source -- getrandom(2) on Linux, getentropy(3) on
+ * macOS, BCryptGenRandom on Windows, a character-device-checked /dev/urandom
+ * elsewhere -- exposed so a caller can draw secret material straight into
+ * memory it controls and later scrubs with ama_secure_memzero(), with no
+ * intermediate copy.  Blocks until the OS pool is initialised.  Output is
+ * all-or-nothing: on any failure the whole buffer is zeroed before return,
+ * so a partial draw never escapes.
+ *
+ * Defined in builds with AMA_USE_NATIVE_PQC=ON (the default and the Python
+ * package's configuration), alongside the primitives that draw from it.
+ *
+ * @param buf Output buffer (may be NULL only when len is 0)
+ * @param len Number of bytes to write
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM for NULL with len > 0;
+ *         AMA_ERROR_CRYPTO if the OS source fails (buf is then all zero).
+ */
+AMA_API ama_error_t ama_random_bytes(uint8_t *buf, size_t len);
+
+/**
+ * @brief ama_random_bytes() with a repeated-output check on the draw.
+ *
+ * Draws like ama_random_bytes() and then refuses the draw if it repeats the
+ * previous one.  This is a defence-in-depth repeated-output check, not a
+ * FIPS 140-3 health test: it catches an operating-system source that has
+ * become stuck and returns the same block twice in a row, and nothing else
+ * (docs/compliance/CSRC_ALIGN_REPORT.md section 4.5).
+ *
+ * The check runs over a 32-byte window of the draw.  For len >= 32 the draw
+ * is made straight into @p buf and its first 32 bytes are the window.  For
+ * len < 32, including len == 0, a separate 32-byte draw is the window and
+ * @p buf receives its first len bytes.  SHA-256 of the window is compared in
+ * constant time with the digest of the window of the previous draw; equal
+ * digests return AMA_ERROR_RNG_REPEAT.  Only that digest is retained, never
+ * a draw.  The comparison and the update are one atomic step, the call is
+ * safe from any number of threads, and on POSIX a fork() while another thread
+ * is inside it leaves the child able to call it (a pthread_atfork handler
+ * pair; a library that has been used must not be dlclose()d).  Windows has no
+ * fork().
+ *
+ * WHAT THIS DOES NOT PROVIDE.  Say no more than this when you cite it:
+ *  - The baseline is ONE value for the whole process.  Every caller and every
+ *    thread shares it, and any code in the process can replace it by calling
+ *    ama_rng_repeat_check().  It detects a stuck source; it is not a control
+ *    against anything that can run code in the process.
+ *  - The first call in a process has no previous window to compare with and
+ *    passes unchecked.  No draw is discarded or withheld.
+ *  - Nothing latches.  After AMA_ERROR_RNG_REPEAT the baseline is unchanged
+ *    and the next call is checked against it afresh; whatever error state
+ *    follows from a repeat belongs to the caller.
+ *  - Only consecutive windows are compared.  A source that alternates between
+ *    two blocks is not detected.
+ *
+ * On any return other than AMA_SUCCESS every byte of @p buf is zero (when it
+ * is non-NULL), including bytes a failing source wrote before it failed, and
+ * a repeated draw never reaches the caller.
+ *
+ * Defined in builds with AMA_USE_NATIVE_PQC=ON, as ama_random_bytes().
+ *
+ * @param buf Output buffer (may be NULL only when len is 0)
+ * @param len Number of bytes to write; 0 still draws and checks a window
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM for NULL with len > 0;
+ *         AMA_ERROR_RNG_REPEAT if the window repeated the previous one;
+ *         AMA_ERROR_CRYPTO if the OS source failed, the lock that makes the
+ *         check atomic could not be taken, or (POSIX) the fork handlers could
+ *         not be registered (the draw is refused, not issued unchecked).
+ */
+AMA_API ama_error_t ama_random_bytes_repeat_checked(uint8_t *buf, size_t len);
+
+/**
+ * @brief The repeated-output comparison of ama_random_bytes_repeat_checked(),
+ *        on a 32-byte window the caller already holds.
+ *
+ * Hashes @p window, compares the digest in constant time with the process-wide
+ * baseline and, unless it is equal, makes it the new baseline.  It exists so
+ * a caller that draws from a source of its own (the Python layer's seam, the
+ * power-on self-test) is checked against the SAME baseline as the draws above
+ * rather than against a second one.  The same limits apply, and the first
+ * one bites harder here: this call replaces the baseline for every other
+ * caller in the process, so a caller that feeds it anything but the window of
+ * a draw it is about to issue blinds the check for the next draw.
+ *
+ * @p window must point to 32 readable bytes; the signature cannot check it.
+ *
+ * @param window The 32-byte window of a draw
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM if @p window is NULL;
+ *         AMA_ERROR_RNG_REPEAT if its digest equals the baseline (which is
+ *         then left unchanged); AMA_ERROR_CRYPTO if the lock could not be
+ *         taken or (POSIX) the fork handlers could not be registered (the
+ *         window is refused, not accepted unchecked).
+ */
+AMA_API ama_error_t ama_rng_repeat_check(const uint8_t window[32]);
+
+/* ============================================================================
+ * CONSTANT-TIME BASE64 / BASE64URL (RFC 4648 §4, §5)
+ * ============================================================================
+ *
+ * Private keys are serialised as PEM (Base64) and JWK (unpadded Base64url).
+ * A table-driven codec indexes its alphabet by each secret 6-bit group, and
+ * its reverse table by each secret character: memory addresses that depend on
+ * the key (INVARIANT-12 rule 4).  This codec has no tables; the instructions
+ * it retires and the addresses it touches depend only on the lengths.
+ * Decoding is strict and canonical -- alphabet, padding and the RFC 4648 §3.5
+ * zero pad bits are all enforced, so one octet string has exactly one
+ * accepted encoding -- and every check runs over the whole input before the
+ * verdict is taken.
+ */
+
+/** Base64 variant. */
+typedef enum {
+    AMA_BASE64_STANDARD_PADDED = 1, /**< RFC 4648 §4, '+' '/', '=' padding (PEM) */
+    AMA_BASE64_URL_UNPADDED = 2     /**< RFC 4648 §5, '-' '_', no padding (JWK, RFC 7515 §2) */
+} ama_base64_variant_t;
+
+/**
+ * @brief Length of the encoding of @p bin_len octets.
+ * @return The encoded length; 0 for an unknown variant or a length whose
+ *         encoding does not fit in size_t (and for bin_len 0).
+ */
+AMA_API size_t ama_base64_encoded_len(size_t bin_len, ama_base64_variant_t variant);
+
+/**
+ * @brief Encode @p in, in constant time with respect to its contents.
+ *
+ * @param out     Output characters (not NUL-terminated); may be NULL only
+ *                when the encoding is empty
+ * @param out_cap Capacity of @p out; at least ama_base64_encoded_len()
+ * @param in      Input octets; may be NULL only when @p in_len is 0
+ * @param in_len  Number of input octets
+ * @param variant AMA_BASE64_STANDARD_PADDED or AMA_BASE64_URL_UNPADDED
+ * @param out_len Output: characters written (0 on any refusal)
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM for a NULL argument, an
+ *         unknown variant, or @p out_cap too small (nothing is written)
+ */
+AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,
+                                      const uint8_t *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len);
+
+/**
+ * @brief Decode @p in strictly, in constant time with respect to its contents.
+ *
+ * Refuses a character outside the variant's alphabet, padding that is not
+ * exactly the length's own (any padding at all for the unpadded variant),
+ * non-zero pad bits, and a length no octet string encodes to.  A refused
+ * decode zeroes every octet it wrote.
+ *
+ * @param out     Output octets; may be NULL only when the decoding is empty
+ * @param out_cap Capacity of @p out; at least 3 * (in_len / 4) + 2 suffices
+ * @param in      Input characters (no whitespace); may be NULL only when
+ *                @p in_len is 0
+ * @param in_len  Number of input characters
+ * @param variant AMA_BASE64_STANDARD_PADDED or AMA_BASE64_URL_UNPADDED
+ * @param out_len Output: octets written (0 on any refusal)
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
+                                      const char *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len);
 
 /** Bytes of dead stack `ama_secure_stack_wipe()` clears. */
 #define AMA_STACK_WIPE_BYTES 4096u
@@ -2304,6 +2471,40 @@ AMA_API ama_error_t ama_secp256k1_point_mul(
 AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
     const uint8_t privkey[32],
     uint8_t compressed_pubkey[33]
+);
+
+/**
+ * @brief Check that a secp256k1 secret key is a scalar in [1, n-1]
+ *
+ * Constant time in the key; only the verdict is public.  Same contract as
+ * libsecp256k1's secp256k1_ec_seckey_verify.
+ *
+ * @param seckey 32-byte big-endian secret key
+ * @return AMA_SUCCESS when valid; AMA_ERROR_INVALID_PARAM when zero, at or
+ *         above the group order, or NULL
+ */
+AMA_API ama_error_t ama_secp256k1_seckey_verify(const uint8_t seckey[32]);
+
+/**
+ * @brief out = (seckey + tweak) mod n, constant time (BIP32 CKDpriv)
+ *
+ * The private-child step of BIP32: k_i = (parse256(I_L) + k_par) mod n.  The
+ * secret key must be in [1, n-1] and the tweak in [0, n-1], and the sum must
+ * not be zero; any violation is refused (BIP32 then moves to the next index)
+ * and `out` is zeroed.  Every range check runs on every call and only the
+ * combined verdict is public.  `out` may alias `seckey` or `tweak`.  Same
+ * contract as libsecp256k1's secp256k1_ec_seckey_tweak_add.
+ *
+ * @param out    Output: 32-byte big-endian sum
+ * @param seckey 32-byte big-endian secret key
+ * @param tweak  32-byte big-endian tweak
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM (out zeroed unless it is
+ *         NULL, including when seckey or tweak is NULL)
+ */
+AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(
+    uint8_t out[32],
+    const uint8_t seckey[32],
+    const uint8_t tweak[32]
 );
 
 /**

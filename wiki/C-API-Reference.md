@@ -70,64 +70,85 @@ void ama_context_free(ama_context_t *ctx);
 
 ## Random Number Generation
 
-### There is no public RNG entry point — and `ama_randombytes()` is not one
+### Three public entry points; `ama_randombytes()` is not one
 
-AMA draws entropy from the platform CSPRNG internally:
+AMA draws entropy from the platform CSPRNG:
 
 - Linux 3.17+: `getrandom(2)`, blocking semantics
 - macOS 10.12+: `getentropy(3)` in 256-byte chunks
 - Windows Vista+: `BCryptGenRandom` with `BCRYPT_USE_SYSTEM_PREFERRED_RNG`
 - BSD fallback: `/dev/urandom`
 
-That wrapper is `ama_randombytes()` in `src/c/ama_platform_rand.c`, and it is
-**internal in both directions**:
+Three functions expose that draw, all declared in `include/ama_cryptography.h`
+and all defined in builds with `AMA_USE_NATIVE_PQC=ON` (the default):
 
-1. It is declared in `src/c/ama_platform_rand.h`, which is not part of the
-   installed header set — `include/ama_cryptography.h` does not declare it.
-2. It is **not an exported symbol**. `cmake/ama_exports.map` names it
-   explicitly in the `local:` list ("Platform CSPRNG wrapper — internal;
-   callers use the algorithm APIs"), so the `ama_*` wildcard does not publish
-   it. `nm --dynamic --defined-only libama_cryptography.so` returns nothing for
-   it, and a downstream `extern ama_error_t ama_randombytes(...)` fails at link
-   time with an undefined reference.
+<!-- example: c-decl -->
+```c
+ama_error_t ama_random_bytes(uint8_t *buf, size_t len);
+ama_error_t ama_random_bytes_repeat_checked(uint8_t *buf, size_t len);
+ama_error_t ama_rng_repeat_check(const uint8_t window[32]);
+```
 
-An earlier revision of this page said the opposite and offered the `extern`
-declaration as a supported recipe. It never linked.
+- `ama_random_bytes()` fills `buf` from the OS and is all-or-nothing: on any
+  failure the whole buffer is zeroed before it returns. It keeps no state.
+- `ama_random_bytes_repeat_checked()` draws the same way and then refuses the
+  draw (`AMA_ERROR_RNG_REPEAT`, buffer zeroed) if a 32-byte window of it
+  repeats the previous draw's. For `len >= 32` the window is the first 32
+  bytes of `buf`; for `len < 32`, `len == 0` included, a separate 32-byte draw
+  is the window and `buf` receives its first `len` bytes. Only a SHA-256 digest
+  of the window is retained, never a draw.
+- `ama_rng_repeat_check()` is the comparison alone, on a 32-byte window you
+  already hold. It exists so a caller with an entropy source of its own is
+  checked against the same baseline as the draws above. The pointer must
+  address 32 readable bytes; the signature cannot check that.
+- Both checked entry points fail closed with `AMA_ERROR_CRYPTO` when the OS
+  source fails, when the lock that makes the check atomic cannot be taken, or
+  (POSIX) when the `fork()` handlers could not be registered: the draw is
+  refused, never issued unchecked, and a failed registration stays failed for
+  the life of the process.
 
-**What to use instead.** Every AMA entry point that needs entropy draws it
-itself — `ama_keypair_generate()`, `ama_nistp_keypair()`, `ama_x25519_keypair()`,
-`ama_ml_kem_*`, `ama_ml_dsa_*`, `ama_slhdsa_*`. When you genuinely need raw
-bytes of your own (a nonce for your protocol, a seed for
-`ama_ed25519_keypair()`), call your platform's CSPRNG directly — that is an
-operating-system service, not a cryptographic primitive AMA should be
-re-exporting:
+**What the repeated-output check is, and is not.** It is a defence-in-depth
+check that catches an operating-system source that has become stuck and
+returns the same block twice in a row. It is **not** a FIPS 140-3 RNG health
+test (`docs/compliance/CSRC_ALIGN_REPORT.md` section 4.5), and it provides
+less than its name may suggest:
+
+- The baseline is **one value for the whole process**. Every caller and
+  thread shares it, and any code in the process can replace it by calling
+  `ama_rng_repeat_check()`. It is not a control against anything that can run
+  code in your process.
+- The **first call in a process passes unchecked**: there is no previous
+  window to compare with. Nothing is discarded or withheld.
+- **Nothing latches.** After `AMA_ERROR_RNG_REPEAT` the baseline is unchanged
+  and the next call is checked against it afresh. Any error state that should
+  follow a repeat is yours to keep.
+- Only **consecutive** windows are compared; a source alternating between two
+  blocks is not detected.
+- It is thread-safe, and on POSIX a `fork()` taken while another thread is
+  inside it leaves the child able to call it (a `pthread_atfork` handler pair
+  registered on first use; do not `dlclose()` the library once it has been
+  used). Windows has no `fork()`.
+
+`ama_randombytes()` in `src/c/ama_platform_rand.c` is the internal wrapper
+those entry points sit on. It is declared in `src/c/ama_platform_rand.h`, which
+is not part of the installed header set, and is **not an exported symbol**:
+`cmake/ama_exports.map` names it in the `local:` list, so `nm --dynamic
+--defined-only libama_cryptography.so` returns nothing for it and a downstream
+`extern ama_error_t ama_randombytes(...)` fails at link time. Use the three
+functions above.
+
+**Example:**
 
 <!-- example: c-run -->
 ```c
 #include <ama_cryptography.h>
 #include <stdio.h>
-#include <stdlib.h>
-
-/* Portable enough for an example: the OS CSPRNG through the C library.
- * On Linux/glibc 2.25+ and macOS 10.12+ this is getentropy(3); on Windows
- * use BCryptGenRandom with BCRYPT_USE_SYSTEM_PREFERRED_RNG. */
-#if defined(__linux__) || defined(__APPLE__)
-#  include <sys/random.h>
-static int os_random(uint8_t *out, size_t len) { return getentropy(out, len); }
-#else
-static int os_random(uint8_t *out, size_t len) {
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (f == NULL) { return -1; }
-    size_t got = fread(out, 1, len, f);
-    fclose(f);
-    return got == len ? 0 : -1;
-}
-#endif
 
 int main(void) {
     uint8_t nonce[12] = {0};
-    if (os_random(nonce, sizeof(nonce)) != 0) {
-        return 1;   /* fail closed: never proceed with a half-filled nonce */
+    ama_error_t rc = ama_random_bytes_repeat_checked(nonce, sizeof(nonce));
+    if (rc != AMA_SUCCESS) {
+        return 1;   /* fail closed: the buffer is already zeroed, never use it */
     }
     printf("drew %zu random bytes\n", sizeof(nonce));
     ama_secure_memzero(nonce, sizeof(nonce));
@@ -782,7 +803,8 @@ typedef enum {
     AMA_ERROR_TIMING_ATTACK   = -6,  // Timing-guard tripped
     AMA_ERROR_SIDE_CHANNEL    = -7,  // Side-channel guard tripped
     AMA_ERROR_OVERFLOW        = -8,  // Arithmetic/buffer overflow prevented
-    AMA_ERROR_ETHICAL_BINDING = -9   // Agent-instance binding policy refused (INVARIANT-30)
+    AMA_ERROR_ETHICAL_BINDING = -9,  // Agent-instance binding policy refused (INVARIANT-30)
+    AMA_ERROR_RNG_REPEAT      = -10  // A CSPRNG draw repeated the previous draw's 32-byte window
 } ama_error_t;
 ```
 

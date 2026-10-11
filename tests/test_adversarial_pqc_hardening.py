@@ -97,7 +97,7 @@ class TestKyberINDCCA2Malleability:
 
         zero_ct = b"\x00" * KYBER_CT
         zero_ss = kyber_decapsulate(zero_ct, kp.secret_key)
-        assert isinstance(zero_ss, bytes)
+        assert isinstance(zero_ss, bytearray)  # wipeable (INVARIANT-6)
         assert len(zero_ss) == KYBER_SS
         assert zero_ss != original_ss
 
@@ -115,7 +115,7 @@ class TestKyberINDCCA2Malleability:
 
         ff_ct = b"\xff" * KYBER_CT
         ff_ss = kyber_decapsulate(ff_ct, kp.secret_key)
-        assert isinstance(ff_ss, bytes)
+        assert isinstance(ff_ss, bytearray)  # wipeable (INVARIANT-6)
         assert ff_ss != original_ss
 
     def test_truncated_ciphertext_rejected(self) -> None:
@@ -158,7 +158,7 @@ class TestKyberINDCCA2Malleability:
 
         random_ct = secrets.token_bytes(KYBER_CT)
         rand_ss = kyber_decapsulate(random_ct, kp.secret_key)
-        assert isinstance(rand_ss, bytes)
+        assert isinstance(rand_ss, bytearray)  # wipeable (INVARIANT-6)
         assert len(rand_ss) == KYBER_SS
         assert rand_ss != original_ss
 

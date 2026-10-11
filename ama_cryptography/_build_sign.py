@@ -390,6 +390,28 @@ def _load_native_trust_anchor(
     return value
 
 
+def _native_fill(lib: Any, buf: bytearray) -> None:
+    """Fill ``buf`` in place from ``lib``'s ``ama_random_bytes``.
+
+    Raises:
+        RuntimeError: the library does not export the CSPRNG, or the
+            operating system's entropy source refused (the C side has then
+            zeroed ``buf`` and the caller scrubs it).
+    """
+    try:
+        fn = lib.ama_random_bytes
+    except AttributeError as exc:
+        raise RuntimeError(
+            "the native library does not export ama_random_bytes; refusing to "
+            "mint an integrity-signing key from any other source"
+        ) from exc
+    fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+    fn.restype = ctypes.c_int
+    rc = fn((ctypes.c_char * len(buf)).from_buffer(buf), len(buf))
+    if rc != 0:
+        raise RuntimeError(f"ama_random_bytes returned rc={rc}; no integrity-signing seed issued")
+
+
 def _generate_keypair_and_sign(
     digest: bytes,
     seed_override: Optional[bytes] = None,
@@ -420,7 +442,7 @@ def _generate_keypair_and_sign(
     # cannot find the native library (e.g. doc builders): the failure
     # surfaces only when sign is actually requested.
     from ama_cryptography.pqc_backends import _find_native_library
-    from ama_cryptography.secure_memory import secure_memzero
+    from ama_cryptography.secure_memory import constant_time_compare, secure_memzero
 
     # The caller normally hands in the handle it already resolved, under the
     # narrowly-scoped signing override.  Re-discovering here would run outside
@@ -457,7 +479,7 @@ def _generate_keypair_and_sign(
     # ama_ed25519_keypair(public_key[32], secret_key[64])
     #   The 32-byte seed is read from secret_key[0..31] and the
     #   computed public key is written into both `public_key` and
-    #   secret_key[32..63].  We seed with os.urandom for the
+    #   secret_key[32..63].  We seed from the native CSPRNG for the
     #   one-shot per-build key.
     lib.ama_ed25519_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.ama_ed25519_keypair.restype = ctypes.c_int
@@ -473,25 +495,31 @@ def _generate_keypair_and_sign(
     pk = bytearray(32)
     sk = bytearray(64)
     # The per-build signing seed deliberately does NOT route through the
-    # error-state-gated ``secure_token_bytes`` draw that INVARIANT-41 requires
-    # of runtime key material: this signer's defining use case is repairing a
-    # stale artefact, which it does from the ERROR state — where the gated
-    # draw refuses by design, and routing through it would wall the repair
-    # tool off behind the fault it exists to clear.  The health property the
-    # gate would have provided is applied directly instead: the FIPS 140-3
-    # continuous-test comparison of consecutive draws, which a catastrophically
-    # stuck entropy source fails.
+    # error-state-gated ``secure_random_fill``: this signer repairs a stale
+    # artefact from the ERROR state, where the gated draw refuses by design.
+    # It calls the raw C symbol ``lib.ama_random_bytes`` (``_native_fill``) on
+    # the handle it was given, writing in place into bytearrays so no
+    # immutable copy of the seed exists (INVARIANT-6), and imports nothing
+    # further (INVARIANT-17).  The FIPS 140-3 continuous test the gate would
+    # have applied is done directly: consecutive identical draws are refused.
     if seed_override is not None:
         seed = bytearray(seed_override)
     else:
-        first_draw = os.urandom(32)
-        second_draw = os.urandom(32)
-        if first_draw == second_draw:
-            raise RuntimeError(
-                "os.urandom returned two identical 32-byte draws — entropy "
-                "source stuck; refusing to mint an integrity-signing key"
-            )
-        seed = bytearray(second_draw)
+        first_draw = bytearray(32)
+        seed = bytearray(32)
+        try:
+            _native_fill(lib, first_draw)
+            _native_fill(lib, seed)
+            if constant_time_compare(first_draw, seed):
+                raise RuntimeError(
+                    "native CSPRNG returned two identical 32-byte draws -- entropy "
+                    "source stuck; refusing to mint an integrity-signing key"
+                )
+        except BaseException:
+            secure_memzero(seed)
+            raise
+        finally:
+            secure_memzero(first_draw)
     sk[0:32] = seed
     secure_memzero(seed)
 

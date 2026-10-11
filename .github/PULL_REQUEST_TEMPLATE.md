@@ -46,12 +46,27 @@ Relates to #
 <!-- Which cryptographic standards does this PR affect? -->
 
 - [ ] NIST FIPS 202 (SHA-3)
-- [ ] NIST FIPS 204 (Dilithium)
+- [ ] NIST FIPS 180-4 (SHA-2)
+- [ ] NIST FIPS 198-1 (HMAC)
+- [ ] NIST FIPS 203 (ML-KEM)
+- [ ] NIST FIPS 204 (ML-DSA)
+- [ ] NIST FIPS 205 (SLH-DSA)
+- [ ] NIST FIPS 186-5 (ECDSA: P-256/384/521)
+- [ ] NIST SP 800-56A rev. 3 (ECDH: P-256/384/521)
+- [ ] NIST SP 800-208 (LMS/HSS, verification only)
+- [ ] NIST SP 800-232 (Ascon)
+- [ ] NIST SP 800-38D (AES-GCM)
+- [ ] NIST SP 800-132 (PBKDF2)
 - [ ] NIST SP 800-108 (Key Derivation)
 - [ ] RFC 2104 (HMAC)
 - [ ] RFC 5869 (HKDF)
+- [ ] RFC 7748 (X25519)
+- [ ] RFC 8439 (ChaCha20-Poly1305)
 - [ ] RFC 8032 (Ed25519)
+- [ ] RFC 9106 (Argon2id)
 - [ ] RFC 3161 (Timestamps)
+- [ ] SEC 2 v2 (secp256k1)
+- [ ] RFC 9591-style FROST (not ciphersuite-interoperable; see CSRC_STANDARDS.md)
 - [ ] No standards affected
 
 ### Academic References

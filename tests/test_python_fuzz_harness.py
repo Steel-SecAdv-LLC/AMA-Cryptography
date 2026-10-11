@@ -168,7 +168,7 @@ def test_a_private_pem_is_held_to_body_and_armor(
     import ama_cryptography.key_formats as kf
 
     _, private = _make_ed25519()
-    pem = private.to_pem().encode()
+    pem = bytes(private.to_pem())
     harness.run_one("pem_private", pem)  # honest input passes
     harness.run_one("pkcs8", pem)  # and the pkcs8 target now checks it too
 

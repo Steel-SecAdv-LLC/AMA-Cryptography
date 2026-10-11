@@ -3,11 +3,11 @@
 /*
  * ama_test_csprng.h -- the one definition of a file's test CSPRNG hook.
  *
- * Six translation units draw randomness through a file-local function that
+ * Seven translation units draw randomness through a file-local function that
  * a test can redirect, in AMA_TESTING_MODE only, to replay a KAT seed or to
- * simulate a CSPRNG failure and assert the fail-closed exit.  They carried
- * six hand-written copies of the same pointer and wrapper (ML-KEM, ML-DSA,
- * SLH-DSA, FROST, NIST-P, X25519), and the tests declared each pointer by
+ * simulate a CSPRNG failure and assert the fail-closed exit.  Six carried
+ * hand-written copies of the same pointer and wrapper (ML-KEM, ML-DSA,
+ * SLH-DSA, FROST, NIST-P, X25519; ama_rng_repeat.c uses the macro), and the tests declared each pointer by
  * hand with no prototype to check against; a change to the pattern had to
  * be made in every copy and could be missed in one.
  *

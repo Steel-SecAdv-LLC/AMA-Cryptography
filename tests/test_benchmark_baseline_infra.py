@@ -2955,3 +2955,39 @@ class TestTheDispatchRowDescribesTheMeasuringProcess:
         assert br.main() == 0
         assert events[0] == "capture", events
         assert br._DISPATCH_REPORT == "captured"
+
+
+def test_every_extension_source_is_a_floored_path() -> None:
+    """The floor-drift guard watches every source a shipped extension compiles.
+
+    PIN: ``src/cython`` was absent from ``_FLOORED_CODE_PATHS`` while five
+    floored rows ran through its bindings, so a binding change that cost
+    hkdf_derive 13% (2026-10-08) needed no acknowledgement.  The sources are
+    read from ``setup.py``'s ``Extension(sources=[...])`` calls, so a new
+    binding outside the watched paths fails here rather than drifting unseen.
+    """
+    import ast
+
+    import benchmarks.check_baseline_justification as guard
+
+    repo_root = Path(__file__).resolve().parent.parent
+    tree = ast.parse((repo_root / "setup.py").read_text(encoding="utf-8"))
+    sources: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Extension":
+            for keyword in node.keywords:
+                if keyword.arg == "sources" and isinstance(keyword.value, ast.List):
+                    sources.extend(
+                        element.value
+                        for element in keyword.value.elts
+                        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+                    )
+    assert sources, "no Extension(sources=[...]) found in setup.py"
+
+    def floored(path: str) -> bool:
+        return any(
+            path == root or path.startswith(root.rstrip("/") + "/")
+            for root in guard._FLOORED_CODE_PATHS
+        )
+
+    assert not [path for path in sources if not floored(path)], sources

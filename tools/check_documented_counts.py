@@ -1191,28 +1191,88 @@ def measure_internal_sources(repo: Path) -> tuple[int, int]:
     )
 
 
+def _enumeration_after(live: str, end: int) -> str | None:
+    """The paragraph after the line ending at ``end``, if it is a list of
+    backticked names (the README inventories' layout); otherwise None."""
+    rest = live[end:].split("\n", 1)
+    if len(rest) < 2:
+        return None
+    body = rest[1].lstrip("\n")
+    paragraph = body.split("\n\n", 1)[0]
+    return paragraph if paragraph.startswith("`") else None
+
+
+def _listed_names(paragraph: str) -> set[str]:
+    """The backticked names an enumeration lists, outside its parenthetical
+    asides (which name other things: ``chmod``, ``AlgorithmType``)."""
+    depth, kept = 0, []
+    for char in paragraph:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif depth == 0:
+            kept.append(char)
+    return set(re.findall(r"`([^`\s]+)`", "".join(kept)))
+
+
+def _enumeration_problems(rel: str, what: str, listed: set[str], actual: set[str]) -> list[str]:
+    problems = []
+    if actual - listed:
+        problems.append(f"{rel}: the {what} list omits {sorted(actual - listed)}")
+    if listed - actual:
+        problems.append(f"{rel}: the {what} list names {sorted(listed - actual)}, not in the tree")
+    return problems
+
+
 def check_source_inventory_counts(repo: Path) -> list[str]:
-    """README's version-stamped C and Python inventories, measured."""
+    """README's version-stamped C and Python inventories, measured.
+
+    Where a count is followed by the list it counts, the list is checked too,
+    name for name: a heading of 29 translation units over a list of 28 (PR
+    #415, ``ama_base64.c``) passed a gate that read only the number.
+    """
     problems: list[str] = []
     units, modules = measure_source_inventory(repo)
+    unit_names = {Path(p).name for p in _tracked_or_globbed(repo, "src/c/*.c")}
+    module_names = {
+        name[: -len(".py")]
+        for name in _tracked_or_globbed_names(repo, "ama_cryptography/*.py")
+        if name not in {"__init__.py", "__main__.py"}
+    }
     internal_c, internal_h = measure_internal_sources(repo)
 
     def _num(raw: str) -> int:
         return int(raw.replace(",", ""))
 
     for rel, live in _live_documents(repo):
-        for claimed in _SRC_C_UNITS_RE.findall(live):
+        for match in _SRC_C_UNITS_RE.finditer(live):
+            claimed = match.group(1)
             if _num(claimed) != units:
                 problems.append(
                     f"{rel}: says {claimed} top-level src/c translation units; "
                     f"`src/c/*.c` counts {units}"
                 )
-        for claimed in _PACKAGE_MODULES_RE.findall(live):
+            listing = _enumeration_after(live, match.end())
+            if listing is not None:
+                listed = {n for n in _listed_names(listing) if n.endswith(".c")}
+                problems += _enumeration_problems(rel, "top-level src/c", listed, unit_names)
+        for match in _PACKAGE_MODULES_RE.finditer(live):
+            claimed = match.group(1)
             if _num(claimed) != modules:
                 problems.append(
                     f"{rel}: says {claimed} package modules besides __init__ and "
                     f"__main__; `ama_cryptography/*.py` counts {modules}"
                 )
+            listing = _enumeration_after(live, match.end())
+            if listing is not None:
+                # Module names only: the paragraph also names a generated
+                # file (`_integrity_signature.py`) it says is not tracked.
+                listed = {n for n in _listed_names(listing) if n.isidentifier()} - {
+                    "__init__",
+                    "__main__",
+                }
+                problems += _enumeration_problems(rel, "package module", listed, module_names)
         for claimed_c, claimed_h in _SRC_C_INTERNAL_RE.findall(live):
             if (_num(claimed_c), _num(claimed_h)) != (internal_c, internal_h):
                 problems.append(

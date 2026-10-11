@@ -402,7 +402,7 @@ load:
 | ML-DSA-65 | Keygen + sign + verify roundtrip + negative test | Runtime generated |
 | SLH-DSA (SPHINCS+) | Keygen + sign + verify roundtrip | Runtime generated |
 | Ed25519 | Keygen + sign + verify roundtrip | Runtime generated |
-| RNG | Two consecutive `secrets.token_bytes(32)` non-equality | Runtime |
+| RNG | Two consecutive 32-byte draws from the native source (`ama_random_bytes`) non-equality | Runtime |
 
 **POST Budget:** All self-tests complete in <300ms (measured ~260ms on
 4-core Linux), well within the 500ms budget.
@@ -495,8 +495,10 @@ and it stopped being accurate when INVARIANT-41 wired them into every one.
 
 ### 4.5 Repeated-output check on the OS CSPRNG
 
-`secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
-to the previous output. If two consecutive calls return identical bytes,
+`secure_random_fill(buf)` -- and `secure_token_bytearray(n)` /
+`secure_token_bytes(n)` over it -- draws from the library's native
+`ama_random_bytes` (the OS CSPRNG) straight into the caller's buffer, and
+compares a digest of the draw with the previous one. If two consecutive calls return identical bytes,
 the module enters ERROR state immediately.
 
 This is a defence-in-depth sanity check on the operating system's CSPRNG,
@@ -504,8 +506,8 @@ This is a defence-in-depth sanity check on the operating system's CSPRNG,
 as one. The two-consecutive-identical-blocks continuous RNG test (CRNGT) was
 a **FIPS 140-2** requirement; the FIPS 140-3 transition removed it in favour
 of the SP 800-90B startup and continuous health tests (Repetition Count and
-Adaptive Proportion) applied to a noise source. `secrets.token_bytes` is the
-operating-system CSPRNG, not an approved SP 800-90A DRBG instantiated inside a
+Adaptive Proportion) applied to a noise source. `ama_random_bytes` is an
+interface to the operating-system CSPRNG, not an approved SP 800-90A DRBG instantiated inside a
 defined cryptographic boundary, and POST carries no DRBG KAT. Approved
 SP 800-90A DRBG / SP 800-90B entropy-source instantiation is listed among the
 outstanding prerequisites in `CSRC_STANDARDS.md` Section 3.1(e).
@@ -682,3 +684,31 @@ listed for inventory completeness:
 The CAVP disclaimer of §3.3 applies to this addendum in full: self-attested
 algorithm compliance, not a CAVP validation certificate, and no NIST
 endorsement.
+
+## Native additions in 5.0.0 that are not new primitives (2026-10-08)
+
+Recorded because `tools/generate_sbom.py` lists them as components; none is a
+new NIST or IETF algorithm, and none extends the §3.1 verdict table.
+
+- `src/c/ama_base64.c` — RFC 4648 Base64 / Base64url (`ama_base64_encode`,
+  `ama_base64_decode`), table-free and constant-time in the encoded and
+  decoded bytes (INVARIANT-12 rule 4), strict canonical decode. It carries
+  `key_formats` private-key PEM and JWK. Evidence: `tests/c/test_base64.c`
+  (RFC 4648 §10 vectors; a differential against a naive reference over all
+  60,794,702 strings of length 0 to 4 on a 74-character probe alphabet, plus
+  random inputs; refusal zeroing) and the `base64` target of
+  `tools/check_ghash_constant_time.py`, count and taint.
+- `ama_random_bytes` in `src/c/ama_platform_rand.c` — the public form of the
+  OS CSPRNG draw, which zeroes the buffer on any failure. It is the source
+  §4.5 describes; it is not an SP 800-90A DRBG.
+- `ama_random_bytes_repeat_checked` / `ama_rng_repeat_check` in
+  `src/c/ama_rng_repeat.c` — the §4.5 repeated-output check in C, fused with
+  the draw: a draw whose 32-byte window repeats the previous one is refused
+  (`AMA_ERROR_RNG_REPEAT`). Defence in depth, **not** a FIPS 140-3 RNG health
+  test; the header lists what it does not provide.
+- `ama_secp256k1_seckey_verify` / `ama_secp256k1_seckey_tweak_add` in
+  `src/c/ama_secp256k1.c` — the BIP32 child-key scalar step on the existing
+  constant-time mod-n arithmetic (`secp256k1-seckey` target of the same gate).
+  Evidence: `tests/c/test_secp256k1.c` `test_seckey_arithmetic` (BIP32 test
+  vector 1, chain m/0H, range boundaries, aliasing, and a differential
+  against Python integers).

@@ -73,9 +73,16 @@ def _length(count: int) -> bytes:
 
 
 def encode(node: Node) -> bytes:
-    """Serialise one ``(tag, content)`` node. Content is bytes or child nodes."""
+    """Serialise one ``(tag, content)`` node.
+
+    Content is octets -- ``bytes``, or the ``bytearray`` the library holds a
+    private key in -- or a list of child nodes.
+    """
     tag, content = node
-    body = content if isinstance(content, bytes) else b"".join(encode(c) for c in content)
+    if isinstance(content, (bytes, bytearray)):
+        body = bytes(content)
+    else:
+        body = b"".join(encode(c) for c in content)
     return bytes([tag]) + _length(len(body)) + body
 
 
@@ -256,7 +263,7 @@ V2 = 1
 
 def ec_private_key(
     algorithm: str,
-    scalar: bytes,
+    scalar: bytes | bytearray,
     public_key: bytes | None,
     *,
     include_parameters: bool = False,
@@ -286,6 +293,7 @@ def ec_private_key(
     carries it. ``include_parameters`` selects between the two, so this encoder
     can reproduce the RFC's own bytes as well as the wrapped form.
     """
+    scalar = bytes(scalar)  # a library private key is a bytearray
     width = FIELD_BYTES[algorithm]
     if len(scalar) > width:
         raise ValueError(f"{algorithm} scalar is {len(scalar)} octets, wider than {width}")
@@ -330,11 +338,11 @@ def pq_private_key(seed: bytes | None, expanded: bytes | None, arm: str) -> Node
 
 def pkcs8(
     algorithm: str,
-    private_key: bytes,
+    private_key: bytes | bytearray,
     *,
     public_key: bytes | None = None,
     include_public_key: bool = False,
-    seed: bytes | None = None,
+    seed: bytes | bytearray | None = None,
     pq_arm: str = "expandedKey",
 ) -> bytes:
     """Build a ``OneAsymmetricKey`` for any of the twelve algorithms.
@@ -351,6 +359,9 @@ def pkcs8(
     encoder that puts an EC public key in the outer field produces a file that
     parses, carries the right key, and is not what any EC tooling writes.
     """
+    # The library holds private keys in bytearrays; the reference works in bytes.
+    private_key = bytes(private_key)
+    seed = None if seed is None else bytes(seed)
     extra: list[Node] = []
     version = V1
 

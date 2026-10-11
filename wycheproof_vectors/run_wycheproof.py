@@ -311,7 +311,7 @@ def drive_mac(c: Case) -> tuple[bool, str]:
     return _expect(c.result, matched), f"tag[:{width}]={'match' if matched else 'MISMATCH'}"
 
 
-_HKDF: dict[str, Callable[..., bytes]] = {
+_HKDF: dict[str, Callable[..., bytes | bytearray]] = {
     "hkdf_sha256_test.json": native_hkdf_sha256,
     "hkdf_sha384_test.json": native_hkdf_sha384,
     "hkdf_sha512_test.json": native_hkdf_sha512,

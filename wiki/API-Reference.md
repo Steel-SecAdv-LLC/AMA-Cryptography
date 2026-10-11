@@ -236,8 +236,12 @@ def quick_hkdf(
     salt: bytes | None = None,
     info: bytes = b"",
     algorithm: str = "sha256",
-) -> bytes: ...
+) -> bytearray: ...
 ```
+
+`quick_hkdf` returns key material, so it comes back in a `bytearray` the
+caller can zero when done (INVARIANT-6); `quick_hmac`'s tag is public and is
+`bytes`.
 
 Usage:
 
@@ -320,8 +324,9 @@ pk, sk = kp.public_key, kp.secret_key
 # and .shared_secret (32 bytes).
 enc = kyber_encapsulate(public_key: bytes)
 
-# Decapsulate (receiver side) -> 32-byte shared secret
-ss: bytes = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes
+# Decapsulate (receiver side) -> 32-byte shared secret, in a bytearray the
+# caller can zero (INVARIANT-6).  .secret_key above is a bytearray too.
+ss: bytearray = kyber_decapsulate(ciphertext: bytes, secret_key: bytes | bytearray | memoryview) -> bytearray
 ```
 
 #### SPHINCS+-SHA2-256f
@@ -445,7 +450,7 @@ hd = HDKeyDerivation(
 )
 
 # Convenience: always fully-hardened BIP-44 path
-key_material: bytes = hd.derive_key(
+key_material: bytearray = hd.derive_key(
     purpose: int,           # e.g., 44
     account: int = 0,
     change: int = 0,
@@ -490,7 +495,7 @@ metadata:  dict           = mgr.export_metadata(filepath: Path | None = None)
 Defined in `ama_cryptography/key_management.py` (`class SecureKeyStorage`). The constructor takes
 a **storage directory** and an optional master password — not a raw
 encryption key. `retrieve_key()` returns the ciphertext-decrypted key
-material as `Optional[bytes]` (or `None` if the id is missing); metadata
+material as `Optional[bytearray]`, wipeable (or `None` if the id is missing); metadata
 is stored separately as a JSON-serializable `dict` and is typically
 retrieved via `KeyRotationManager`.
 
@@ -512,7 +517,7 @@ storage.store_key(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None
 
-key_bytes: Optional[bytes] = storage.retrieve_key(key_id: str) -> Optional[bytes]
+key_bytes: Optional[bytearray] = storage.retrieve_key(key_id: str) -> Optional[bytearray]
 deleted:   bool            = storage.delete_key(key_id: str) -> bool
 all_ids:   List[str]       = storage.list_keys() -> List[str]
 ```

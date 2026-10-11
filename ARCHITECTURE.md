@@ -146,6 +146,7 @@ Core primitives:
 - `src/c/ama_sha256.c`, `src/c/ama_sha256_ni.c` - SHA-256 (FIPS 180-4), scalar and the x86 SHA-NI kernel selected on CPUID
 - `src/c/ama_hmac_sha256.c`, `src/c/ama_hmac_sha384.c`, `src/c/ama_sha512.c`, `src/c/ama_pbkdf2.c` - HMAC-SHA-256/384, SHA-384/512 one-shots, PBKDF2 (SP 800-132)
 - `src/c/ama_platform_rand.c` - Platform-native CSPRNG
+- `src/c/ama_rng_repeat.c` - Repeated-output check on the OS CSPRNG, fused with the draw (defence in depth; not a FIPS 140-3 health test)
 - `src/c/ama_hkdf.c` - HKDF with HMAC-SHA3-256 (RFC 5869)
 - `src/c/ama_consttime.c` - Constant-time utilities (memcmp, memzero, swap, lookup, copy)
 - `src/c/internal/ama_sha2.h` - header-only SHA-512/384 core and HMAC shared by Ed25519, FROST, SLH-DSA, HKDF, HMAC-SHA-384, SHA-512 and PBKDF2
@@ -269,6 +270,7 @@ ama_cryptography/
 ├── key_management.py      # HD derivation, KeyRotationManager, SecureKeyStorage, HSMKeyStorage
 ├── key_formats.py         # PKCS#8 / SPKI / PEM / JWK / COSE_Key
 ├── _asn1.py               # DER codec
+├── _secret_writer.py      # exact-size writer for private-key encodings
 ├── hybrid_combiner.py     # Hybrid KEM combiner (X25519 + ML-KEM-1024)
 ├── adaptive_posture.py    # 3R signals → key rotation / algorithm escalation
 ├── agent_binding.py       # Agent-instance binding (INVARIANT-30)
@@ -640,24 +642,24 @@ Every number below is **derived from one record** —
 
 | Operation | Target latency | Measured latency (ms/op) | Measured throughput (ops/sec) |
 |-----------|---------------:|-------------------------:|------------------------------:|
-| Package Creation (multi-layer) | < 5 ms | 0.538 | 1,857.4 |
-| Package Verification (multi-layer) | < 5 ms | 0.412 | 2,429.7 |
-| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.314 | 3,186.9 |
-| Ed25519 Sign | < 1 ms | 0.026 | 39,054 |
-| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0038 | 262,657 |
-| SHA3-256 Hash (1 KB) | < 1 ms | 0.0026 | 381,128 |
-| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0058 | 172,643 |
+| Package Creation (multi-layer) | < 5 ms | 0.572 | 1,749.3 |
+| Package Verification (multi-layer) | < 5 ms | 0.555 | 1,801.5 |
+| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.360 | 2,776.5 |
+| Ed25519 Sign | < 1 ms | 0.027 | 36,871 |
+| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0042 | 237,834 |
+| SHA3-256 Hash (1 KB) | < 1 ms | 0.0030 | 330,310 |
+| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0065 | 153,696 |
 
-**Bottleneck.** ML-DSA-65 signing costs 0.314 ms against 0.538 ms for a whole multi-layer package creation — 58% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
+**Bottleneck.** ML-DSA-65 signing costs 0.360 ms against 0.572 ms for a whole multi-layer package creation — 63% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
 
 **Provenance — everything needed to reproduce these numbers:**
 
 - **Benchmark command:** `python benchmarks/benchmark_runner.py --verbose --baseline benchmarks/baseline.json --require-runner-class x86_64 --require-populated-baseline --output benchmarks/benchmark-results.json --markdown benchmark-report.md`
-- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-28
-- **Platform:** Linux-6.18.44-fc-v42-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
+- **Source record:** `benchmarks/benchmark-results.json`, run 2026-10-08
+- **Platform:** Linux-6.18.44-fc-v80-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
 - **Build:** v5.0.0 · digest 76a4afbba5a7308b… · libama_cryptography.so
 - **Build configuration:** `GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)`
-- **Commit:** `7836cc8957d5` — clean
+- **Commit:** `1d8dab6a7164` — clean
 - **Python bindings:** 6 of 6 compiled bindings imported: dilithium_binding, ed25519_binding, hkdf_binding, hmac_binding, math_engine, sha3_binding
 - **Scope:** one run on the host named above. These are not the canonical-host figures (README, Performance Metrics) and not the CI regression floors.
 - **Units:** milliseconds per operation, computed as `1000 / ops_per_second`; the throughput column is the record's own `ops_per_second` field.
@@ -780,7 +782,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | `--cov` floor 75% (`pyproject.toml`) | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 95 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
+| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 103 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | Adversarial and residue tests | `test_crypto_core_penetration.py`, `test_memory_security.py`, `tests/c/test_csprng_failure_residue.c`, `tests/c/test_slhdsa_fault_residue.c` |
@@ -789,7 +791,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
 | Wycheproof | Adversarial vectors | 15 vendored corpora | `wycheproof_vectors/run_wycheproof.py` |
 
-**Total:** 6,863 Python test functions across 274 test files, plus the
+**Total:** 7,252 Python test functions across 289 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the set of C tests depends on `AMA_USE_NATIVE_PQC`, `AMA_AES_CONSTTIME`, the ISA
@@ -940,7 +942,7 @@ Cryptographic implementations are validated against:
 | 3.4.0 | 2026-07-25 | Steel Security Advisors LLC | Vendored Wycheproof gate; Ed25519 canonical-`S` (INVARIANT-26) and X25519 u-coordinate canonicalization (INVARIANT-27); agent-instance binding (INVARIANT-30) with 3R detectors; Ascon-AEAD128 / Ascon-Hash256 (SP 800-232) |
 | 3.5.0 | 2026-07-30 | Steel Security Advisors LLC | NIST P-256/384/521 ECDSA and ECDH (FIPS 186-5, INVARIANT-34 low-`s` policy); ML-KEM-512/768 and ML-DSA-44/87 parameter sets; HSS/LMS verification (SP 800-208) |
 | 4.0.0 | 2026-08-01 | Steel Security Advisors LLC | Trust-anchor enforcement end to end (anchor compiled into the native library, required for `verify_crypto_package`'s `all_valid`, and no longer bypassable by deleting the signature artefact); constant-time scalar GHASH with an optimizer value barrier and a callgrind instruction-invariance gate; Ed25519 canonical-`y` (INVARIANT-38) on single verify, batch verify and point decode; KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305. BREAKING ×6 — see CHANGELOG `[4.0.0]`. |
-| 5.0.0 | 2026-10-08 | Steel Security Advisors LLC | Fail-closed FIPS 140-3 POST: `import ama_cryptography` raises on self-test failure and the ERROR state inhibits output on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check with AST-discovered scope and a loaded-library major-version handshake (INVARIANT-42); pre-load SHA3-256 verification of the native library (hash-then-map via `/proc/self/fd`) with fail-closed unreadable-candidate handling; the six Cython binding extensions digest-bound into the v3 integrity artefact (BOTH signing callers bind — the wheel pipeline and the repair flow alike, since `integrity --update --sign` sets `--bind-extensions` unconditionally; anchored/developer severity split); repository-wide audit fixes — global `-mavx2` contamination removed from portable translation units, KyberSlash divisions replaced with exact Granlund–Montgomery reciprocal multiplies, SVE2 Keccak theta and Kyber NTT corrected and CI-built, dead CI gates made enforceable; one-shot AEAD wrapper throughput recovery (all-`bytes` fast path); benchmark floors recalibrated as measured medians with derived tolerances; pre-load refusal of a binding extension whose digest does not match the signed artefact (previously verified only after it had executed); the `AMA_BUILD_PIPELINE` carve-out that let an environment variable buy a mapping of an unverified native library replaced with an in-process signing-only scope; ML-KEM `Compress_d` applies its own `mod 2^d` with an exhaustive 16,645-pair proof; SoftHSM2, the semgrep end-to-end assertion, `test_dispatch_cache_file` on SIMD-off builds and `test_pq_parser_stack` under Valgrind all made executable; the dudect verdict rule distinguishes a directional leak from an unusable measurement.; in-house Ed25519 backend (fe51 by default, fe64-MULX by override) replacing ed25519-donna, which is removed (#394); ML-DSA-65 on the FIPS 204 external interface with context-separated hybrid signatures (INVARIANT-50); package signatures over a whole-package transcript (INVARIANT-52); INVARIANT-43 through INVARIANT-53; `ama_frost_verify_share` returns the verdict its header documents; CSPRNG-failure exits in ML-KEM, ML-DSA, SLH-DSA and X25519 scrub the partial draw (INVARIANT-6); POST records per-stage wall-clock, and a stage that raises enters ERROR with a recorded reason. BREAKING ×11 — see CHANGELOG `[5.0.0]`. |
+| 5.0.0 | 2026-10-08 | Steel Security Advisors LLC | Fail-closed FIPS 140-3 POST: `import ama_cryptography` raises on self-test failure and the ERROR state inhibits output on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check with AST-discovered scope and a loaded-library major-version handshake (INVARIANT-42); pre-load SHA3-256 verification of the native library (hash-then-map via `/proc/self/fd`) with fail-closed unreadable-candidate handling; the six Cython binding extensions digest-bound into the v3 integrity artefact (BOTH signing callers bind — the wheel pipeline and the repair flow alike, since `integrity --update --sign` sets `--bind-extensions` unconditionally; anchored/developer severity split); repository-wide audit fixes — global `-mavx2` contamination removed from portable translation units, KyberSlash divisions replaced with exact Granlund–Montgomery reciprocal multiplies, SVE2 Keccak theta and Kyber NTT corrected and CI-built, dead CI gates made enforceable; one-shot AEAD wrapper throughput recovery (all-`bytes` fast path); benchmark floors recalibrated as measured medians with derived tolerances; pre-load refusal of a binding extension whose digest does not match the signed artefact (previously verified only after it had executed); the `AMA_BUILD_PIPELINE` carve-out that let an environment variable buy a mapping of an unverified native library replaced with an in-process signing-only scope; ML-KEM `Compress_d` applies its own `mod 2^d` with an exhaustive 16,645-pair proof; SoftHSM2, the semgrep end-to-end assertion, `test_dispatch_cache_file` on SIMD-off builds and `test_pq_parser_stack` under Valgrind all made executable; the dudect verdict rule distinguishes a directional leak from an unusable measurement.; in-house Ed25519 backend (fe51 by default, fe64-MULX by override) replacing ed25519-donna, which is removed (#394); ML-DSA-65 on the FIPS 204 external interface with context-separated hybrid signatures (INVARIANT-50); package signatures over a whole-package transcript (INVARIANT-52); INVARIANT-43 through INVARIANT-53; `ama_frost_verify_share` returns the verdict its header documents; CSPRNG-failure exits in ML-KEM, ML-DSA, SLH-DSA and X25519 scrub the partial draw (INVARIANT-6); POST records per-stage wall-clock, and a stage that raises enters ERROR with a recorded reason. BREAKING ×12 — see CHANGELOG `[5.0.0]`. |
 
 ---
 

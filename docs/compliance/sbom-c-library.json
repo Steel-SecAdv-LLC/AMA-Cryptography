@@ -56,6 +56,14 @@
     },
     {
       "type": "library",
+      "name": "ama_base64",
+      "version": "5.0.0",
+      "description": "Constant-time Base64/Base64url codec for private-key encodings (RFC 4648)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_base64@5.0.0"
+    },
+    {
+      "type": "library",
       "name": "ama_chacha20poly1305",
       "version": "5.0.0",
       "description": "ChaCha20-Poly1305 AEAD (RFC 8439)",
@@ -151,6 +159,22 @@
       "description": "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)",
       "scope": "required",
       "purl": "pkg:generic/ama_pbkdf2@5.0.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_platform_rand",
+      "version": "5.0.0",
+      "description": "OS CSPRNG draw, zeroed on failure (ama_random_bytes)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_platform_rand@5.0.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_rng_repeat",
+      "version": "5.0.0",
+      "description": "Repeated-output check on the OS CSPRNG draw (ama_random_bytes_repeat_checked); defence in depth, not a FIPS 140-3 health test",
+      "scope": "required",
+      "purl": "pkg:generic/ama_rng_repeat@5.0.0"
     },
     {
       "type": "library",

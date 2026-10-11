@@ -43,6 +43,9 @@ endmacro()
 
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
+# Constant-time Base64 / Base64url codec: RFC 4648 vectors, an exhaustive and
+# random differential against a naive reference, refusal zeroing.
+add_ama_test(test_base64 test_base64.c)
 add_ama_test(test_core test_core.c)
 # Core-dump hygiene (commit 17e5d79): ama_secure_mlock() must leave
 # the kernel's own "dd" (MADV_DONTDUMP) VmFlag on every page of a locked,
@@ -567,6 +570,46 @@ if(AMA_USE_NATIVE_PQC)
     if(NOT WIN32)
         add_ama_test(test_frost_round2_concurrent test_frost_round2_concurrent.c)
         target_link_libraries(test_frost_round2_concurrent Threads::Threads)
+    endif()
+    # Repeated-output check on the OS CSPRNG (src/c/ama_rng_repeat.c).
+    add_ama_test(test_rng_repeat test_rng_repeat.c)
+    # Its lock: a rendezvous plus lock-traffic counters (a compare/store split
+    # across two acquisitions is invisible to ThreadSanitizer).  One source,
+    # Win32 threads on Windows and POSIX threads elsewhere.
+    add_ama_test(test_rng_repeat_concurrent test_rng_repeat_concurrent.c)
+    target_link_libraries(test_rng_repeat_concurrent Threads::Threads)
+    # fork() while another thread is in the critical section.  POSIX only.
+    if(NOT WIN32)
+        add_ama_test(test_rng_repeat_fork test_rng_repeat_fork.c)
+        target_link_libraries(test_rng_repeat_fork Threads::Threads)
+        # A failed handler registration refuses every draw.  Own process per
+        # mode (the registration is once per process): the gate refuses, or the
+        # executable defines the pthread_atfork() the library calls and fails
+        # it.  The second skips (77) under a sanitizer.
+        add_ama_test(test_rng_repeat_atfork_fail test_rng_repeat_atfork_fail.c)
+        add_ama_test(test_rng_repeat_atfork_fail_real test_rng_repeat_atfork_fail.c)
+        target_compile_definitions(test_rng_repeat_atfork_fail_real PRIVATE AMA_ATFORK_FAIL_REAL=1)
+        set_tests_properties(test_rng_repeat_atfork_fail_real PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    # Dead-stack probe over every exit: against the testing archive, then
+    # against the shipped shared library.
+    add_ama_residue_probe(test_rng_repeat_residue test_rng_repeat_residue.c
+                          ama_cryptography_test)
+    add_ama_residue_probe(test_rng_repeat_residue_shipped test_rng_repeat_residue.c)
+    target_compile_definitions(test_rng_repeat_residue_shipped PRIVATE AMA_RESIDUE_SHIPPED=1)
+    # The shipped object end to end: the executable supplies getrandom(2) (or
+    # pthread_mutex_lock()) and the shared library's PLT call resolves to it.
+    # Linux only; skips (77) elsewhere and under a sanitizer.
+    if(AMA_BUILD_SHARED AND NOT WIN32)
+        add_executable(test_rng_repeat_shipped test_rng_repeat_shipped.c)
+        target_link_libraries(test_rng_repeat_shipped ama_cryptography_shared)
+        add_test(NAME test_rng_repeat_shipped COMMAND test_rng_repeat_shipped)
+        set_tests_properties(test_rng_repeat_shipped PROPERTIES SKIP_RETURN_CODE 77)
+        add_executable(test_rng_repeat_fork_shipped test_rng_repeat_fork_shipped.c)
+        target_link_libraries(test_rng_repeat_fork_shipped ama_cryptography_shared
+                              Threads::Threads ${CMAKE_DL_LIBS})
+        add_test(NAME test_rng_repeat_fork_shipped COMMAND test_rng_repeat_fork_shipped)
+        set_tests_properties(test_rng_repeat_fork_shipped PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     # NIST prime curves (src/c/ama_nistp.c) plus the FIPS 203/204 parameter
     # tables.  Covers the three things the Python suite and the Wycheproof

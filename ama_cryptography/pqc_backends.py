@@ -39,9 +39,23 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Callable, ClassVar, List, Optional, Sequence, Tuple, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
+from ama_cryptography._module_state import (
+    check_crypto_permitted,
+    pairwise_test_agreement,
+    pairwise_test_kem,
+    pairwise_test_signature,
+    secure_random_fill,
+    secure_token_bytearray,
+)
+from ama_cryptography._module_state import (
+    register_entropy_source as _register_entropy_source,
+)
+from ama_cryptography._module_state import (
+    register_health_digest as _register_health_digest,
+)
 
 # FIPS 140-3 §4.9.2 output inhibition.  Every public entry point below that
 # reaches ``_native_lib`` calls this first, so a module whose power-on
@@ -53,17 +67,15 @@ from ama_cryptography._finalizer_health import record_finalizer_error
 # Import-order note: ``_self_test`` imports only ``ama_cryptography.exceptions``
 # at module scope and reaches this module lazily from inside the KAT functions,
 # so this top-level import does not close a cycle.
-from ama_cryptography._module_state import (
-    check_crypto_permitted,
-    pairwise_test_agreement,
-    pairwise_test_kem,
-    pairwise_test_signature,
-    secure_token_bytes,
-)
-from ama_cryptography._module_state import (
-    register_health_digest as _register_health_digest,
+from ama_cryptography._secret_material import (
+    ScrubOnRaise,
+    SecretMaterial,
+    constant_time_equality,
+    finalize_secret,
+    zeroize,
 )
 from ama_cryptography.exceptions import (
+    CryptoModuleError,
     NativeBackendUnavailableError,
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
@@ -91,6 +103,7 @@ __all__ = [
     "native_hmac_sha256_2",
     "native_hmac_sha384",
     "native_hmac_sha512",
+    "native_hmac_sha512_prf",
     "native_hmac_sha3_256",
     "hmac_sha3_256",
     # Native HKDF (RFC 5869)
@@ -1780,6 +1793,63 @@ def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# Native CSPRNG (ama_random_bytes).  The library's own entropy source, bound so
+# the Python layer draws secret material straight into caller-owned memory that
+# can be wiped, instead of through ``secrets.token_bytes``, whose ``bytes``
+# result is an immutable copy no caller can scrub (INVARIANT-6).
+_RANDOM_NATIVE_AVAILABLE = False
+
+
+def _setup_random_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for ``ama_random_bytes(buf, len)``."""
+    try:
+        lib.ama_random_bytes.argtypes = [
+            ctypes.c_char_p,  # buf (written in place)
+            ctypes.c_size_t,  # len
+        ]
+        lib.ama_random_bytes.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# Constant-time Base64 / Base64url (RFC 4648) -- the codec private-key PEM and
+# JWK bodies go through (src/c/ama_base64.c).
+_BASE64_NATIVE_AVAILABLE = False
+
+#: ama_base64_variant_t, include/ama_cryptography.h.
+BASE64_STANDARD_PADDED = 1
+BASE64_URL_UNPADDED = 2
+
+
+def _setup_base64_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the ``ama_base64_*`` codec."""
+    try:
+        lib.ama_base64_encoded_len.argtypes = [ctypes.c_size_t, ctypes.c_int]
+        lib.ama_base64_encoded_len.restype = ctypes.c_size_t
+        lib.ama_base64_encode.argtypes = [
+            ctypes.c_char_p,  # out (characters, not NUL-terminated)
+            ctypes.c_size_t,  # out_cap
+            ctypes.c_char_p,  # in
+            ctypes.c_size_t,  # in_len
+            ctypes.c_int,  # variant
+            ctypes.POINTER(ctypes.c_size_t),  # out_len
+        ]
+        lib.ama_base64_encode.restype = ctypes.c_int
+        lib.ama_base64_decode.argtypes = [
+            ctypes.c_char_p,  # out (octets)
+            ctypes.c_size_t,  # out_cap
+            ctypes.c_char_p,  # in (characters)
+            ctypes.c_size_t,  # in_len
+            ctypes.c_int,  # variant
+            ctypes.POINTER(ctypes.c_size_t),  # out_len
+        ]
+        lib.ama_base64_decode.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # SHA-256 one-shot native availability (raw hash, FIPS 180-4).  Surfaces the
 # ama_sha256(out, in, inlen) C symbol so crypto_api key_id derivation keeps
 # byte-identical SHA-256 semantics without stdlib hashlib (INVARIANT-1/7).
@@ -2019,6 +2089,16 @@ def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # compressed_pubkey[33]
         ]
         lib.ama_secp256k1_pubkey_from_privkey.restype = ctypes.c_int
+
+        lib.ama_secp256k1_seckey_verify.argtypes = [ctypes.c_char_p]  # seckey[32]
+        lib.ama_secp256k1_seckey_verify.restype = ctypes.c_int
+
+        lib.ama_secp256k1_seckey_tweak_add.argtypes = [
+            ctypes.c_char_p,  # out[32]
+            ctypes.c_char_p,  # seckey[32]
+            ctypes.c_char_p,  # tweak[32]
+        ]
+        lib.ama_secp256k1_seckey_tweak_add.restype = ctypes.c_int
 
         lib.ama_secp256k1_ecdsa_sign.argtypes = [
             ctypes.c_char_p,  # signature (out, >= 72 bytes)
@@ -3120,6 +3200,8 @@ if _native_lib is not None:
     _HKDF_SHA2_NATIVE_AVAILABLE = _setup_hkdf_sha2_ctypes(_native_lib)
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _SHA256_NATIVE_AVAILABLE = _setup_sha256_ctypes(_native_lib)
+    _RANDOM_NATIVE_AVAILABLE = _setup_random_ctypes(_native_lib)
+    _BASE64_NATIVE_AVAILABLE = _setup_base64_ctypes(_native_lib)
     _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
     _SHA2_EXT_NATIVE_AVAILABLE = _setup_sha2_ext_ctypes(_native_lib)
     _PBKDF2_NATIVE_AVAILABLE = _setup_pbkdf2_ctypes(_native_lib)
@@ -3170,6 +3252,8 @@ if _native_lib is not None:
         "ChaCha20-Poly1305": _CHACHA20_POLY1305_NATIVE_AVAILABLE,
         "SHA3-256": _SHA3_256_NATIVE_AVAILABLE,
         "SHA-256": _SHA256_NATIVE_AVAILABLE,
+        "CSPRNG": _RANDOM_NATIVE_AVAILABLE,
+        "Base64 (constant-time)": _BASE64_NATIVE_AVAILABLE,
         "HMAC-SHA3-256": _HMAC_SHA3_256_NATIVE_AVAILABLE,
         "HKDF": _HKDF_NATIVE_AVAILABLE,
         "secp256k1": _SECP256K1_NATIVE_AVAILABLE,
@@ -3720,25 +3804,35 @@ class AmaContext:
 
         if self._algorithm == self.ALG_KYBER_1024:
 
+            # The shared secrets these mint are taken into wipeable bytearrays
+            # and their ctypes staging buffers scrubbed on every path:
+            # ``bytes(ss)`` left an immutable copy and the populated staging
+            # buffer behind, on every call (PR #415 review).
             def _encaps(pub: bytes) -> tuple:
                 ct = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
                 ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
                 ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-                rc = self.kem_encapsulate(
-                    pub, ct, ctypes.pointer(ct_len), ss, KYBER_SHARED_SECRET_BYTES
-                )
-                if rc != 0:
-                    raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
-                return bytes(ct.raw[: ct_len.value]), bytes(ss)
+                try:
+                    rc = self.kem_encapsulate(
+                        pub, ct, ctypes.pointer(ct_len), ss, KYBER_SHARED_SECRET_BYTES
+                    )
+                    if rc != 0:
+                        raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
+                    return bytes(ct.raw[: ct_len.value]), _take_secret(ss)
+                finally:
+                    _wipe(ss)
 
-            def _decaps(ciphertext: bytes, secret: ctypes.Array) -> bytes:
+            def _decaps(ciphertext: bytes, secret: ctypes.Array) -> bytearray:
                 ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-                rc = self.kem_decapsulate(
-                    ciphertext, cast(bytes, secret), ss, KYBER_SHARED_SECRET_BYTES
-                )
-                if rc != 0:
-                    raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
-                return bytes(ss)
+                try:
+                    rc = self.kem_decapsulate(
+                        ciphertext, cast(bytes, secret), ss, KYBER_SHARED_SECRET_BYTES
+                    )
+                    if rc != 0:
+                        raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
+                    return _take_secret(ss)
+                finally:
+                    _wipe(ss)
 
             pairwise_test_kem(_encaps, _decaps, pk, sk_view, "AmaContext(ML-KEM-1024)")
         else:
@@ -4100,6 +4194,7 @@ def _secure_memzero(buf: bytearray) -> None:
         buf[i] = 0
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class DilithiumKeyPair:
     """
@@ -4130,13 +4225,14 @@ class DilithiumKeyPair:
             _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
-        try:
-            self.wipe()
-        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-001)
-            # INVARIANT-3 addendum: silence is never the only outcome.
-            record_finalizer_error("DilithiumKeyPair", f"wipe() failed: {exc}")
+        # Collection wipes the secret only if it dies with this keypair.
+        # ``sk = generate_...().secret_key`` keeps the bytearray past the
+        # keypair, and an unconditional wipe here zeroed the caller's key
+        # (see _secret_material).  Never raises (INVARIANT-3/9, FIN-001).
+        finalize_secret(self, "secret_key", "DilithiumKeyPair")
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class KyberKeyPair:
     """
@@ -4168,25 +4264,32 @@ class KyberKeyPair:
             _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
-        try:
-            self.wipe()
-        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-002)
-            # INVARIANT-3 addendum: silence is never the only outcome.
-            record_finalizer_error("KyberKeyPair", f"wipe() failed: {exc}")
+        # Collection wipes the secret only if it dies with this keypair.
+        # ``sk = generate_...().secret_key`` keeps the bytearray past the
+        # keypair, and an unconditional wipe here zeroed the caller's key
+        # (see _secret_material).  Never raises (INVARIANT-3/9, FIN-002).
+        finalize_secret(self, "secret_key", "KyberKeyPair")
 
 
+@constant_time_equality()
 @dataclass
-class KyberEncapsulation:
+class KyberEncapsulation(SecretMaterial):
     """
     Kyber-1024 key encapsulation result.
 
     Contains the ciphertext and shared secret from encapsulation.
     """
 
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("shared_secret",)
+
     ciphertext: bytes  # 1568 bytes
-    shared_secret: bytes  # 32 bytes
+    shared_secret: Union[bytes, bytearray]  # 32 bytes
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
+@constant_time_equality(secret=("secret_key",))
 @dataclass
 class SphincsKeyPair:
     """
@@ -4220,11 +4323,11 @@ class SphincsKeyPair:
             _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
-        try:
-            self.wipe()
-        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-003)
-            # INVARIANT-3 addendum: silence is never the only outcome.
-            record_finalizer_error("SphincsKeyPair", f"wipe() failed: {exc}")
+        # Collection wipes the secret only if it dies with this keypair.
+        # ``sk = generate_...().secret_key`` keeps the bytearray past the
+        # keypair, and an unconditional wipe here zeroed the caller's key
+        # (see _secret_material).  Never raises (INVARIANT-3/9, FIN-003).
+        finalize_secret(self, "secret_key", "SphincsKeyPair")
 
 
 def generate_dilithium_keypair() -> DilithiumKeyPair:
@@ -4305,7 +4408,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
 
     # Primary path: Cython binding (zero marshaling overhead)
     if _cy_dilithium_sign_fn is not None:
-        result: bytes = _cy_dilithium_sign_fn(message, bytes(secret_key))
+        result: bytes = _cy_dilithium_sign_fn(message, secret_key)
         return result
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
@@ -4417,7 +4520,7 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx: bytes) -> bytes:
+def dilithium_sign_ctx(message: bytes, secret_key: _BufferInput, ctx: bytes) -> bytes:
     """
     ML-DSA-65 sign with FIPS 204 §5.2 binding context (external/pure).
 
@@ -4579,38 +4682,41 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ct_buf = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
         ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
-        ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-        rc = _native_lib.ama_kyber_encapsulate(
-            public_key,
-            ctypes.c_size_t(len(public_key)),
-            ct_buf,
-            ctypes.byref(ct_len),
-            ss_buf,
-            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
-        )
-        if rc == -4:
-            # AMA_ERROR_VERIFY_FAILED after the Python length check above can
-            # only be FIPS 203 Sec 7.2 input check 2: a 12-bit coefficient of
-            # the encapsulation key is >= q, so these bytes are not an
-            # encapsulation key.  That is a rejected INPUT, not a missing
-            # backend — the same distinction kyber_decapsulate draws for the
-            # Sec 7.3 hash check — and it used to surface here as
-            # KyberUnavailableError("... error code -4").
-            raise ValueError(
-                "Kyber-1024 encapsulation key rejected: a coefficient is outside "
-                "[0, q) (FIPS 203 Sec 7.2 modulus check)"
+        shared_secret, ss_buf = _secret_out(KYBER_SHARED_SECRET_BYTES)
+        try:
+            rc = _native_lib.ama_kyber_encapsulate(
+                public_key,
+                ctypes.c_size_t(len(public_key)),
+                ct_buf,
+                ctypes.byref(ct_len),
+                ss_buf,
+                ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
             )
-        if rc != 0:
-            raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
+            if rc == -4:
+                # AMA_ERROR_VERIFY_FAILED after the Python length check above can
+                # only be FIPS 203 Sec 7.2 input check 2: a 12-bit coefficient of
+                # the encapsulation key is >= q, so these bytes are not an
+                # encapsulation key.  That is a rejected INPUT, not a missing
+                # backend — the same distinction kyber_decapsulate draws for the
+                # Sec 7.3 hash check — and it used to surface here as
+                # KyberUnavailableError("... error code -4").
+                raise ValueError(
+                    "Kyber-1024 encapsulation key rejected: a coefficient is outside "
+                    "[0, q) (FIPS 203 Sec 7.2 modulus check)"
+                )
+            if rc != 0:
+                raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
+        except BaseException:
+            zeroize(shared_secret)
+            raise
         return KyberEncapsulation(
-            ciphertext=ct_buf.raw[: ct_len.value],
-            shared_secret=bytes(ss_buf),
+            ciphertext=ct_buf.raw[: ct_len.value], shared_secret=shared_secret
         )
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
 
-def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+def kyber_decapsulate(ciphertext: bytes, secret_key: _BufferInput) -> bytearray:
     """
     Decapsulate a shared secret using Kyber-1024.
 
@@ -4622,7 +4728,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
         secret_key: Kyber-1024 secret key (3168 bytes)
 
     Returns:
-        Shared secret (32 bytes)
+        Shared secret (32 bytes), in a ``bytearray`` the caller can wipe.
 
     Raises:
         KyberUnavailableError: If Kyber backend is not available
@@ -4652,33 +4758,37 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
         )
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
-        ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
+        shared_secret, ss_buf = _secret_out(KYBER_SHARED_SECRET_BYTES)
         # INVARIANT-6: borrow the caller's secret-key storage instead of
         # snapshotting it — bytes(bytearray) is exactly the un-wipeable
         # transient _borrow exists to avoid.
         sk_buf = _borrow(secret_key)
-        rc = _native_lib.ama_kyber_decapsulate(
-            ciphertext,
-            ctypes.c_size_t(len(ciphertext)),
-            sk_buf,
-            ctypes.c_size_t(len(secret_key)),
-            ss_buf,
-            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
-        )
-        if rc == -1:
-            # AMA_ERROR_INVALID_PARAM after the Python length checks above can
-            # only be FIPS 203 Sec 7.3 input check 3: the decapsulation key's
-            # embedded H(ek) does not match its embedded ek.  That is a
-            # malformed KEY, not an attacker-chosen ciphertext, so it is an
-            # error rather than an implicit-rejection secret.
-            raise ValueError(
-                "Kyber-1024 decapsulation key is internally inconsistent: the "
-                "embedded H(ek) does not match the embedded encapsulation key "
-                "(FIPS 203 Sec 7.3 hash check)"
+        try:
+            rc = _native_lib.ama_kyber_decapsulate(
+                ciphertext,
+                ctypes.c_size_t(len(ciphertext)),
+                sk_buf,
+                ctypes.c_size_t(len(secret_key)),
+                ss_buf,
+                ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
             )
-        if rc != 0:
-            raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
-        return bytes(ss_buf)
+            if rc == -1:
+                # AMA_ERROR_INVALID_PARAM after the Python length checks above
+                # can only be FIPS 203 Sec 7.3 input check 3: the decapsulation
+                # key's embedded H(ek) does not match its embedded ek.  That is
+                # a malformed KEY, not an attacker-chosen ciphertext, so it is
+                # an error rather than an implicit-rejection secret.
+                raise ValueError(
+                    "Kyber-1024 decapsulation key is internally inconsistent: the "
+                    "embedded H(ek) does not match the embedded encapsulation key "
+                    "(FIPS 203 Sec 7.3 hash check)"
+                )
+            if rc != 0:
+                raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
+        except BaseException:
+            zeroize(shared_secret)
+            raise
+        return shared_secret
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -4949,11 +5059,11 @@ class SlhDsaKeyPair:
                 self.secret_key[i] = 0
 
     def __del__(self) -> None:
-        try:
-            self.wipe()
-        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-004)
-            # INVARIANT-3 addendum: silence is never the only outcome.
-            record_finalizer_error("SlhDsaKeyPair", f"wipe() failed: {exc}")
+        # Collection wipes the secret only if it dies with this keypair.
+        # ``sk = generate_...().secret_key`` keeps the bytearray past the
+        # keypair, and an unconditional wipe here zeroed the caller's key
+        # (see _secret_material).  Never raises (INVARIANT-3/9, FIN-004).
+        finalize_secret(self, "secret_key", "SlhDsaKeyPair")
 
 
 def _slhdsa_resolve(param_set: str) -> tuple:
@@ -5050,11 +5160,12 @@ def generate_slhdsa_keypair_from_seed(
             raise ValueError(f"SLH-DSA-{param_set}: {label} must be {n} bytes, got {len(seed)}")
     pk_buf = ctypes.create_string_buffer(pk_len)
     sk_buf = ctypes.create_string_buffer(sk_len)
-    # INVARIANT-6: keep all secret-bearing scratch buffers in mutable
-    # ctypes storage so they can be wiped before this function returns.
-    sk_seed_buf = ctypes.create_string_buffer(bytes(sk_seed), n)
-    sk_prf_buf = ctypes.create_string_buffer(bytes(sk_prf), n)
-    pk_seed_buf = ctypes.create_string_buffer(bytes(pk_seed), n)
+    # INVARIANT-6: the seeds are read in place.  ``create_string_buffer(
+    # bytes(seed), n)`` made two copies of each, one of them an immutable
+    # ``bytes`` beyond the memset in the finally below.
+    sk_seed_buf = _borrow(sk_seed)
+    sk_prf_buf = _borrow(sk_prf)
+    pk_seed_buf = _borrow(pk_seed)
     try:
         rc = _native_lib.ama_slhdsa_keygen_from_seed(
             ctypes.c_int(enum_id),
@@ -5082,10 +5193,7 @@ def generate_slhdsa_keypair_from_seed(
         )
         return result
     finally:
-        ctypes.memset(sk_buf, 0, sk_len)
-        ctypes.memset(sk_seed_buf, 0, n)
-        ctypes.memset(sk_prf_buf, 0, n)
-        ctypes.memset(pk_seed_buf, 0, n)
+        _wipe(sk_buf)
 
 
 def slhdsa_sign(
@@ -5225,7 +5333,7 @@ def slhdsa_sign_deterministic(
 def slhdsa_sign_addrnd(
     message: bytes,
     secret_key: Union[bytes, bytearray],
-    addrnd: bytes,
+    addrnd: Union[bytes, bytearray],
     ctx: bytes = b"",
     param_set: str = "SHAKE-128s",
 ) -> bytes:
@@ -5270,37 +5378,32 @@ def slhdsa_sign_addrnd(
         raise ValueError(f"SLH-DSA-{param_set}: addrnd must be {n} bytes, got {len(addrnd)}")
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
-    # INVARIANT-6: route both SK and addrnd through wipeable ctypes scratch
-    # storage. ``addrnd`` is randomness bound into the signature and —
-    # depending on caller policy — may be derived from secret material
-    # (e.g. PRF over SK), so we treat it as sensitive even though it is
-    # ultimately revealed via the resulting signature.
-    # INVARIANT-6: borrow the caller's secret-key storage instead of
-    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
-    # transient _borrow exists to avoid.
+    # INVARIANT-6: ``addrnd`` is randomness bound into the signature and --
+    # depending on caller policy -- may be derived from secret material (e.g.
+    # PRF over SK), so it is treated as sensitive even though it is ultimately
+    # revealed via the resulting signature.  Both it and the secret key are
+    # borrowed from the caller's storage instead of snapshotted:
+    # ``create_string_buffer(bytes(addrnd), n)`` made an immutable copy of a
+    # ``bytearray`` addrnd that no wipe could reach, the shape
+    # ``generate_slhdsa_keypair_from_seed`` already closed with ``_borrow``.
+    # A borrow is the caller's live storage and is NOT wiped here -- wiping it
+    # would zero the caller's own key; the borrow is released at frame exit.
     sk_buf = _borrow(secret_key)
-    addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
-    try:
-        rc = _native_lib.ama_slhdsa_sign_addrnd(
-            ctypes.c_int(enum_id),
-            sig_buf,
-            ctypes.byref(sig_buf_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            ctx if ctx else None,
-            ctypes.c_size_t(len(ctx)),
-            addrnd_buf,
-            sk_buf,
-        )
-        if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
-        return bytes(sig_buf.raw[: sig_buf_len.value])
-    finally:
-        # sk_buf is a BORROW of the caller's storage (see above) and is not
-        # wiped here — wiping it would zero the caller's live key; the borrow
-        # itself is released at frame exit.  The additional-randomness scratch
-        # buffer is this function's own and is scrubbed.
-        ctypes.memset(addrnd_buf, 0, n)
+    addrnd_buf = _borrow(addrnd)
+    rc = _native_lib.ama_slhdsa_sign_addrnd(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        addrnd_buf,
+        sk_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
 # ============================================================================
@@ -5325,34 +5428,41 @@ def native_ed25519_keypair() -> tuple:
         )
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
-    sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
+    # The C side reads the seed from, and writes the key into, the caller's
+    # own bytearray, borrowed in place: no staging buffer and no second copy
+    # of the private key to wipe.
+    secret_key = bytearray(ED25519_SECRET_KEY_BYTES)
 
-    # Seed the first 32 bytes — the C function expects caller-provided
+    # Seed the first 32 bytes -- the C function expects caller-provided
     # entropy.  Drawn through the FIPS 140-3 §4.9.2 health-tested CSPRNG
     # (error-state-gated, continuous repeated-output check), not a raw
     # secrets.token_bytes: this seed IS the long-term private key.
-    seed = secure_token_bytes(32)
-    ctypes.memmove(sk_buf, seed, 32)
-
-    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
-
-    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
-    # FIPS 140-3 pairwise consistency test — no keypair is released before it
-    # signs and verifies (INVARIANT-41).  native_ed25519_verify takes the
-    # signature first, hence the reordering shim.
-    pairwise_test_signature(
-        native_ed25519_sign,
-        lambda m, s, p: native_ed25519_verify(s, m, p),
-        secret_key,
-        public_key,
-        "Ed25519",
-    )
+    try:
+        secure_random_fill(memoryview(secret_key)[:32])
+        rc = _native_lib.ama_ed25519_keypair(
+            pk_buf, (ctypes.c_char * ED25519_SECRET_KEY_BYTES).from_buffer(secret_key)
+        )
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+        public_key = pk_buf.raw
+        # FIPS 140-3 pairwise consistency test — no keypair is released before
+        # it signs and verifies (INVARIANT-41).  native_ed25519_verify takes
+        # the signature first, hence the reordering shim.  Inside the guard: a
+        # key that fails it is zeroed, not dropped intact (INVARIANT-6).
+        pairwise_test_signature(
+            native_ed25519_sign,
+            lambda m, s, p: native_ed25519_verify(s, m, p),
+            secret_key,
+            public_key,
+            "Ed25519",
+        )
+    except BaseException:
+        zeroize(secret_key)
+        raise
     return public_key, secret_key
 
 
-def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
+def native_ed25519_keypair_from_seed(seed: _BufferInput) -> tuple:
     """
     Generate Ed25519 keypair from a specific 32-byte seed.
 
@@ -5381,14 +5491,16 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
 
-    # Load seed into first 32 bytes of sk_buf
-    ctypes.memmove(sk_buf, seed, 32)
-
-    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
-
-    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # Load the seed into the first 32 bytes of sk_buf, borrowed in place: a
+    # bytearray seed is never copied into an unwipeable bytes on the way.
+    try:
+        ctypes.memmove(sk_buf, _borrow(seed), 32)
+        rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+        public_key, secret_key = bytes(pk_buf), bytearray(memoryview(sk_buf))
+    finally:
+        _wipe(sk_buf)
     # FIPS 140-3 pairwise consistency test — no keypair is released before it
     # signs and verifies (INVARIANT-41).  native_ed25519_verify takes the
     # signature first, hence the reordering shim.
@@ -5402,7 +5514,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     return public_key, secret_key
 
 
-def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+def native_ed25519_sign(message: bytes, secret_key: _BufferInput) -> bytes:
     """
     Sign message with Ed25519 using native C backend.
 
@@ -5428,7 +5540,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         )
 
     if _cy_ed25519_sign_fn is not None:
-        sig_result: bytes = _cy_ed25519_sign_fn(message, bytes(secret_key))
+        sig_result: bytes = _cy_ed25519_sign_fn(message, secret_key)
         return sig_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
@@ -5933,6 +6045,29 @@ def native_aes256_gcm_decrypt(
         ValueError: If key, nonce, or tag has incorrect length, or if
             authentication tag verification fails
     """
+    # A copy, which is this function's contract; the bytearray it is copied
+    # from is zeroed.  Key material goes through _aes256_gcm_decrypt_wipeable.
+    plaintext = _aes256_gcm_decrypt_wipeable(key, nonce, ciphertext, tag, aad)
+    try:
+        return bytes(plaintext)
+    finally:
+        zeroize(plaintext)
+
+
+def _aes256_gcm_decrypt_wipeable(
+    key: _BufferInput,
+    nonce: _BufferInput,
+    ciphertext: _BufferInput,
+    tag: _BufferInput,
+    aad: _BufferInput = b"",
+) -> bytearray:
+    """:func:`native_aes256_gcm_decrypt`, returning the plaintext in a wipeable
+    ``bytearray`` the C side wrote it into.
+
+    For plaintext that is key material: ``SecureKeyStorage.retrieve_key``
+    returned every stored key as ``bytes`` through the public wrapper (PR #415
+    review sweep).  Same checks and errors as the public function.
+    """
     check_crypto_permitted()
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
@@ -5950,7 +6085,9 @@ def native_aes256_gcm_decrypt(
             f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, " f"got {len(tag)}"
         )
 
-    pt_buf = ctypes.create_string_buffer(len(ciphertext))
+    # The plaintext is written straight into the bytearray returned
+    # (_secret_out): no staging buffer, so nothing is left behind in one.
+    plaintext, pt_buf = _secret_out(len(ciphertext))
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; authentication failure never observes a copied key.
@@ -5976,10 +6113,11 @@ def native_aes256_gcm_decrypt(
     finally:
         if borrow is not None:
             borrow.__exit__(None, None, None)
+    del pt_buf  # the ctypes view pins the bytearray's size; release it
     if rc != 0:
+        zeroize(plaintext)
         raise ValueError("AES-256-GCM authentication tag verification failed")
-
-    return bytes(pt_buf)
+    return plaintext
 
 
 # ============================================================================
@@ -5992,7 +6130,7 @@ def native_hkdf(
     length: int,
     salt: "Optional[_BufferInput]" = None,
     info: _BufferInput = b"",
-) -> bytes:
+) -> bytearray:
     """
     HKDF key derivation using native C backend (HMAC-SHA3-256).
 
@@ -6006,7 +6144,8 @@ def native_hkdf(
         info: Context/application-specific info
 
     Returns:
-        Derived key material of requested length
+        Derived key material of requested length, in a ``bytearray`` the
+        caller can wipe (INVARIANT-6).
 
     Raises:
         RuntimeError: If native library is not available
@@ -6018,17 +6157,17 @@ def native_hkdf(
     if length <= 0:
         raise ValueError(f"HKDF output length must be > 0, got {length}")
 
-    # Primary path: Cython binding for immutable bytes.  Writable key
-    # buffers intentionally use the ctypes path below so the native C
-    # kernel reads the caller-owned bytearray directly and no Python
-    # bytes(key) copy survives outside secure_memzero.
+    # Primary path: the Cython binding reads bytes and bytearray inputs in
+    # place through typed views and writes the output key straight into the
+    # bytearray it returns, so neither path makes an immutable copy of key
+    # material.  Other buffer types take the ctypes path.
     if (
         _cy_hkdf_fn is not None
-        and isinstance(ikm, bytes)
-        and (salt is None or isinstance(salt, bytes))
-        and isinstance(info, bytes)
+        and isinstance(ikm, (bytes, bytearray))
+        and (salt is None or isinstance(salt, (bytes, bytearray)))
+        and isinstance(info, (bytes, bytearray))
     ):
-        hkdf_result: bytes = _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
+        hkdf_result: bytearray = _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
         return hkdf_result
 
     if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
@@ -6041,21 +6180,23 @@ def native_hkdf(
     # SECURITY: rekey derives from live bytearray key storage via a
     # borrowed ctypes view.  This removes the previous bytes(self.key)
     # transient heap copy while preserving the native HKDF implementation.
-    with _CBufferViews(ikm, salt or b"", info) as (ikm_buf, salt_buf, info_buf):
-        rc = _native_lib.ama_hkdf(
-            salt_buf if salt_len > 0 else None,
-            ctypes.c_size_t(salt_len),
-            ikm_buf if len(ikm) > 0 else None,
-            ctypes.c_size_t(len(ikm)),
-            info_buf if info_len > 0 else None,
-            ctypes.c_size_t(info_len),
-            okm_buf,
-            ctypes.c_size_t(length),
-        )
-    if rc != 0:
-        raise RuntimeError(f"HKDF derivation failed (rc={rc})")
-
-    return bytes(okm_buf)
+    try:
+        with _CBufferViews(ikm, salt or b"", info) as (ikm_buf, salt_buf, info_buf):
+            rc = _native_lib.ama_hkdf(
+                salt_buf if salt_len > 0 else None,
+                ctypes.c_size_t(salt_len),
+                ikm_buf if len(ikm) > 0 else None,
+                ctypes.c_size_t(len(ikm)),
+                info_buf if info_len > 0 else None,
+                ctypes.c_size_t(info_len),
+                okm_buf,
+                ctypes.c_size_t(length),
+            )
+        if rc != 0:
+            raise RuntimeError(f"HKDF derivation failed (rc={rc})")
+        return _take_secret(okm_buf)
+    finally:
+        _wipe(okm_buf)
 
 
 def _native_hkdf_sha2(
@@ -6065,8 +6206,11 @@ def _native_hkdf_sha2(
     length: int,
     salt: "Optional[_BufferInput]",
     info: _BufferInput,
-) -> bytes:
-    """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings."""
+) -> bytearray:
+    """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings.
+
+    Returns the output key material in a wipeable ``bytearray``.
+    """
     # FIPS 140-3 §4.9.2: no output in the ERROR state.  The public
     # native_hkdf_sha256/384/512 wrappers reach the native library only through
     # this shared helper (via getattr(_native_lib, fn_name)), so the guard lives
@@ -6093,24 +6237,27 @@ def _native_hkdf_sha2(
     # material is read in place through a c_char view rather than coerced via
     # the c_void_p argtype — the latter rejects bytearray outright (TypeError)
     # and never exposes the wipeable buffer to the native kernel directly.
-    with _CBufferViews(ikm, salt if salt is not None else b"", info) as (
-        ikm_buf,
-        salt_buf,
-        info_buf,
-    ):
-        rc = getattr(_native_lib, fn_name)(
-            salt_buf if salt_len > 0 else None,
-            ctypes.c_size_t(salt_len),
-            ikm_buf if ikm_len > 0 else None,
-            ctypes.c_size_t(ikm_len),
-            info_buf if info_len > 0 else None,
-            ctypes.c_size_t(info_len),
-            okm_buf,
-            ctypes.c_size_t(length),
-        )
-    if rc != 0:
-        raise RuntimeError(f"{fn_name} failed (rc={rc})")
-    return bytes(okm_buf)
+    try:
+        with _CBufferViews(ikm, salt if salt is not None else b"", info) as (
+            ikm_buf,
+            salt_buf,
+            info_buf,
+        ):
+            rc = getattr(_native_lib, fn_name)(
+                salt_buf if salt_len > 0 else None,
+                ctypes.c_size_t(salt_len),
+                ikm_buf if ikm_len > 0 else None,
+                ctypes.c_size_t(ikm_len),
+                info_buf if info_len > 0 else None,
+                ctypes.c_size_t(info_len),
+                okm_buf,
+                ctypes.c_size_t(length),
+            )
+        if rc != 0:
+            raise RuntimeError(f"{fn_name} failed (rc={rc})")
+        return _take_secret(okm_buf)
+    finally:
+        _wipe(okm_buf)
 
 
 def native_hkdf_sha256(
@@ -6118,7 +6265,7 @@ def native_hkdf_sha256(
     length: int,
     salt: "Optional[_BufferInput]" = None,
     info: _BufferInput = b"",
-) -> bytes:
+) -> bytearray:
     """
     HKDF-SHA-256 (RFC 5869) via native C implementation (ama_hkdf_sha256).
 
@@ -6134,7 +6281,7 @@ def native_hkdf_sha256(
         info: Optional context/application info.
 
     Returns:
-        `length` bytes of output key material.
+        `length` bytes of output key material, in a wipeable ``bytearray``.
 
     Raises:
         RuntimeError: native backend unavailable.
@@ -6148,7 +6295,7 @@ def native_hkdf_sha384(
     length: int,
     salt: "Optional[_BufferInput]" = None,
     info: _BufferInput = b"",
-) -> bytes:
+) -> bytearray:
     """
     HKDF-SHA-384 (RFC 5869) via native C implementation (ama_hkdf_sha384).
 
@@ -6163,7 +6310,7 @@ def native_hkdf_sha512(
     length: int,
     salt: "Optional[_BufferInput]" = None,
     info: _BufferInput = b"",
-) -> bytes:
+) -> bytearray:
     """
     HKDF-SHA-512 (RFC 5869) via native C implementation (ama_hkdf_sha512).
 
@@ -6193,7 +6340,7 @@ def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
 _cy_sha3_fn = _probe_cython_sha3()
 
 
-def native_sha3_256(data: bytes) -> bytes:
+def native_sha3_256(data: _BufferInput) -> bytes:
     """
     SHA3-256 via native C implementation (ama_sha3_256).
 
@@ -6203,7 +6350,9 @@ def native_sha3_256(data: bytes) -> bytes:
     otherwise falls back to ctypes.
 
     Args:
-        data: Input bytes to hash
+        data: Input to hash.  ``bytes`` takes the Cython path; a
+            ``bytearray`` (a commitment over secret material, say) is read
+            in place through ctypes, never copied into an immutable object.
 
     Returns:
         32-byte SHA3-256 digest
@@ -6212,7 +6361,7 @@ def native_sha3_256(data: bytes) -> bytes:
         RuntimeError: If native library is not available
     """
     check_crypto_permitted()
-    if _cy_sha3_fn is not None:
+    if _cy_sha3_fn is not None and isinstance(data, bytes):
         try:
             return _cy_sha3_fn(data)
         except Exception:
@@ -6230,7 +6379,7 @@ def native_sha3_256(data: bytes) -> bytes:
     out_buf = ctypes.create_string_buffer(32)
 
     rc = _native_lib.ama_sha3_256(
-        data,
+        _borrow(data),
         ctypes.c_size_t(len(data)),
         out_buf,
     )
@@ -6240,7 +6389,7 @@ def native_sha3_256(data: bytes) -> bytes:
     return bytes(out_buf)
 
 
-def native_sha256(data: bytes) -> bytes:
+def native_sha256(data: _BufferInput) -> bytes:
     """SHA-256 (FIPS 180-4) via native C implementation (ama_sha256).
 
     Byte-identical to ``hashlib.sha256(data).digest()``.  INVARIANT-1
@@ -6248,7 +6397,10 @@ def native_sha256(data: bytes) -> bytes:
     INVARIANT-7 (no stdlib fallback).
 
     Args:
-        data: Input bytes to hash.
+        data: Input to hash.  A ``bytearray`` or writable ``memoryview`` is
+            borrowed in place, never copied, so the continuous RNG test can
+            hash its window of a fresh secret without minting a ``bytes``
+            copy of it.
 
     Returns:
         32-byte SHA-256 digest.
@@ -6265,8 +6417,150 @@ def native_sha256(data: bytes) -> bytes:
     out_buf = ctypes.create_string_buffer(32)
     # C signature is OUTPUT-FIRST: ama_sha256(out, in, inlen).  Do NOT reorder
     # to match ama_sha3_256(in, len, out) — that would corrupt memory.
-    _native_lib.ama_sha256(out_buf, data, ctypes.c_size_t(len(data)))
-    return bytes(out_buf)
+    if type(data) is bytes:
+        _native_lib.ama_sha256(out_buf, data, len(data))
+    elif type(data) is bytearray:
+        # Borrowed in place (the continuous RNG test digests a secret draw
+        # through here), never copied into an immutable ``bytes``.
+        _native_lib.ama_sha256(out_buf, (ctypes.c_char * len(data)).from_buffer(data), len(data))
+    else:
+        view = _byte_view(data)
+        _native_lib.ama_sha256(out_buf, _borrow(view), view.nbytes)
+    return out_buf.raw
+
+
+def _native_random_fill(buf: Union[bytearray, memoryview, ctypes.Array[ctypes.c_char]]) -> None:
+    """Fill ``buf`` in place from the native CSPRNG (``ama_random_bytes``).
+
+    No copy of the output exists anywhere but ``buf``: a ``bytearray``, a
+    writable ``memoryview`` or a ctypes ``c_char`` array is borrowed through
+    ``from_buffer`` and written by the C side directly.  On failure the C side
+    has already zeroed the whole buffer (output is all-or-nothing), and this
+    raises.  This is the raw source; callers outside this module go through
+    ``_module_state.secure_random_fill``, which runs the FIPS 140-3 §4.9.2
+    continuous health test over every draw.
+
+    Raises:
+        TypeError: ``buf`` is read-only or not a flat run of bytes.
+        NativeBackendUnavailableError: The native CSPRNG is not available.
+        CryptoModuleError: The operating system's entropy source failed.
+    """
+    check_crypto_permitted()
+    if _native_lib is None or not _RANDOM_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            "Native CSPRNG (ama_random_bytes) not available. " + _INSTALL_HINT
+        )
+    if type(buf) is bytearray:
+        # The common case, borrowed directly: no intermediate memoryview, and
+        # the length goes as a plain int the declared argtypes convert.
+        n = len(buf)
+        if n == 0:
+            return
+        rc = _native_lib.ama_random_bytes((ctypes.c_char * n).from_buffer(buf), n)
+    else:
+        view = _byte_view(memoryview(buf).cast("B") if isinstance(buf, ctypes.Array) else buf)
+        if view.readonly:
+            raise TypeError("a random fill needs a writable buffer, got a read-only one")
+        if view.nbytes == 0:
+            return
+        rc = _native_lib.ama_random_bytes(
+            (ctypes.c_char * view.nbytes).from_buffer(view), view.nbytes
+        )
+    if rc != 0:
+        raise CryptoModuleError(
+            f"ama_random_bytes failed (rc={rc}): the operating system's entropy "
+            "source refused; no random bytes were issued"
+        )
+
+
+def _base64_require_native(variant: int) -> None:
+    if variant not in (BASE64_STANDARD_PADDED, BASE64_URL_UNPADDED):
+        raise ValueError(f"unknown Base64 variant {variant!r}")
+    if _native_lib is None or not _BASE64_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            "Constant-time Base64 codec (ama_base64_*) not available. " + _INSTALL_HINT
+        )
+
+
+def native_base64_encode(data: _BufferInput, variant: int) -> bytearray:
+    """Encode ``data`` with the constant-time codec (RFC 4648 §4 or §5).
+
+    The characters depend on ``data`` -- for a private key they are secret --
+    so they come back in a ``bytearray`` the caller can zero once it has made
+    whatever text it needs.  ``data`` is read in place.
+
+    Args:
+        data: Octets to encode.
+        variant: :data:`BASE64_STANDARD_PADDED` (PEM) or
+            :data:`BASE64_URL_UNPADDED` (JWK, RFC 7515 §2).
+
+    Raises:
+        ValueError: An unknown variant, or a length the codec refuses.
+        NativeBackendUnavailableError: The native library is unavailable.
+    """
+    check_crypto_permitted()
+    _base64_require_native(variant)
+    n = len(data)
+    cap = int(_native_lib.ama_base64_encoded_len(ctypes.c_size_t(n), variant))
+    if cap == 0 and n > 0:
+        raise ValueError(f"cannot Base64-encode {n} octets")
+    out = bytearray(cap)
+    out_len = ctypes.c_size_t(0)
+    out_arg = (ctypes.c_char * cap).from_buffer(out) if cap else None
+    rc = _native_lib.ama_base64_encode(
+        out_arg,
+        ctypes.c_size_t(cap),
+        _borrow(data),
+        ctypes.c_size_t(n),
+        variant,
+        ctypes.byref(out_len),
+    )
+    del out_arg
+    if rc != 0 or out_len.value != cap:
+        _secure_memzero(out)
+        raise ValueError(f"ama_base64_encode refused (rc={rc})")
+    return out
+
+
+def native_base64_decode(text: _BufferInput, variant: int) -> bytearray:
+    """Decode ``text`` strictly with the constant-time codec.
+
+    Refuses -- with one verdict, so the reason is not a side channel -- any
+    character outside the variant's alphabet, padding that is not exactly the
+    length's own (any padding for the unpadded variant), non-zero pad bits
+    (RFC 4648 §3.5), and a length no octet string encodes to.  The octets come
+    back in a fresh ``bytearray`` sized exactly; the working buffer is zeroed.
+
+    Raises:
+        ValueError: The text is not the canonical encoding of any octets.
+        NativeBackendUnavailableError: The native library is unavailable.
+    """
+    check_crypto_permitted()
+    _base64_require_native(variant)
+    n = len(text)
+    cap = 3 * (n // 4) + 2
+    work = bytearray(cap)
+    out_len = ctypes.c_size_t(0)
+    try:
+        work_arg = (ctypes.c_char * cap).from_buffer(work)
+        rc = _native_lib.ama_base64_decode(
+            work_arg,
+            ctypes.c_size_t(cap),
+            _borrow(text),
+            ctypes.c_size_t(n),
+            variant,
+            ctypes.byref(out_len),
+        )
+        del work_arg
+        if rc != 0:
+            raise ValueError(
+                "not the canonical Base64 encoding of any octets: a character outside "
+                "the alphabet, misplaced or missing padding, non-zero pad bits "
+                "(RFC 4648 §3.5), or an impossible length"
+            )
+        return bytearray(memoryview(work)[: out_len.value])
+    finally:
+        _secure_memzero(work)
 
 
 # Hand the continuous-RNG health test its SHA-256 kernel.
@@ -6289,6 +6583,7 @@ def native_sha256(data: bytes) -> bytes:
 # arrive, and if one somehow did, `secure_token_bytes` fails closed rather
 # than falling back to OpenSSL (INVARIANT-1).
 _register_health_digest(native_sha256)
+_register_entropy_source(_native_random_fill)
 
 
 def native_sha3_512(data: bytes) -> bytes:
@@ -6459,12 +6754,18 @@ def native_sha3_384(data: bytes) -> bytes:
 
 
 def _native_pbkdf2(
-    fn_name: str, password: bytes, salt: bytes, iterations: int, out_len: int, label: str
-) -> bytes:
+    fn_name: str,
+    password: _BufferInput,
+    salt: _BufferInput,
+    iterations: int,
+    out_len: int,
+    label: str,
+) -> bytearray:
     """Shared body for the PBKDF2-HMAC-SHA256/512 bindings (SP 800-132).
 
     Same §4.9.2 gating rationale as _native_sha2_ext: one choke point, both
-    wrappers pass through it.
+    wrappers pass through it.  The derived key is returned in a wipeable
+    ``bytearray``; the password is read in place.
     """
     check_crypto_permitted()
     if not 1 <= iterations <= 0xFFFFFFFF:
@@ -6476,21 +6777,26 @@ def _native_pbkdf2(
             f"{label} native backend not available. " + _INSTALL_HINT
         )
     out_buf = ctypes.create_string_buffer(out_len)
-    rc = getattr(_native_lib, fn_name)(
-        _borrow(password),
-        ctypes.c_size_t(len(password)),
-        _borrow(salt),
-        ctypes.c_size_t(len(salt)),
-        ctypes.c_uint32(iterations),
-        out_buf,
-        ctypes.c_size_t(out_len),
-    )
-    if rc != 0:
-        raise RuntimeError(f"{label} failed (rc={rc})")
-    return bytes(out_buf.raw[:out_len])
+    try:
+        rc = getattr(_native_lib, fn_name)(
+            _borrow(password),
+            ctypes.c_size_t(len(password)),
+            _borrow(salt),
+            ctypes.c_size_t(len(salt)),
+            ctypes.c_uint32(iterations),
+            out_buf,
+            ctypes.c_size_t(out_len),
+        )
+        if rc != 0:
+            raise RuntimeError(f"{label} failed (rc={rc})")
+        return _take_secret(out_buf, out_len)
+    finally:
+        _wipe(out_buf)
 
 
-def native_pbkdf2_hmac_sha256(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+def native_pbkdf2_hmac_sha256(
+    password: _BufferInput, salt: _BufferInput, iterations: int, out_len: int
+) -> bytearray:
     """PBKDF2-HMAC-SHA256 (SP 800-132) via native C (ama_pbkdf2_hmac_sha256).
 
     Byte-identical to ``hashlib.pbkdf2_hmac("sha256", password, salt,
@@ -6504,7 +6810,7 @@ def native_pbkdf2_hmac_sha256(password: bytes, salt: bytes, iterations: int, out
         out_len: Derived key length in bytes (>= 1).
 
     Returns:
-        ``out_len`` bytes of derived key.
+        ``out_len`` bytes of derived key, in a wipeable ``bytearray``.
 
     Raises:
         ValueError: On an out-of-range iteration count or output length.
@@ -6515,7 +6821,9 @@ def native_pbkdf2_hmac_sha256(password: bytes, salt: bytes, iterations: int, out
     )
 
 
-def native_pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+def native_pbkdf2_hmac_sha512(
+    password: _BufferInput, salt: _BufferInput, iterations: int, out_len: int
+) -> bytearray:
     """PBKDF2-HMAC-SHA512 (SP 800-132) via native C (ama_pbkdf2_hmac_sha512).
 
     Byte-identical to ``hashlib.pbkdf2_hmac("sha512", password, salt,
@@ -6530,7 +6838,7 @@ def native_pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, out
         out_len: Derived key length in bytes (>= 1).
 
     Returns:
-        ``out_len`` bytes of derived key.
+        ``out_len`` bytes of derived key, in a wipeable ``bytearray``.
 
     Raises:
         ValueError: On an out-of-range iteration count or output length.
@@ -6546,7 +6854,7 @@ def native_pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, out
 # ============================================================================
 
 
-def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+def native_hmac_sha3_256(key: _BufferInput, msg: _BufferInput) -> bytes:
     """
     HMAC-SHA3-256 via native C implementation (ama_hmac_sha3_256).
 
@@ -6571,25 +6879,52 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
 
     out_buf = ctypes.create_string_buffer(32)
 
-    rc = _native_lib.ama_hmac_sha3_256(
-        key,
-        ctypes.c_size_t(len(key)),
-        msg,
-        ctypes.c_size_t(len(msg)),
-        out_buf,
-    )
-    if rc != 0:
-        raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
+    try:
+        rc = _native_lib.ama_hmac_sha3_256(
+            _borrow(key),
+            ctypes.c_size_t(len(key)),
+            _borrow(msg),
+            ctypes.c_size_t(len(msg)),
+            out_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
+        return bytes(out_buf)
+    finally:
+        _wipe(out_buf)
 
-    return bytes(out_buf)
+
+def _native_hmac_sha512_buffer(key: _BufferInput, msg: _BufferInput) -> Any:
+    """HMAC-SHA-512 into a fresh ctypes buffer the caller must wipe."""
+    check_crypto_permitted()
+    if _native_lib is None or not _HMAC_SHA512_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            "HMAC-SHA-512 native backend not available. " + _INSTALL_HINT
+        )
+    out_buf = ctypes.create_string_buffer(64)
+    try:
+        rc = _native_lib.ama_hmac_sha512(
+            _borrow(key),
+            ctypes.c_size_t(len(key)),
+            _borrow(msg),
+            ctypes.c_size_t(len(msg)),
+            out_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
+    except BaseException:
+        _wipe(out_buf)
+        raise
+    return out_buf
 
 
-def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
+def native_hmac_sha512(key: _BufferInput, msg: _BufferInput) -> bytes:
     """
     HMAC-SHA-512 via native C implementation (ama_hmac_sha512).
 
-    Used for BIP32 key derivation in key_management.py.
-    INVARIANT-1 compliant — zero external crypto dependencies.
+    INVARIANT-1 compliant — zero external crypto dependencies.  For a MAC
+    tag, which is public; where the output is key material (BIP32), use
+    :func:`native_hmac_sha512_prf`, which returns it wipeable.
 
     Args:
         key: HMAC key (any length; keys >128 bytes are hashed first)
@@ -6601,28 +6936,24 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
-    check_crypto_permitted()
-    if _native_lib is None or not _HMAC_SHA512_NATIVE_AVAILABLE:
-        raise NativeBackendUnavailableError(
-            "HMAC-SHA-512 native backend not available. " + _INSTALL_HINT
-        )
-
-    out_buf = ctypes.create_string_buffer(64)
-
-    rc = _native_lib.ama_hmac_sha512(
-        key,
-        ctypes.c_size_t(len(key)),
-        msg,
-        ctypes.c_size_t(len(msg)),
-        out_buf,
-    )
-    if rc != 0:
-        raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
-
-    return bytes(out_buf)
+    out_buf = _native_hmac_sha512_buffer(key, msg)
+    try:
+        return bytes(out_buf)
+    finally:
+        _wipe(out_buf)
 
 
-def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
+def native_hmac_sha512_prf(key: _BufferInput, msg: _BufferInput) -> bytearray:
+    """HMAC-SHA-512 used as a PRF whose output is key material.
+
+    BIP32 splits this output into a child key and a chain code, both secret.
+    Same computation as :func:`native_hmac_sha512`; the result is returned in
+    a wipeable ``bytearray`` (INVARIANT-6) instead of an immutable tag.
+    """
+    return _take_secret(_native_hmac_sha512_buffer(key, msg))
+
+
+def native_hmac_sha384(key: _BufferInput, msg: _BufferInput) -> bytes:
     """
     HMAC-SHA-384 via native C implementation (ama_hmac_sha384).
 
@@ -6657,20 +6988,22 @@ def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
 
     out_buf = ctypes.create_string_buffer(48)
 
-    rc = _native_lib.ama_hmac_sha384(
-        key,
-        ctypes.c_size_t(len(key)),
-        msg,
-        ctypes.c_size_t(len(msg)),
-        out_buf,
-    )
-    if rc != 0:
-        raise RuntimeError(f"HMAC-SHA-384 failed (rc={rc})")
+    try:
+        rc = _native_lib.ama_hmac_sha384(
+            _borrow(key),
+            ctypes.c_size_t(len(key)),
+            _borrow(msg),
+            ctypes.c_size_t(len(msg)),
+            out_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"HMAC-SHA-384 failed (rc={rc})")
+        return bytes(out_buf)
+    finally:
+        _wipe(out_buf)
 
-    return bytes(out_buf)
 
-
-def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
+def native_hmac_sha256(key: _BufferInput, msg: _BufferInput) -> bytes:
     """
     HMAC-SHA-256 via native C implementation (ama_hmac_sha256).
 
@@ -6726,18 +7059,20 @@ def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
 
     out_buf = ctypes.create_string_buffer(32)
 
-    _native_lib.ama_hmac_sha256(
-        key,
-        ctypes.c_size_t(len(key)),
-        msg,
-        ctypes.c_size_t(len(msg)),
-        out_buf,
-    )
+    try:
+        _native_lib.ama_hmac_sha256(
+            _borrow(key),
+            ctypes.c_size_t(len(key)),
+            _borrow(msg),
+            ctypes.c_size_t(len(msg)),
+            out_buf,
+        )
+        return bytes(out_buf)
+    finally:
+        _wipe(out_buf)
 
-    return bytes(out_buf)
 
-
-def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
+def native_hmac_sha256_2(key: _BufferInput, msg1: _BufferInput, msg2: _BufferInput) -> bytes:
     """
     HMAC-SHA-256 with two concatenated message segments
     (ama_hmac_sha256_2).
@@ -6774,27 +7109,29 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
 
     out_buf = ctypes.create_string_buffer(32)
 
-    _native_lib.ama_hmac_sha256_2(
-        key,
-        ctypes.c_size_t(len(key)),
-        msg1,
-        ctypes.c_size_t(len(msg1)),
-        msg2,
-        ctypes.c_size_t(len(msg2)),
-        out_buf,
-    )
+    try:
+        _native_lib.ama_hmac_sha256_2(
+            _borrow(key),
+            ctypes.c_size_t(len(key)),
+            _borrow(msg1),
+            ctypes.c_size_t(len(msg1)),
+            _borrow(msg2),
+            ctypes.c_size_t(len(msg2)),
+            out_buf,
+        )
+        return bytes(out_buf)
+    finally:
+        _wipe(out_buf)
 
-    return bytes(out_buf)
 
-
-def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
+def _probe_cython_hmac() -> "Optional[Callable[[_BufferInput, _BufferInput], bytes]]":
     """Detect Cython HMAC-SHA3-256 binding at module load time."""
     if not _binding_imports_permitted():
         return None
     try:
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 
-        return cast(Callable[[bytes, bytes], bytes], cy_hmac_sha3_256)
+        return cast(Callable[[_BufferInput, _BufferInput], bytes], cy_hmac_sha3_256)
     except (ImportError, AttributeError):
         return None
 
@@ -6821,7 +7158,7 @@ else:
     )
 
 
-def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+def hmac_sha3_256(key: _BufferInput, msg: _BufferInput) -> bytes:
     """
     HMAC-SHA3-256 via AMA native C implementation.
 
@@ -6859,12 +7196,24 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
-class _DilithiumKATKeyPair:
-    """Internal keypair structure for KAT test compatibility."""
+class _DilithiumKATKeyPair(SecretMaterial):
+    """Internal keypair structure for KAT test compatibility.
+
+    Holds a freshly generated secret key, so it is INVARIANT-6 storage like
+    the public key-pair classes: ``wipe()`` zeroes the key, collection zeroes
+    it if this object is its last owner, the key is left out of ``repr``, and
+    two pairs compare their keys in constant time.
+    """
+
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("secret_key",)
 
     public_key: bytes
-    secret_key: Union[bytes, bytearray]
+    secret_key: Union[bytes, bytearray] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class DilithiumProvider:
@@ -6922,12 +7271,24 @@ class DilithiumProvider:
         return dilithium_verify(message, signature, public_key)
 
 
+@constant_time_equality()
 @dataclass
-class _KyberKATKeyPair:
-    """Internal keypair structure for KAT test compatibility."""
+class _KyberKATKeyPair(SecretMaterial):
+    """Internal keypair structure for KAT test compatibility.
+
+    Holds a freshly generated secret key, so it is INVARIANT-6 storage like
+    the public key-pair classes: ``wipe()`` zeroes the key, collection zeroes
+    it if this object is its last owner, the key is left out of ``repr``, and
+    two pairs compare their keys in constant time.
+    """
+
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("secret_key",)
 
     public_key: bytes
-    secret_key: Union[bytes, bytearray]
+    secret_key: Union[bytes, bytearray] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class KyberProvider:
@@ -6971,7 +7332,7 @@ class KyberProvider:
         result = kyber_encapsulate(public_key)
         return (result.ciphertext, result.shared_secret)
 
-    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
         """
         Decapsulate a shared secret.
 
@@ -6980,7 +7341,7 @@ class KyberProvider:
             secret_key: Kyber secret key
 
         Returns:
-            Shared secret bytes
+            Shared secret in a wipeable ``bytearray``
         """
         return kyber_decapsulate(ciphertext, secret_key)
 
@@ -6990,7 +7351,7 @@ class KyberProvider:
 # ============================================================================
 
 
-def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
+def native_secp256k1_pubkey_from_privkey(privkey: _BufferInput) -> bytes:
     """
     Compute compressed SEC1 public key from 32-byte private key.
 
@@ -7024,7 +7385,7 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         )
 
     pubkey_buf = ctypes.create_string_buffer(SECP256K1_PUBKEY_BYTES)
-    rc = _native_lib.ama_secp256k1_pubkey_from_privkey(privkey, pubkey_buf)
+    rc = _native_lib.ama_secp256k1_pubkey_from_privkey(_borrow(privkey), pubkey_buf)
     if rc == AMA_ERROR_INVALID_PARAM:
         # A property of the input, not an internal failure — see the matching
         # note on native_nistp_pubkey_from_privkey. SEC 1 §3.2.1 requires a
@@ -7037,6 +7398,65 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
 
     return bytes(pubkey_buf)
+
+
+def _secp256k1_require_native() -> None:
+    if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            "secp256k1 native backend not available. " + _INSTALL_HINT
+        )
+
+
+def native_secp256k1_seckey_verify(seckey: _BufferInput) -> bool:
+    """Whether ``seckey`` is a valid secp256k1 secret key: a scalar in [1, n-1].
+
+    Decided in constant time by the native core (``ama_secp256k1_seckey_verify``);
+    only the verdict is public.  A Python ``int.from_bytes`` comparison against
+    ``n`` is variable-time arithmetic on the secret, which INVARIANT-12 rule 1
+    forbids.
+
+    Raises:
+        ValueError: If ``seckey`` is not 32 bytes.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    check_crypto_permitted()
+    if len(seckey) != SECP256K1_PRIVKEY_BYTES:
+        raise ValueError(f"Secret key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(seckey)}")
+    _secp256k1_require_native()
+    return int(_native_lib.ama_secp256k1_seckey_verify(_borrow(seckey))) == 0
+
+
+def native_secp256k1_seckey_tweak_add(seckey: _BufferInput, tweak: _BufferInput) -> bytearray:
+    """``(seckey + tweak) mod n`` -- BIP32's private child step -- in constant time.
+
+    ``seckey`` must be in [1, n-1], ``tweak`` in [0, n-1] (BIP32: parse256(I_L)
+    < n), and the sum non-zero.  Both inputs are read in place and the result
+    is returned in a wipeable ``bytearray`` (INVARIANT-6).
+
+    Raises:
+        ValueError: If a length is wrong, or the native core refused the
+            arithmetic (a key or tweak out of range, or a zero sum); BIP32
+            then proceeds with the next index.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    check_crypto_permitted()
+    for label, value in (("secret key", seckey), ("tweak", tweak)):
+        if len(value) != SECP256K1_PRIVKEY_BYTES:
+            raise ValueError(f"{label} must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(value)}")
+    _secp256k1_require_native()
+    out = ctypes.create_string_buffer(SECP256K1_PRIVKEY_BYTES)
+    try:
+        rc = _native_lib.ama_secp256k1_seckey_tweak_add(out, _borrow(seckey), _borrow(tweak))
+        if rc == AMA_ERROR_INVALID_PARAM:
+            raise ValueError(
+                "secp256k1 tweak refused: the key is not in [1, n-1], the tweak is "
+                "not in [0, n-1], or their sum is zero mod n"
+            )
+        if rc != 0:
+            raise RuntimeError(f"secp256k1 seckey_tweak_add failed (rc={rc})")
+        return _take_secret(out)
+    finally:
+        _wipe(out)
 
 
 SECP256K1_ECDSA_MAX_SIG_BYTES = 72
@@ -7096,7 +7516,7 @@ def native_secp256k1_pubkey_decompress(compressed: bytes) -> bytes:
     return bytes(out.raw[:SECP256K1_UNCOMPRESSED_PUBKEY_BYTES])
 
 
-def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
+def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: _BufferInput) -> bytes:
     """
     Sign a 32-byte message digest with ECDSA over secp256k1.
 
@@ -7109,7 +7529,8 @@ def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
     Args:
         message_digest: 32-byte digest. This function does NOT hash;
             pass a digest, not a message.
-        privkey: 32-byte secp256k1 private key, big-endian, in [1, n-1].
+        privkey: 32-byte secp256k1 private key, big-endian, in [1, n-1];
+            a ``bytearray`` is read in place, never copied.
 
     Returns:
         DER-encoded signature (8..72 bytes).
@@ -7133,7 +7554,7 @@ def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
     sig_buf = ctypes.create_string_buffer(SECP256K1_ECDSA_MAX_SIG_BYTES)
     sig_len = ctypes.c_size_t(0)
     rc = _native_lib.ama_secp256k1_ecdsa_sign(
-        sig_buf, ctypes.byref(sig_len), bytes(message_digest), bytes(privkey)
+        sig_buf, ctypes.byref(sig_len), bytes(message_digest), _borrow(privkey)
     )
     if rc != 0:
         raise RuntimeError(f"secp256k1 ECDSA signing failed (rc={rc})")
@@ -7287,7 +7708,21 @@ def _borrow(secret: _BufferInput) -> Any:
         return secret
     view = _byte_view(secret)
     if view.readonly:
-        return view.tobytes()
+        # ``tobytes()`` here was a fresh immutable copy of the secret (PR #415
+        # review).  A read-only view of a whole ``bytes`` is that ``bytes``,
+        # passed as is; of a whole ``bytearray`` (``toreadonly()``), that
+        # storage, borrowed.  A read-only view of PART of a buffer has no
+        # copy-free route to C, and is refused rather than copied.
+        owner = view.obj
+        if isinstance(owner, bytes) and view.nbytes == len(owner):
+            return owner
+        if isinstance(owner, bytearray) and view.nbytes == len(owner):
+            return (ctypes.c_char * view.nbytes).from_buffer(owner)
+        raise TypeError(
+            "a secret passed as a read-only view of part of a buffer cannot be "
+            "borrowed without copying it; pass the bytes or bytearray itself, or "
+            "a writable view"
+        )
     return (ctypes.c_char * view.nbytes).from_buffer(view)
 
 
@@ -7311,6 +7746,37 @@ def _wipe(*buffers: Any) -> None:
     for buf in buffers:
         if buf is not None:
             ctypes.memset(buf, 0, ctypes.sizeof(buf))
+
+
+def _secret_out(n: int) -> Tuple[bytearray, Any]:
+    """A ``bytearray`` for the C side to write a secret into, and its ctypes view.
+
+    The secret's only home from the moment it exists: no ctypes staging
+    buffer, no copy, nothing to wipe on success.  The view borrows the
+    bytearray's buffer, which pins its size while the view lives; callers
+    drop it with their frame (immediately on return in CPython), and zero the
+    bytearray themselves on failure.  Preferred over :func:`_take_secret`
+    wherever the output length is fixed in advance.
+    """
+    out = bytearray(n)
+    return out, (ctypes.c_char * n).from_buffer(out)
+
+
+def _take_secret(buf: Any, n: Optional[int] = None) -> bytearray:
+    """Move a secret out of a ctypes output buffer into a fresh ``bytearray``.
+
+    The returned object is the only copy left: the ctypes buffer is wiped
+    before this returns, whether or not the copy succeeded.  Every native
+    wrapper that hands secret material back -- a shared secret, KDF output, a
+    key share -- returns through here, so the caller receives storage it can
+    scrub (INVARIANT-6) and no ``bytes`` snapshot of the secret is made on the
+    way.  ``n`` trims to the length the C side reported.
+    """
+    try:
+        view = memoryview(buf)
+        return bytearray(view if n is None else view[:n])
+    finally:
+        _wipe(buf)
 
 
 def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
@@ -7341,7 +7807,7 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
         if rc != 0:
             raise RuntimeError(f"ML-KEM keypair generation failed (rc={rc})")
         public_key = bytes(pk.raw[: sz["public_key"]])
-        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        secret_key = bytearray(memoryview(sk)[: sz["secret_key"]])
         # FIPS 140-3 pairwise consistency test (INVARIANT-41).
         pairwise_test_kem(
             functools.partial(native_ml_kem_encapsulate, pid),
@@ -7355,12 +7821,13 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
         _wipe(sk)
 
 
-def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> tuple:
+def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: _BufferInput, z: _BufferInput) -> tuple:
     """
     Deterministic ML-KEM keypair from the (d, z) seed pair (FIPS 203 §7.1).
 
     This is the KAT entry point and the one a PKCS#8 ``seed`` private key needs:
-    ``d || z`` is 64 octets and expands to the full key.
+    ``d || z`` is 64 octets and expands to the full key.  A seed passed as a
+    ``bytearray`` is borrowed in place, never copied, so the caller can wipe it.
 
     Raises:
         ValueError: If a seed is not exactly 32 bytes, or the set is unknown.
@@ -7388,7 +7855,7 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
         if rc != 0:
             raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
         public_key = bytes(pk.raw[: sz["public_key"]])
-        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        secret_key = bytearray(memoryview(sk)[: sz["secret_key"]])
         # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
         # still generated keypairs (INVARIANT-41).
         pairwise_test_kem(
@@ -7403,7 +7870,7 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
         _wipe(sk)
 
 
-def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
+def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: _BufferInput) -> bytes:
     """
     Recover the encapsulation key from an ML-KEM decapsulation key, verifying
     the decapsulation key's internal consistency.
@@ -7519,7 +7986,7 @@ def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
 
     Returns:
         ``(ciphertext, shared_secret)``; the shared secret is 32 bytes for
-        every parameter set.
+        every parameter set, in a ``bytearray`` the caller can wipe.
 
     Raises:
         ValueError: If the public key has the wrong length for ``ps``.
@@ -7547,16 +8014,17 @@ def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
         )
         if rc != 0:
             raise RuntimeError(f"ML-KEM encapsulation failed (rc={rc})")
-        return bytes(ct.raw[: ct_len.value]), bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+        return bytes(ct.raw[: ct_len.value]), _take_secret(ss, ML_KEM_SHARED_SECRET_BYTES)
     finally:
         _wipe(ss)
 
 
 def native_ml_kem_decapsulate(
-    ps: Union[int, str], ciphertext: bytes, secret_key: Union[bytes, bytearray]
-) -> bytes:
+    ps: Union[int, str], ciphertext: bytes, secret_key: _BufferInput
+) -> bytearray:
     """
-    ML-KEM decapsulation (FIPS 203 Algorithm 18).
+    ML-KEM decapsulation (FIPS 203 Algorithm 18).  The shared secret is
+    returned in a ``bytearray`` the caller can wipe.
 
     A malformed ciphertext does NOT raise: FIPS 203 mandates implicit
     rejection, so decapsulation returns a deterministic pseudorandom secret
@@ -7604,7 +8072,7 @@ def native_ml_kem_decapsulate(
             )
         if rc != 0:
             raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
-        return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+        return _take_secret(ss, ML_KEM_SHARED_SECRET_BYTES)
     finally:
         _wipe(ss)
 
@@ -7622,7 +8090,7 @@ def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
         if rc != 0:
             raise RuntimeError(f"ML-DSA keypair generation failed (rc={rc})")
         public_key = bytes(pk.raw[: sz["public_key"]])
-        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        secret_key = bytearray(memoryview(sk)[: sz["secret_key"]])
         # FIPS 140-3 pairwise consistency test (INVARIANT-41).
         pairwise_test_signature(
             functools.partial(native_ml_dsa_sign, pid),
@@ -7636,9 +8104,11 @@ def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
         _wipe(sk)
 
 
-def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
+def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: _BufferInput) -> tuple:
     """
     Deterministic ML-DSA keypair from the 32-octet seed xi (FIPS 204 §5.1).
+    A seed passed as a ``bytearray`` is borrowed in place, never copied, so the
+    caller can wipe it.
 
     Raises:
         ValueError: If the seed is not exactly 32 bytes, or the set is unknown.
@@ -7657,7 +8127,7 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
         if rc != 0:
             raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
         public_key = bytes(pk.raw[: sz["public_key"]])
-        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        secret_key = bytearray(memoryview(sk)[: sz["secret_key"]])
         # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
         # still generated keypairs, and this is the public path a corrupted
         # caller-supplied seed reaches (INVARIANT-41).
@@ -7673,7 +8143,7 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
         _wipe(sk)
 
 
-def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
+def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: _BufferInput) -> bytes:
     """
     Recompute the public key from an expanded ML-DSA private key, verifying
     that private key's internal consistency.
@@ -7974,7 +8444,8 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         curve: Curve selector or name.
 
     Returns:
-        ``(public_key, private_key)`` as bytes — public FIRST, matching every
+        ``(public_key, private_key)`` — the public key as bytes, the private
+        key in a wipeable ``bytearray`` (INVARIANT-6) — public FIRST, matching every
         other keypair function in this module (``native_x25519_keypair``,
         ``native_ed25519_keypair``, ``native_ml_kem_keypair``, ...).
 
@@ -8001,7 +8472,7 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         if rc != 0:
             raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
         public_key = bytes(pub.raw[: 2 * nb])
-        private_key = bytes(priv.raw[:nb])
+        private_key = bytearray(memoryview(priv)[:nb])
         # FIPS 140-3 pairwise consistency test, FIPS 186-5 §3.3 form: sign
         # with the private scalar and verify with the public point — two
         # genuinely independent computations, unlike public-key regeneration,
@@ -8034,7 +8505,7 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         _wipe(priv)
 
 
-def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> bytes:
+def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: _BufferInput) -> bytes:
     """
     Derive the X||Y public key for an existing private scalar.
 
@@ -8130,7 +8601,9 @@ def native_nistp_point_decode(curve: Union[int, str], point: bytes) -> bytes:
     return bytes(out.raw[: 2 * nb])
 
 
-def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes) -> bytes:
+def native_nistp_ecdh(
+    curve: Union[int, str], privkey: _BufferInput, peer_pubkey: bytes
+) -> bytearray:
     """
     ECDH shared secret (SP 800-56A §5.7.1.2 ECC CDH, cofactor 1).
 
@@ -8139,9 +8612,9 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
     point on a different, smooth-order curve recovers the private key from a
     handful of exchanges.
 
-    The return value is the raw x-coordinate ("Z" in SP 800-56A). It is key
-    *material*, not a key — run it through a KDF (``native_hkdf_sha256`` and
-    friends) before using it.
+    The return value is the raw x-coordinate ("Z" in SP 800-56A), in a
+    wipeable ``bytearray``. It is key *material*, not a key — run it through a
+    KDF (``native_hkdf_sha256`` and friends) before using it.
 
     Raises:
         ValueError: If a length is wrong, the peer key is not a valid point of
@@ -8178,7 +8651,7 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
             )
         if rc != 0:
             raise RuntimeError(f"NIST curve ECDH failed (rc={rc})")
-        return bytes(out.raw[:nb])
+        return _take_secret(out, nb)
     finally:
         _wipe(out)
 
@@ -8618,11 +9091,13 @@ def native_x25519_keypair() -> tuple:
     pk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
 
-    rc = _native_lib.ama_x25519_keypair(pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"X25519 keypair generation failed (rc={rc})")
-
-    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    try:
+        rc = _native_lib.ama_x25519_keypair(pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"X25519 keypair generation failed (rc={rc})")
+        public_key, secret_key = bytes(pk_buf), bytearray(memoryview(sk_buf))
+    finally:
+        _wipe(sk_buf)
     # FIPS 140-3 pairwise consistency test for a key-agreement keypair
     # (SP 800-56A rev. 3 §5.6.2.1.4, strong form): a DH roundtrip against a
     # fresh ephemeral peer, X25519(sk, eph_pk) == X25519(eph_sk, pk), which
@@ -8632,28 +9107,44 @@ def native_x25519_keypair() -> tuple:
     # into this very test): a health-tested scalar draw, public half derived
     # by one base-point multiplication.  The kernel clamps scalars per
     # RFC 7748 §5, so a raw 32-byte draw is a valid private key.
-    eph_secret = secure_token_bytes(32)
-    eph_public = native_x25519_key_exchange(eph_secret, _X25519_BASEPOINT_U)
-    pairwise_test_agreement(
-        native_x25519_key_exchange,
-        (eph_public, eph_secret),
-        secret_key,
-        public_key,
-        "X25519",
-    )
+    #
+    # ``secret_key`` exists from here on, so everything up to the release is
+    # under one guard: the pairwise helper zeroes the key only once it is
+    # entered, and a refused ephemeral draw (error state, continuous RNG test)
+    # or a failing base-point multiplication before that point would
+    # otherwise drop the minted key intact (INVARIANT-6, every exit path).
+    try:
+        eph_secret = secure_token_bytearray(32)
+        try:
+            # X25519(k, 9) is a public key.
+            eph_public = bytes(native_x25519_key_exchange(eph_secret, _X25519_BASEPOINT_U))
+            pairwise_test_agreement(
+                native_x25519_key_exchange,
+                (eph_public, eph_secret),
+                secret_key,
+                public_key,
+                "X25519",
+            )
+        finally:
+            _secure_memzero(eph_secret)
+    except BaseException:
+        zeroize(secret_key)
+        raise
     return public_key, secret_key
 
 
-def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -> bytes:
+def native_x25519_key_exchange(
+    our_secret_key: _BufferInput, their_public_key: _BufferInput
+) -> bytearray:
     """
     X25519 Diffie-Hellman key exchange.
 
     Args:
-        our_secret_key: Our 32-byte secret key
+        our_secret_key: Our 32-byte secret key (read in place)
         their_public_key: Their 32-byte public key
 
     Returns:
-        32-byte shared secret
+        32-byte shared secret, in a wipeable ``bytearray`` (INVARIANT-6)
 
     Raises:
         RuntimeError: On low-order point or native library unavailable
@@ -8667,15 +9158,22 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
     if len(their_public_key) != 32:
         raise ValueError(f"X25519 public key must be 32 bytes, got {len(their_public_key)}")
 
-    ss_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
-    rc = _native_lib.ama_x25519_key_exchange(ss_buf, our_secret_key, their_public_key)
-    if rc != 0:
-        raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
+    shared_secret, ss_buf = _secret_out(X25519_KEY_BYTES)
+    try:
+        rc = _native_lib.ama_x25519_key_exchange(
+            ss_buf, _borrow(our_secret_key), _borrow(their_public_key)
+        )
+        if rc != 0:
+            raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
+    except BaseException:
+        zeroize(shared_secret)
+        raise
+    return shared_secret
 
-    return bytes(ss_buf)
 
-
-def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) -> list[bytes]:
+def native_x25519_scalarmult_batch(
+    scalars: Sequence[_BufferInput], points: Sequence[_BufferInput]
+) -> list[bytearray]:
     """
     Batched X25519 Diffie-Hellman key exchange.
 
@@ -8699,7 +9197,8 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
         points: List of 32-byte u-coordinates (must match scalars in length).
 
     Returns:
-        List of 32-byte shared secrets, in the same order as inputs.
+        List of 32-byte shared secrets, in the same order as inputs, each in
+        its own wipeable ``bytearray`` (INVARIANT-6).
 
     Raises:
         ValueError: On length mismatch or wrong-sized inputs.
@@ -8757,9 +9256,12 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
                     f"got {scalar_view.nbytes}"
                 )
             offset = i * X25519_KEY_BYTES
+            # Copied straight from the caller's storage: ``bytes(scalar_view)``
+            # here made an immutable copy of every secret scalar, the thing
+            # the comment above says this wrapper never does.
             ctypes.memmove(
                 ctypes.addressof(scalars_blob) + offset,
-                bytes(scalar_view),
+                _borrow(scalar),
                 X25519_KEY_BYTES,
             )
 
@@ -8777,7 +9279,7 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
             offset = i * X25519_KEY_BYTES
             ctypes.memmove(
                 ctypes.addressof(points_blob) + offset,
-                bytes(point_view),
+                _borrow(point),
                 X25519_KEY_BYTES,
             )
 
@@ -8785,12 +9287,11 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
         if rc != 0:
             raise RuntimeError(f"X25519 batch scalar-mult failed (rc={rc})")
 
-        # Slice out per-lane shared secrets.  These are immutable bytes by
-        # API contract (the caller may pin them in their own collections);
-        # the wipeable buffers below are the wrapper's own intermediate
-        # storage, which we MUST scrub.
+        # One wipeable bytearray per lane, copied out of the view; the
+        # wrapper's own buffers below are scrubbed on every path.
+        out_view = memoryview(out_buf)
         return [
-            bytes(out_buf.raw[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES])
+            bytearray(out_view[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES])
             for i in range(count)
         ]
     finally:
@@ -8814,18 +9315,18 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
 
 
 def native_argon2id(
-    password: bytes,
+    password: _BufferInput,
     salt: bytes,
     t_cost: int = 3,
     m_cost: int = 65536,
     parallelism: int = 4,
     out_len: int = 32,
-) -> bytes:
+) -> bytearray:
     """
     Argon2id key derivation (RFC 9106).
 
     Args:
-        password: Password bytes
+        password: Password bytes (a ``bytearray`` is read in place)
         salt: Salt bytes (16+ recommended)
         t_cost: Time cost (iterations)
         m_cost: Memory cost in KiB
@@ -8833,7 +9334,7 @@ def native_argon2id(
         out_len: Desired output length
 
     Returns:
-        Derived key bytes
+        Derived key in a wipeable ``bytearray`` (INVARIANT-6)
 
     Raises:
         RuntimeError: If native library is not available
@@ -8875,31 +9376,33 @@ def native_argon2id(
         )
 
     out_buf = ctypes.create_string_buffer(out_len)
-    rc = _native_lib.ama_argon2id(
-        password,
-        len(password),
-        salt,
-        len(salt),
-        t_cost,
-        m_cost,
-        parallelism,
-        out_buf,
-        out_len,
-    )
-    if rc != 0:
-        raise RuntimeError(f"Argon2id failed (rc={rc})")
-
-    return bytes(out_buf)
+    try:
+        rc = _native_lib.ama_argon2id(
+            _borrow(password),
+            len(password),
+            salt,
+            len(salt),
+            t_cost,
+            m_cost,
+            parallelism,
+            out_buf,
+            out_len,
+        )
+        if rc != 0:
+            raise RuntimeError(f"Argon2id failed (rc={rc})")
+        return _take_secret(out_buf)
+    finally:
+        _wipe(out_buf)
 
 
 def native_argon2id_legacy(
-    password: bytes,
+    password: _BufferInput,
     salt: bytes,
     t_cost: int = 3,
     m_cost: int = 65536,
     parallelism: int = 4,
     out_len: int = 32,
-) -> bytes:
+) -> bytearray:
     """
     Derive an Argon2id tag using the pre-shim (buggy) derivation.
 
@@ -8923,7 +9426,7 @@ def native_argon2id_legacy(
         out_len:     Output tag length (≥ 4 bytes).
 
     Returns:
-        Derived tag bytes of length ``out_len``.
+        The derived tag, ``out_len`` bytes, in a wipeable ``bytearray``.
 
     Raises:
         RuntimeError: If the native library is unavailable, or if the loaded
@@ -8985,27 +9488,31 @@ def native_argon2id_legacy(
     )
 
     out_buf = ctypes.create_string_buffer(out_len)
-    rc = _native_lib.ama_argon2id_legacy(
-        password,
-        len(password),
-        salt,
-        len(salt),
-        t_cost,
-        m_cost,
-        parallelism,
-        out_buf,
-        out_len,
-    )
-    if rc != 0:
-        raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
-
-    return bytes(out_buf)
+    # Taken into a wipeable bytearray and the staging buffer scrubbed on every
+    # path, as native_argon2id does (PR #415 review sweep).
+    try:
+        rc = _native_lib.ama_argon2id_legacy(
+            _borrow(password),
+            len(password),
+            salt,
+            len(salt),
+            t_cost,
+            m_cost,
+            parallelism,
+            out_buf,
+            out_len,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
+        return _take_secret(out_buf)
+    finally:
+        _wipe(out_buf)
 
 
 def native_argon2id_legacy_verify(
-    password: bytes,
+    password: _BufferInput,
     salt: bytes,
-    expected_tag: bytes,
+    expected_tag: _BufferInput,
     t_cost: int = 3,
     m_cost: int = 65536,
     parallelism: int = 4,
@@ -9082,14 +9589,14 @@ def native_argon2id_legacy_verify(
         )
 
     rc = _native_lib.ama_argon2id_legacy_verify(
-        password,
+        _borrow(password),
         len(password),
         salt,
         len(salt),
         t_cost,
         m_cost,
         parallelism,
-        bytes(expected_tag),
+        _borrow(expected_tag),
         tag_len,
     )
     # AMA_SUCCESS (0) == match; AMA_ERROR_VERIFY_FAILED (-4) == mismatch.
@@ -9238,10 +9745,13 @@ def native_chacha20poly1305_decrypt(
     finally:
         if borrow is not None:
             borrow.__exit__(None, None, None)
-    if rc != 0:
-        raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
-
-    return bytes(pt_buf)
+    # Staging buffer scrubbed on every path, as in native_aes256_gcm_decrypt.
+    try:
+        if rc != 0:
+            raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
+        return bytes(pt_buf)
+    finally:
+        _wipe(pt_buf)
 
 
 # ============================================================================
@@ -9249,7 +9759,7 @@ def native_chacha20poly1305_decrypt(
 # ============================================================================
 
 
-def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
+def native_kyber_keypair_from_seed(d: Union[bytes, bytearray], z: Union[bytes, bytearray]) -> tuple:
     """
     Deterministic Kyber-1024 keypair from seed.
 
@@ -9282,11 +9792,13 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
 
-    rc = _native_lib.ama_kyber_keypair_from_seed(d, z, pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"Kyber deterministic keygen failed (rc={rc})")
-
-    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    try:
+        rc = _native_lib.ama_kyber_keypair_from_seed(_borrow(d), _borrow(z), pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"Kyber deterministic keygen failed (rc={rc})")
+        public_key, secret_key = bytes(pk_buf), bytearray(memoryview(sk_buf))
+    finally:
+        _wipe(sk_buf)
     # FIPS 140-3 pairwise consistency test (INVARIANT-41).
     pairwise_test_kem(
         kyber_encapsulate,
@@ -9298,7 +9810,7 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     return public_key, secret_key
 
 
-def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
+def native_dilithium_keypair_from_seed(xi: Union[bytes, bytearray]) -> tuple:
     """
     Deterministic ML-DSA-65 keypair from seed.
 
@@ -9325,11 +9837,14 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
     pk_buf = ctypes.create_string_buffer(DILITHIUM_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)
 
-    rc = _native_lib.ama_dilithium_keypair_from_seed(xi, pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
+    try:
+        rc = _native_lib.ama_dilithium_keypair_from_seed(_borrow(xi), pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
 
-    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+        public_key, secret_key = bytes(pk_buf), bytearray(memoryview(sk_buf))
+    finally:
+        _wipe(sk_buf)
     # FIPS 140-3 pairwise consistency test (INVARIANT-41).
     pairwise_test_signature(
         dilithium_sign,
@@ -9360,7 +9875,7 @@ _AMA_ERROR_VERIFY_FAILED = -4
 def frost_keygen_trusted_dealer(
     threshold: int,
     num_participants: int,
-    secret_key: Optional[bytes] = None,
+    secret_key: Optional[_BufferInput] = None,
 ) -> tuple:
     """Generate FROST key shares via trusted dealer (Shamir secret sharing).
 
@@ -9370,7 +9885,9 @@ def frost_keygen_trusted_dealer(
         secret_key: Optional 32-byte group secret key (None = random)
 
     Returns:
-        Tuple of (group_public_key, list_of_participant_shares)
+        Tuple of (group_public_key, list_of_participant_shares).  Each share
+        is a 64-byte ``bytearray`` (secret share || public share) the
+        participant can wipe (INVARIANT-6).
         where each share is 64 bytes (32 secret + 32 public).
     """
     check_crypto_permitted()
@@ -9391,28 +9908,34 @@ def frost_keygen_trusted_dealer(
         raise ValueError("num_participants must be <= 255")
 
     if secret_key is not None:
-        if not isinstance(secret_key, bytes) or len(secret_key) != 32:
+        if not isinstance(secret_key, (bytes, bytearray)) or len(secret_key) != 32:
             raise ValueError("secret_key must be exactly 32 bytes")
 
     gpk_buf = ctypes.create_string_buffer(32)
     shares_buf = ctypes.create_string_buffer(num_participants * FROST_SHARE_BYTES)
-    sk_ptr = secret_key if secret_key is not None else None
+    sk_ptr = _borrow(secret_key) if secret_key is not None else None
 
-    rc = _native_lib.ama_frost_keygen_trusted_dealer(
-        ctypes.c_uint8(threshold),
-        ctypes.c_uint8(num_participants),
-        gpk_buf,
-        shares_buf,
-        sk_ptr,
-    )
-    if rc != 0:
-        raise RuntimeError(f"FROST keygen failed (rc={rc})")
-
-    gpk = bytes(gpk_buf)
-    raw = shares_buf.raw
-    shares = [
-        raw[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES] for i in range(num_participants)
-    ]
+    try:
+        rc = _native_lib.ama_frost_keygen_trusted_dealer(
+            ctypes.c_uint8(threshold),
+            ctypes.c_uint8(num_participants),
+            gpk_buf,
+            shares_buf,
+            sk_ptr,
+        )
+        if rc != 0:
+            raise RuntimeError(f"FROST keygen failed (rc={rc})")
+        gpk = bytes(gpk_buf)
+        # One wipeable bytearray per participant, copied out of a view; the
+        # dealer's staging buffer holding every share is scrubbed below.
+        # ``shares_buf.raw`` was an immutable copy of all n secret shares.
+        shares_view = memoryview(shares_buf)
+        shares = [
+            bytearray(shares_view[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES])
+            for i in range(num_participants)
+        ]
+    finally:
+        _wipe(shares_buf)
 
     # FIPS 140-3-style pairwise consistency test for the dealt shares
     # (INVARIANT-41): a full t-of-n signing round over the first ``threshold``
@@ -9425,34 +9948,45 @@ def frost_keygen_trusted_dealer(
     def _frost_roundtrip_sign(message: bytes, dealt_shares: list) -> bytes:
         signer_shares = dealt_shares[:threshold]
         indices = bytes(range(1, threshold + 1))
-        nonces = []
+        nonces: list = []
         commitment_list = []
-        for share in signer_shares:
-            nonce, commitment = frost_round1_commit(share)
-            nonces.append(nonce)
-            commitment_list.append(commitment)
-        commitments = b"".join(commitment_list)
-        # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
-        # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
-        # loop consumes each exactly once and none survives the closure.
-        sig_shares = b"".join(
-            frost_round2_sign(
-                message, signer_shares[i], i + 1, nonces[i], commitments, indices, threshold, gpk
+        # Round 2 consumes each nonce pair; one committed before a later
+        # commit or signing step fails would otherwise be dropped intact.
+        with ScrubOnRaise() as held:
+            held(nonces)
+            for share in signer_shares:
+                nonce, commitment = frost_round1_commit(share)
+                nonces.append(nonce)
+                commitment_list.append(commitment)
+            commitments = b"".join(commitment_list)
+            # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
+            # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
+            # loop consumes each exactly once and none survives the closure.
+            sig_shares = b"".join(
+                frost_round2_sign(
+                    message,
+                    signer_shares[i],
+                    i + 1,
+                    nonces[i],
+                    commitments,
+                    indices,
+                    threshold,
+                    gpk,
+                )
+                for i in range(threshold)
             )
-            for i in range(threshold)
-        )
-        # INVARIANT-49: aggregation verifies every share against the RFC 9591
-        # section 5.3 relation, which needs each signer's PUBLIC key share —
-        # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
-        # That makes the pairwise consistency test strictly stronger than it
-        # was: a dealer that mints a secret half not matching the public half
-        # it publishes now fails at aggregation with the culprit named,
-        # instead of producing a signature that only the final Ed25519 verify
-        # rejects.
-        public_shares = b"".join(share[32:64] for share in signer_shares)
-        return frost_aggregate(
-            sig_shares, commitments, public_shares, indices, threshold, message, gpk
-        )
+            # INVARIANT-49: aggregation verifies every share against the RFC 9591
+            # section 5.3 relation, which needs each signer's PUBLIC key share —
+            # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
+            # That makes the pairwise consistency test strictly stronger than it
+            # was: a dealer that mints a secret half not matching the public half
+            # it publishes now fails at aggregation with the culprit named,
+            # instead of producing a signature that only the final Ed25519 verify
+            # rejects.
+            public_shares = b"".join(share[32:64] for share in signer_shares)
+            return frost_aggregate(
+                sig_shares, commitments, public_shares, indices, threshold, message, gpk
+            )
 
     pairwise_test_signature(
         _frost_roundtrip_sign,
@@ -9464,7 +9998,7 @@ def frost_keygen_trusted_dealer(
     return gpk, shares
 
 
-def frost_round1_commit(participant_share: bytes) -> tuple:
+def frost_round1_commit(participant_share: _BufferInput) -> tuple:
     """FROST Round 1: Generate nonce commitment.
 
     **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  The returned ``nonce_pair``
@@ -9498,20 +10032,18 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
     nonce_buf = ctypes.create_string_buffer(FROST_NONCE_BYTES)
     commit_buf = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
 
-    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, _borrow(participant_share))
-    if rc != 0:
-        raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
-
-    # Copied C-to-C into a bytearray so the caller holds a buffer round 2 can
-    # scrub, then the staging buffer is scrubbed here so the nonce is not left
-    # in a second place.  No ``bytes`` is made on the way: ``nonce_buf.raw``
-    # would be one — a full-length slice of it is the same object — and an
-    # immutable copy of (d, e) is beyond both scrubs.
-    nonce_pair = bytearray(FROST_NONCE_BYTES)
-    ctypes.memmove(
-        (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair), nonce_buf, FROST_NONCE_BYTES
-    )
-    ctypes.memset(nonce_buf, 0, FROST_NONCE_BYTES)
+    try:
+        rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, _borrow(participant_share))
+        if rc != 0:
+            raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
+        # Copied into a bytearray so the caller holds a buffer round 2 can
+        # scrub, then the staging buffer is scrubbed on every path so the
+        # nonce is not left in a second place.  No ``bytes`` is made on the
+        # way: ``nonce_buf.raw`` would be one, and an immutable copy of (d, e)
+        # is beyond both scrubs.
+        nonce_pair = _take_secret(nonce_buf, FROST_NONCE_BYTES)
+    finally:
+        _wipe(nonce_buf)
     return nonce_pair, bytes(commit_buf.raw[:FROST_COMMITMENT_BYTES])
 
 
@@ -9742,16 +10274,18 @@ def frost_verify_share(
     if len(group_public_key) != 32:
         raise ValueError("group_public_key must be 32 bytes")
 
+    # Every buffer is borrowed: a public share sliced from a dealt share is a
+    # bytearray (shares are wipeable), which ctypes' c_char_p refuses as is.
     rc = _native_lib.ama_frost_verify_share(
-        sig_share,
+        _borrow(sig_share),
         ctypes.c_uint8(participant_index),
-        participant_public_share,
-        commitments,
-        signer_indices,
+        _borrow(participant_public_share),
+        _borrow(commitments),
+        _borrow(signer_indices),
         ctypes.c_uint8(num_signers),
-        message,
+        _borrow(message),
         ctypes.c_size_t(len(message)),
-        group_public_key,
+        _borrow(group_public_key),
     )
     if rc == 0:
         return True
@@ -9830,14 +10364,14 @@ def frost_aggregate(
 
     rc = _native_lib.ama_frost_aggregate(
         sig_buf,
-        sig_shares,
-        commitments,
-        signer_public_shares,
-        signer_indices,
+        _borrow(sig_shares),
+        _borrow(commitments),
+        _borrow(signer_public_shares),
+        _borrow(signer_indices),
         ctypes.c_uint8(num_signers),
-        message,
+        _borrow(message),
         ctypes.c_size_t(len(message)),
-        group_public_key,
+        _borrow(group_public_key),
         ctypes.byref(bad_index),
     )
     if rc == _AMA_ERROR_VERIFY_FAILED:

@@ -166,7 +166,7 @@ hd   = HDKeyDerivation(seed=seed)
 
 # Structured BIP-44-style derivation: always produces a FULLY hardened
 # path m/{purpose}'/{account}'/{change}'/{index}'
-key_material: bytes = hd.derive_key(purpose=44, account=0, change=0, index=0)
+key_material: bytearray = hd.derive_key(purpose=44, account=0, change=0, index=0)
 
 # Explicit-path derivation: returns (derived_key, chain_code).
 # Accepts both hardened (with trailing ') and non-hardened components.
@@ -278,7 +278,8 @@ from ama_cryptography.key_management import (
 # existing keystores remain decryptable across parameter changes.
 #
 # If `master_password` is None or empty, a *random in-memory* 32-byte
-# encryption key is generated via `secrets.token_bytes(32)` — there is
+# encryption key is drawn from the native CSPRNG into a wipeable buffer
+# (`secure_token_bytearray(32)`) — there is
 # no stable KDF derivation in that mode, so keys stored under a
 # process's random in-memory key **cannot be decrypted after process
 # restart**. Use a stable master_password whenever the store must
@@ -298,7 +299,7 @@ meta     = mgr.register_key("my-key-id", purpose="doc-signing")
 # returned by register_key lives in the rotation manager, not the store.
 storage.store_key("my-key-id", key_data, metadata={"purpose": "doc-signing"})
 
-retrieved: bytes | None = storage.retrieve_key("my-key-id")
+retrieved: bytearray | None = storage.retrieve_key("my-key-id")
 assert retrieved == key_data
 
 # Metadata for active/deprecated/revoked status is maintained by the

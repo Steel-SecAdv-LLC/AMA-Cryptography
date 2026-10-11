@@ -65,6 +65,78 @@ extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
 extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
 extern ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len);
 extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_rng_repeat_randombytes_hook)(uint8_t *buf, size_t len);
+
+/* --- src/c/ama_rng_repeat.c --------------------------------------------- */
+
+/**
+ * Seams of the repeated-output check, defined under AMA_TESTING_MODE only and
+ * absent from the shipped object.  The OS draw is the hook declared above.  A
+ * seam may refuse, observe or forward; none supplies the arguments of a
+ * production call.
+ *
+ * Lock hook: a nonzero return makes the next acquisition of the baseline lock
+ * report failure without taking it (reaches the fail-closed arm).
+ */
+extern int (*ama_rng_repeat_lock_hook)(void);
+
+/**
+ * Compare hook: REPLACES the constant-time compare of two 32-byte digests and
+ * returns what it returns (0 for equal).
+ */
+typedef int (*ama_rng_repeat_compare_fn)(const void *a, const void *b, size_t len);
+extern ama_rng_repeat_compare_fn ama_rng_repeat_compare_hook;
+
+/** The compare the selector resolves to now: the hook, or ama_consttime_memcmp. */
+ama_rng_repeat_compare_fn ama_rng_repeat_compare_for_test(void);
+
+/**
+ * Critical-section hook: runs INSIDE the baseline lock, after the baseline was
+ * read and before it is written, with the verdict, the window's digest, the
+ * stored baseline and whether one exists.  Must not call back into the check.
+ */
+extern void (*ama_rng_repeat_critical_hook)(ama_error_t verdict, const uint8_t *digest,
+                                            const uint8_t *baseline, int have);
+
+/**
+ * Gate in front of the POSIX fork-handler registration, called with no
+ * arguments just before it.  A nonzero return is the registration's failure
+ * and no registration is made; zero lets the unit's one registration call run.
+ * Consulted once per process (AMA_CALL_ONCE): install it before the first check.
+ */
+extern int (*ama_rng_repeat_atfork_gate)(void);
+
+/**
+ * Lock traffic: acquisitions and releases of the baseline lock, bumped while it
+ * is held (read them between calls or after the threads are joined).  One check
+ * is one of each.  ama_rng_repeat_lock_violations counts accesses that must hold
+ * the lock but found it free, and releases that found a baseline other than the
+ * releasing check's own digest; zero in a correct unit.
+ */
+extern unsigned long ama_rng_repeat_lock_acquisitions;
+extern unsigned long ama_rng_repeat_lock_releases;
+extern unsigned long ama_rng_repeat_lock_violations;
+
+/**
+ * Copy the stored digest to @p out; 1 if a baseline exists, 0 if not, -1 if
+ * the lock could not be taken.  Takes the lock: not from the critical-section
+ * hook.
+ */
+int ama_rng_repeat_baseline_for_test(uint8_t out[32]);
+
+/**
+ * Commit one fault of the held-lock instrument so a test can show the
+ * violation counter moves by exactly one: 0 reads the baseline lock-free; 1
+ * writes it lock-free; 2 bumps a counter lock-free; 3 releases through the
+ * commit check with a digest the baseline does not hold.  Single caller only.
+ */
+void ama_rng_repeat_instrument_probe_for_test(int which);
+
+/** Forget the baseline: the next check runs as the first call of a process. */
+void ama_rng_repeat_reset_for_test(void);
+
+/** 1 if the baseline lock is held, 0 if free, -1 if the probe failed (try-lock). */
+int ama_rng_repeat_lock_busy_for_test(void);
 
 /* --- src/c/ama_slhdsa.c ------------------------------------------------- */
 

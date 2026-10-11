@@ -42,7 +42,18 @@ import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -53,8 +64,14 @@ if TYPE_CHECKING:
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
 # in *this* module's namespace.
 # ---------------------------------------------------------------------------
-from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
 from ama_cryptography._package_transcript import transcript as _transcript
+from ama_cryptography._secret_material import (
+    ScrubOnRaise,
+    SecretBytes,
+    SecretMaterial,
+    constant_time_equality,
+)
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -367,7 +384,7 @@ def canonical_hash_code(
 # ============================================================================
 
 
-def hmac_authenticate(message: bytes, key: bytes) -> bytes:
+def hmac_authenticate(message: bytes, key: SecretBytes) -> bytes:
     """Generate HMAC-SHA3-256 authentication tag (RFC 2104)."""
     _enforce_invariant7_lc()
     if len(key) < 32:
@@ -376,7 +393,7 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     return hmac_sha3_256(key, message)
 
 
-def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
+def hmac_verify(message: bytes, tag: bytes, key: SecretBytes) -> bool:
     """Verify HMAC-SHA3-256 authentication tag (constant-time).
 
     ``tag`` is caller-supplied and therefore untrusted.  Its length is public —
@@ -395,8 +412,9 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
-class Ed25519KeyPair:
+class Ed25519KeyPair(SecretMaterial):
     """Ed25519 elliptic curve key pair (RFC 8032).
 
     Key Sizes:
@@ -405,13 +423,18 @@ class Ed25519KeyPair:
         - Signature: 64 bytes (R || s format)
     """
 
-    private_key: bytes = field(
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("private_key",)
+
+    private_key: Union[bytes, bytearray] = field(
         repr=False
     )  # 64 bytes (seed||pk) — excluded from repr to prevent exposure
     public_key: bytes  # 32 bytes
 
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
-def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
+
+def generate_ed25519_keypair(seed: Optional[SecretBytes] = None) -> Ed25519KeyPair:
     """Generate Ed25519 key pair using native C backend (RFC 8032, Section 5.1.5)."""
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
@@ -423,13 +446,19 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
         public_bytes, sk_bytes = native_ed25519_keypair_from_seed(seed)
-        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
+        # Held until the container adopts it, as the unseeded branch below
+        # does: a refused construction must not drop the expansion populated.
+        with ScrubOnRaise() as held:
+            held(sk_bytes)
+            return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
     else:
         public_bytes, sk_bytes = native_ed25519_keypair()
-        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
+        with ScrubOnRaise() as held:
+            held(sk_bytes)
+            return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
 
 
-def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
+def ed25519_sign(message: bytes, private_key: SecretBytes) -> bytes:
     """Sign message with Ed25519 (deterministic) using native C backend."""
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
@@ -441,8 +470,13 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
     if len(private_key) == 64:
         return native_ed25519_sign(message, private_key)
     elif len(private_key) == 32:
+        # The 64-byte expansion of the seed is minted here, so this call owns
+        # it and zeroes it on success and on a failing sign (INVARIANT-6).
         _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
-        return native_ed25519_sign(message, sk_bytes)
+        try:
+            return native_ed25519_sign(message, sk_bytes)
+        finally:
+            secure_memzero(sk_bytes)
     else:
         raise ValueError("Ed25519 private key must be 32 bytes (seed) or 64 bytes (expanded)")
 
@@ -687,13 +721,16 @@ def create_ethical_hkdf_context(
 
 
 def derive_keys(
-    master_secret: bytes,
+    master_secret: SecretBytes,
     info: str,
     num_keys: int = 3,
     ethical_vector: Optional[Dict[str, float]] = None,
     salt: Optional[bytes] = None,
-) -> Tuple[List[bytes], bytes]:
-    """Derive multiple independent keys from master secret using HKDF (RFC 5869)."""
+) -> Tuple[List[bytearray], bytes]:
+    """Derive multiple independent keys from master secret using HKDF (RFC 5869).
+
+    Each derived key is a wipeable ``bytearray`` (INVARIANT-6).
+    """
     _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
@@ -712,18 +749,24 @@ def derive_keys(
     else:
         hkdf_salt = secure_token_bytes(32)  # INVARIANT-41 health-tested draw
 
-    derived_keys = []
-    for i in range(num_keys):
-        base_context = f"{info}:{i}".encode("utf-8")
-        enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
+    derived_keys: List[bytearray] = []
+    # A later derivation that raises leaves the keys already derived with no
+    # owner and no later point at which to zero them; each is registered the
+    # moment it exists (INVARIANT-6, every exit path).
+    with ScrubOnRaise() as held:
+        for i in range(num_keys):
+            base_context = f"{info}:{i}".encode("utf-8")
+            enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
 
-        derived_key = native_hkdf(
-            ikm=master_secret,
-            length=32,
-            salt=hkdf_salt,
-            info=enhanced_context,
-        )
-        derived_keys.append(derived_key)
+            derived_key = held(
+                native_hkdf(
+                    ikm=master_secret,
+                    length=32,
+                    salt=hkdf_salt,
+                    info=enhanced_context,
+                )
+            )
+            derived_keys.append(derived_key)
 
     return derived_keys, hkdf_salt
 
@@ -733,12 +776,17 @@ def derive_keys(
 # ============================================================================
 
 
+@constant_time_equality()
 @dataclass
-class KeyManagementSystem:
+class KeyManagementSystem(SecretMaterial):
     """Secure key storage and management system."""
 
-    master_secret: bytes = field(repr=False)
-    hmac_key: bytes = field(repr=False)
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("master_secret", "hmac_key")
+    # wipe() cascades to both signing keypairs.
+    _SECRET_CHILDREN: ClassVar[Tuple[str, ...]] = ("ed25519_keypair", "dilithium_keypair")
+
+    master_secret: Union[bytes, bytearray] = field(repr=False)
+    hmac_key: Union[bytes, bytearray] = field(repr=False)
     hkdf_salt: bytes = field(repr=False)
     ed25519_keypair: Ed25519KeyPair
     dilithium_keypair: Optional[DilithiumKeyPair]
@@ -747,6 +795,9 @@ class KeyManagementSystem:
     version: str
     ethical_vector: Dict[str, float]
     quantum_signatures_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 def generate_key_management_system(
@@ -757,49 +808,60 @@ def generate_key_management_system(
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
-    # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
-    master_secret = secure_token_bytes(32)
+    # Every secret minted below is zeroed if a later step raises; on success
+    # the returned system owns them (PR #415 review).
+    with ScrubOnRaise() as held:
+        # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
+        master_secret = held(secure_token_bytearray(32))
 
-    derived_keys, hkdf_salt = derive_keys(
-        master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
-    )
-    hmac_key = derived_keys[0]
-    ed25519_seed = derived_keys[1]
+        derived_keys, hkdf_salt = derive_keys(
+            master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
+        )
+        held(derived_keys)
+        hmac_key = derived_keys[0]
+        ed25519_seed = derived_keys[1]
 
-    ed25519_keypair = generate_ed25519_keypair(ed25519_seed)
+        ed25519_keypair = held(generate_ed25519_keypair(ed25519_seed))
 
-    dilithium_keypair = None
-    quantum_signatures_enabled = False
-    if DILITHIUM_AVAILABLE:
-        try:
-            dilithium_keypair = generate_dilithium_keypair()
-            quantum_signatures_enabled = True
-        except QuantumSignatureUnavailableError:
+        dilithium_keypair = None
+        quantum_signatures_enabled = False
+        if DILITHIUM_AVAILABLE:
+            try:
+                dilithium_keypair = held(generate_dilithium_keypair())
+                quantum_signatures_enabled = True
+            except QuantumSignatureUnavailableError:
+                _logger.warning(
+                    "Quantum-resistant signatures disabled. "
+                    "System will use Ed25519 classical signatures only. "
+                    "To enable quantum resistance, build native C library."
+                )
+        else:
             _logger.warning(
                 "Quantum-resistant signatures disabled. "
                 "System will use Ed25519 classical signatures only. "
-                "To enable quantum resistance, build native C library."
+                "To enable quantum resistance, build native C library: "
+                "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
-    else:
-        _logger.warning(
-            "Quantum-resistant signatures disabled. "
-            "System will use Ed25519 classical signatures only. "
-            "To enable quantum resistance, build native C library: "
-            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-        )
 
-    return KeyManagementSystem(
-        master_secret=master_secret,
-        hmac_key=hmac_key,
-        hkdf_salt=hkdf_salt,
-        ed25519_keypair=ed25519_keypair,
-        dilithium_keypair=dilithium_keypair,
-        creation_date=datetime.now(timezone.utc).isoformat(),
-        rotation_schedule="quarterly",
-        version="2.1",
-        ethical_vector=ethical_vector,
-        quantum_signatures_enabled=quantum_signatures_enabled,
-    )
+        kms = KeyManagementSystem(
+            master_secret=master_secret,
+            hmac_key=hmac_key,
+            hkdf_salt=hkdf_salt,
+            ed25519_keypair=ed25519_keypair,
+            dilithium_keypair=dilithium_keypair,
+            creation_date=datetime.now(timezone.utc).isoformat(),
+            rotation_schedule="quarterly",
+            version="2.1",
+            ethical_vector=ethical_vector,
+            quantum_signatures_enabled=quantum_signatures_enabled,
+        )
+    # The system adopts derived key 0 as its HMAC key.  Key 1 was the Ed25519
+    # seed, which the keypair copied; key 2 is derived and never used.  Both
+    # were dropped intact on every successful call (found by the PR #415
+    # review sweep); nothing else holds them, so they are zeroed here.
+    for unused in derived_keys[1:]:
+        secure_memzero(unused)
+    return kms
 
 
 def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
@@ -1410,7 +1472,7 @@ def verify_crypto_package(
     codes: str,
     helix_params: List[Tuple[float, float]],
     package: CryptoPackage,
-    hmac_key: bytes,
+    hmac_key: SecretBytes,
     monitor: Optional[AmaCryptographyMonitor] = None,
     require_quantum_signatures: Optional[bool] = None,
 ) -> Dict[str, Optional[bool]]:

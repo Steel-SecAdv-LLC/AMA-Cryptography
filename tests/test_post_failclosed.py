@@ -41,7 +41,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import os
-import secrets
 import shutil
 import subprocess
 import sys
@@ -1106,7 +1105,7 @@ class TestKeyFormatsInhibitsSecretExport:
             # private-key PEM header, so the repository secret-scanner does not
             # flag a marker that guards no actual key.
             pem = priv.to_pem()
-            assert pem.startswith("-----BEGIN") and "PRIVATE KEY" in pem
+            assert pem.startswith(b"-----BEGIN") and b"PRIVATE KEY" in pem
 
             st._set_error("simulated POST failure")
             leaked = []
@@ -1885,18 +1884,14 @@ class TestContinuousRNGTest:
             ms._MODULE_STATE = "OPERATIONAL"
             ms._ERROR_REASON = None
 
-            # Force the "stuck DRBG" condition: every draw returns the same
-            # buffer.  Patched through monkeypatch's dotted-target form so it is
-            # undone automatically — assigning to ``ms.secrets.token_bytes``
-            # directly would mutate the shared stdlib module for every other
-            # test in the session, including any running concurrently.
-            def _stuck_token_bytes(n: int) -> bytes:
-                return stuck[:n] if n <= 32 else stuck * (n // 32 + 1)
+            # Force the "stuck DRBG" condition: every draw fills the same
+            # bytes.  Substituted at the entropy seam every draw resolves its
+            # source through, via monkeypatch so it is undone automatically.
+            def _stuck_fill(view: Any) -> None:
+                out = memoryview(view).cast("B")
+                out[:] = (stuck * (out.nbytes // 32 + 1))[: out.nbytes]
 
-            monkeypatch.setattr(
-                "ama_cryptography._module_state.secrets.token_bytes",
-                _stuck_token_bytes,
-            )
+            monkeypatch.setattr(ms, "_entropy_fill", _stuck_fill)
 
             refusals: list[BaseException] = []
             successes: list[bytes] = []
@@ -1951,7 +1946,7 @@ class TestContinuousRNGTest:
             ), f"expected the other seven draws to be refused, got {len(refusals)}"
             assert ms.module_status() == "ERROR"
         finally:
-            # token_bytes and the _rng_state BINDING are restored by
+            # The entropy source and the _rng_state BINDING are restored by
             # monkeypatch's teardown; the value inside the original dict is
             # this test's to put back, and only through the object captured
             # before the patch.
@@ -2035,7 +2030,11 @@ class TestContinuousRNGTest:
         from ama_cryptography import _self_test as st
 
         samples = iter([b"\x11" * 32, b"\x22" * 32])
-        monkeypatch.setattr(secrets, "token_bytes", lambda n: next(samples)[:n])
+
+        def _scripted_fill(view: Any) -> None:
+            memoryview(view).cast("B")[:] = next(samples)
+
+        monkeypatch.setattr(ms, "_entropy_fill", _scripted_fill)
         saved_previous = ms._rng_state["previous"]
         saved_results = list(st._SELF_TEST_RESULTS)
         try:

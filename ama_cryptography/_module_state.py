@@ -37,11 +37,11 @@ from the state the guards enforce and turn a test into a no-op — so the stale
 spelling fails loudly (``AttributeError``) instead of passing silently.
 """
 
+import ctypes
 import logging
-import secrets
 import sys
 import threading
-from typing import Any, Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Callable, Dict, Optional, Protocol, Tuple, Union, cast, runtime_checkable
 
 from ama_cryptography.exceptions import CryptoModuleError, NativeBackendUnavailableError
 
@@ -374,92 +374,197 @@ def register_health_digest(digest: Callable[[bytes], bytes]) -> None:
     _health_digest = digest
 
 
-def secure_token_bytes(n: int = 32) -> bytes:
+#: The native CSPRNG fill, injected by ``pqc_backends`` at its import time for
+#: the same reason as the health digest above: this module is the leaf
+#: ``pqc_backends`` imports, so it cannot import back.  It writes into the
+#: buffer it is given and nowhere else.
+_entropy_fill: Optional[Callable[[Any], None]] = None
+
+
+def register_entropy_source(fill: Callable[[Any], None]) -> None:
+    """Install the native CSPRNG fill every draw goes through.
+
+    Called once by ``ama_cryptography.pqc_backends`` at its own import time
+    with ``_native_random_fill``.  Idempotent and last-write-wins.
     """
-    Wrapper around secrets.token_bytes with continuous RNG health test.
+    global _entropy_fill
+    _entropy_fill = fill
 
-    Draws a single buffer of max(n, 32) bytes, uses the first 32 bytes for
-    the health comparison, and returns the first n bytes to the caller.
-    This avoids a second RNG call and ensures the health check covers
-    the same entropy that the caller receives.
 
-    Gated on :func:`check_crypto_permitted` rather than
-    :func:`check_operational`: the stricter form refuses while POST is running,
-    which would prevent the self-tests themselves from drawing entropy and left
-    this function unusable from exactly the paths that most need a
-    health-tested draw.
+def _resolve_native(
+    name: str, registered: Optional[Callable[..., Any]], role: str
+) -> Callable[..., Any]:
+    """The registered kernel, or the same one re-resolved through sys.modules.
+
+    Recovery, not a fallback to another vendor.  Injection alone made this
+    state unrecoverable: a kernel is registered once, while ``pqc_backends``
+    executes its module body, so anything that re-runs THIS module's body
+    while ``pqc_backends`` stays cached (importlib.reload, IPython autoreload,
+    a test popping the module, a second module identity on a vendored path)
+    left it None for good -- and ``reset_module()`` cannot repair that, its
+    POST re-import being a no-op against the cached module.  A ``sys.modules``
+    lookup heals it without an import statement, so no edge is added to the
+    import graph.
+
+    Absent both, refuse.  The stdlib alternatives are OpenSSL on a libcrypto
+    build (``hashlib``) or hand back immutable copies of key material
+    (``secrets``), and this path exists to avoid both (INVARIANT-1,
+    INVARIANT-6).  Deliberately NOT ``_set_error``: this module reserves the
+    error state for a test that ran and failed, and a missing kernel means the
+    continuous test never ran.  Latching a permanent, process-wide error for
+    an initialisation-ordering fault would inhibit even verify-only paths that
+    draw no randomness.
+    """
+    if registered is not None:
+        return registered
+    module = sys.modules.get("ama_cryptography.pqc_backends")
+    resolved = getattr(module, name, None) if module is not None else None
+    if resolved is None:
+        raise CryptoModuleError(
+            f"Continuous RNG test unavailable: no {role} is registered and "
+            f"ama_cryptography.pqc_backends.{name} could not be resolved. "
+            "No random bytes were issued."
+        )
+    return cast(Callable[..., Any], resolved)
+
+
+def entropy_source() -> Callable[[Any], None]:
+    """The native CSPRNG fill every draw goes through, POST's included.
+
+    One seam: ``secure_random_fill`` and the POST RNG stage both resolve the
+    source here, so the startup test examines exactly the source the library
+    draws from, and a test that substitutes a source substitutes it for both.
 
     Raises:
-        ValueError: if ``n`` is negative.  Without this, ``buf[:n]`` with a
-            negative ``n`` silently returns a truncated buffer (32 - \\|n\\|
-            bytes) instead of failing — and a caller that computed a length
-            wrong would get key material shorter than it asked for.
-        CryptoModuleError: if the module is in the FIPS error state, or the
-            continuous RNG health test fails.
+        CryptoModuleError: no source is registered or resolvable.
+    """
+    return _resolve_native("_native_random_fill", _entropy_fill, "entropy source")
+
+
+def _zero(view: memoryview) -> None:
+    view[:] = bytes(view.nbytes)
+
+
+def _scrub(*values: Any) -> None:
+    """Zero every ``bytearray`` given; anything else is immutable and skipped.
+
+    For the shared secrets a pairwise test computes only to compare them: the
+    test is their sole holder, so they are zeroed rather than freed intact.
+    """
+    for value in values:
+        if isinstance(value, bytearray):
+            _zero(memoryview(value))
+
+
+def secure_random_fill(buf: Union[bytearray, memoryview]) -> None:
+    """Fill ``buf`` in place with health-tested output from the native CSPRNG.
+
+    The one draw every secret in the library comes from.  The output is
+    written by the C side straight into ``buf`` -- no ``bytes`` copy of it is
+    ever made -- so a caller holding key material in a ``bytearray`` can wipe
+    every copy that exists (INVARIANT-6).  ``secrets.token_bytes`` cannot
+    offer that: its result is immutable.
+
+    The FIPS 140-3 §4.9.2 continuous health test runs over every draw, on a
+    32-byte window: the first 32 bytes of ``buf`` when it is at least that
+    long, otherwise a separate 32-byte draw from which ``buf`` is filled.  The
+    window is hashed in place by this module's own SHA-256 (never ``hashlib``,
+    which is OpenSSL on a libcrypto build -- INVARIANT-1), and only the digest
+    is retained, so module state never pins live key material.
+
+    Gated on :func:`check_crypto_permitted` rather than
+    :func:`check_operational` so POST itself can draw.
+
+    Any failure -- the source, the digest, the health test -- zeroes ``buf``
+    before the exception propagates, so a partial or rejected draw never
+    reaches the caller.
+
+    Raises:
+        TypeError: ``buf`` is read-only or not a flat run of bytes.
+        CryptoModuleError: the module is in the error state, the native
+            CSPRNG or digest kernel is unavailable, the operating system's
+            source failed, or the continuous health test failed.
+    """
+    view = memoryview(buf)
+    if view.readonly or not view.c_contiguous:
+        raise TypeError("secure_random_fill needs a writable, contiguous buffer")
+    view = view.cast("B")
+    n = view.nbytes
+    scratch: Optional[bytearray] = None
+    try:
+        # Inside the guard: an error-state refusal, a missing entropy source
+        # or a missing digest kernel would otherwise raise with the caller's
+        # buffer still holding whatever it held before (PR #415 review).
+        check_crypto_permitted()
+        fill = entropy_source()
+        digest_fn = _resolve_native("native_sha256", _health_digest, "health-digest kernel")
+        if n >= _RNG_HEALTH_SIZE:
+            # A bytearray goes to the source as itself, which borrows it
+            # without the cast view; ``view`` stays for the zeroing below.
+            whole = type(buf) is bytearray
+            fill(buf if whole else view)
+            window = buf if whole and n == _RNG_HEALTH_SIZE else view[:_RNG_HEALTH_SIZE]
+        else:
+            scratch = bytearray(_RNG_HEALTH_SIZE)
+            fill(scratch)
+            window = memoryview(scratch)
+        health_digest = digest_fn(window)
+        # Compare-and-store atomically: see the _rng_lock rationale above.
+        with _rng_lock:
+            # Constant-time: the digest is of the caller's secret draw
+            # (INVARIANT-12; PR #415 review).
+            previous = _rng_state["previous"]
+            if previous is not None and secrets_match(health_digest, previous):
+                _set_error("Continuous RNG test failed: consecutive identical outputs")
+                raise CryptoModuleError("Module in error state: Continuous RNG test failed")
+            _rng_state["previous"] = health_digest
+        if scratch is not None:
+            view[:] = memoryview(scratch)[:n]
+    except BaseException:
+        _zero(view)
+        raise
+    finally:
+        if scratch is not None:
+            _zero(memoryview(scratch))
+
+
+def secure_token_bytearray(n: int = 32) -> bytearray:
+    """``n`` health-tested random bytes in a fresh, wipeable ``bytearray``.
+
+    The form every secret draw uses: the caller owns the only copy and can
+    scrub it.  See :func:`secure_random_fill`.
+
+    Raises:
+        ValueError: ``n`` is negative.
+        CryptoModuleError: as :func:`secure_random_fill`.
     """
     if n < 0:
         raise ValueError("n must be non-negative")
-    check_crypto_permitted()
-    draw_size = max(n, _RNG_HEALTH_SIZE)
-    buf = secrets.token_bytes(draw_size)
-    # Compare a DIGEST of the sample rather than the sample itself.  The test
-    # needs only equality, and for the common n == 32 draw ``buf[:32]`` is the
-    # same object CPython hands back to the caller — so retaining it would pin
-    # live key material (an Ed25519 seed, say) in module state until the next
-    # draw, visible to a heap dump or the GC for that whole window.
-    # The digest is computed by this module's own SHA-256 kernel, injected by
-    # pqc_backends at its import time (see ``register_health_digest``).  It is
-    # never hashlib: those constructors are OpenSSL on a libcrypto build, and
-    # the health sample IS potential key material (INVARIANT-1).
-    #
-    # Ordering: `check_crypto_permitted()` above runs BEFORE the kernel is
-    # resolved, which is what keeps a non-POST thread calling in mid-POST from
-    # reaching this code at all.  An earlier revision of this comment also
-    # claimed "OPERATIONAL without the native backend cannot occur
-    # (INVARIANT-7 fails the import)"; that is false — the documented
-    # docs-build override in `_self_test._run_backend_stage` returns success
-    # with no native library, and in that state this function raises
-    # `NativeBackendUnavailableError` from the kernel itself.
-    digest_fn = _health_digest
-    if digest_fn is None:
-        # Recovery path, NOT a fallback to another vendor.  Injection alone
-        # made this state unrecoverable: `_health_digest` is set once while
-        # `pqc_backends` executes its module body, so anything that re-runs
-        # THIS module's body while `pqc_backends` stays cached in sys.modules
-        # (importlib.reload, IPython %autoreload, a test popping the module,
-        # a second module identity on a vendored path) left the kernel None
-        # forever — and `reset_module()` cannot repair it, because its POST
-        # re-import is a no-op against the cached module.  The previous
-        # function-local `from ... import native_sha256` re-resolved on every
-        # call and so healed itself; losing that was a regression.
-        #
-        # Resolving through sys.modules restores the self-healing without
-        # restoring the import cycle: this is a dict lookup, not an import
-        # statement, so it adds no edge to the import graph.
-        module = sys.modules.get("ama_cryptography.pqc_backends")
-        digest_fn = getattr(module, "native_sha256", None) if module is not None else None
-    if digest_fn is None:
-        # Genuinely unavailable.  Refuse — hashlib is not an option here, its
-        # constructors are OpenSSL on a libcrypto build and the health sample
-        # IS potential key material (INVARIANT-1).  Deliberately NOT
-        # `_set_error`: this file reserves the ERROR state for a test that RAN
-        # and FAILED, and a missing kernel means the continuous test never
-        # ran.  Latching a permanent, process-wide, unrecoverable error for an
-        # initialisation-ordering fault would inhibit even verify-only paths
-        # that draw no randomness.
-        raise CryptoModuleError(
-            "Continuous RNG test unavailable: no health-digest kernel is registered "
-            "and ama_cryptography.pqc_backends.native_sha256 could not be resolved. "
-            "No random bytes were issued."
-        )
-    health_digest = digest_fn(buf[:_RNG_HEALTH_SIZE])
-    # Compare-and-store atomically: see the _rng_lock rationale above.
-    with _rng_lock:
-        if _rng_state["previous"] is not None and health_digest == _rng_state["previous"]:
-            _set_error("Continuous RNG test failed: consecutive identical outputs")
-            raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-        _rng_state["previous"] = health_digest
-    return buf[:n]
+    out = bytearray(n)
+    secure_random_fill(out)
+    return out
+
+
+def secure_token_bytes(n: int = 32) -> bytes:
+    """``n`` health-tested random bytes as ``bytes``, for non-secret uses.
+
+    Nonces, salts and identifiers are public, and an immutable result is what
+    their callers want.  A SECRET drawn here would leave an unwipeable copy:
+    draw secrets with :func:`secure_token_bytearray` or
+    :func:`secure_random_fill`.  The draw itself goes through the same native
+    source and health test, and the working buffer is zeroed after the copy.
+
+    Raises:
+        ValueError: if ``n`` is negative.  ``buf[:n]`` with a negative ``n``
+            would otherwise return a truncated buffer, and a caller that
+            computed a length wrong would get fewer bytes than it asked for.
+        CryptoModuleError: as :func:`secure_random_fill`.
+    """
+    work = secure_token_bytearray(n)
+    try:
+        return bytes(work)
+    finally:
+        _zero(memoryview(work))
 
 
 # ============================================================================
@@ -493,6 +598,87 @@ def secure_token_bytes(n: int = 32) -> bytes:
 # running and failing, and enters ERROR.
 
 
+#: The native constant-time comparison (``secure_memory.constant_time_compare``),
+#: injected by the package ``__init__`` before POST, for the reason the entropy
+#: source is: ``secure_memory`` imports this module, so importing it back --
+#: even inside a function -- is an import cycle (CodeQL py/cyclic-import on
+#: PR #415).  ``_secret_material`` compares through it too, for the same reason.
+_secret_comparator: Optional[Callable[[Any, Any], bool]] = None
+
+
+def register_secret_comparator(compare: Callable[[Any, Any], bool]) -> None:
+    """Install the constant-time comparison every secret equality uses.
+
+    Called once by the package ``__init__``, before POST, with
+    ``secure_memory.constant_time_compare``.  Idempotent and last-write-wins.
+    """
+    global _secret_comparator
+    _secret_comparator = compare
+
+
+def secrets_match(a: Any, b: Any) -> bool:
+    """Constant-time equality of two secret byte strings (INVARIANT-12).
+
+    The registered comparison, or, if this module's body was re-run after it
+    was registered (see :func:`_resolve_native`), the same one found through
+    ``sys.modules`` -- a lookup, not an import.  Absent both it
+    raises :class:`NativeBackendUnavailableError`, a could-not-run: nothing
+    was compared, and no ``==`` stands in for it.
+    """
+    compare = _secret_comparator
+    if compare is None:
+        module = sys.modules.get("ama_cryptography.secure_memory")
+        compare = getattr(module, "constant_time_compare", None) if module is not None else None
+    if compare is None:
+        raise NativeBackendUnavailableError(
+            "No constant-time comparison is registered: "
+            "ama_cryptography.secure_memory has not been imported.  Nothing was compared."
+        )
+    return bool(compare(a, b))
+
+
+class _KeyReleasedOnlyIfConsistent:
+    """Zero a freshly minted secret key when its pairwise test does not pass.
+
+    Every keygen hands its new key to one of the helpers below before
+    returning it.  If the test raises -- it ran and failed, or it could not
+    run -- the keypair is not released, so nothing may go on holding the
+    secret half: it is zeroed in place before the exception propagates
+    (INVARIANT-6, every exit path; INVARIANT-41).  Until 2026-10-08 such a key
+    was dropped intact at all twenty call sites; this is the one place they
+    share.  A ``bytearray``, a writable ``memoryview`` or a ctypes buffer is
+    zeroed, and so is each one in a list or tuple; ``bytes`` cannot be, and
+    is left to its holder.
+    """
+
+    __slots__ = ("_key",)
+
+    def __init__(self, key: Any) -> None:
+        self._key = key
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc_type is None:
+            return
+        _zero_released_key(self._key)
+
+
+def _zero_released_key(key: Any) -> None:
+    """Zero ``key`` in place, or each element of a list or tuple of them (a
+    FROST dealer's shares are a list: PR #415 review)."""
+    if isinstance(key, bytearray):
+        _zero(memoryview(key))
+    elif isinstance(key, memoryview) and not key.readonly:
+        _zero(key.cast("B"))
+    elif isinstance(key, ctypes.Array):
+        ctypes.memset(key, 0, ctypes.sizeof(key))
+    elif isinstance(key, (list, tuple)):
+        for item in key:
+            _zero_released_key(item)
+
+
 def pairwise_test_signature(
     sign_fn: Callable[..., Any],
     verify_fn: Callable[..., Any],
@@ -514,24 +700,25 @@ def pairwise_test_signature(
     ``verify_fn(message, signature, public_key)`` must return truthy for a
     valid signature.
     """
-    test_msg = b"FIPS 140-3 pairwise consistency test"
-    try:
-        sig = sign_fn(test_msg, secret_key)
-        if isinstance(sig, bytes):
-            valid = verify_fn(test_msg, sig, public_key)
-        else:
-            # Signature object with .signature attribute
-            valid = verify_fn(test_msg, sig.signature, public_key)
-        if not valid:
-            raise ValueError("Verification returned False")
-    except (CryptoModuleError, NativeBackendUnavailableError):
-        # Could-not-run, not ran-and-failed — see the discipline note above.
-        raise
-    except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
-        raise CryptoModuleError(
-            f"Module in error state: Pairwise test failed for {algo_name}"
-        ) from exc
+    with _KeyReleasedOnlyIfConsistent(secret_key):
+        test_msg = b"FIPS 140-3 pairwise consistency test"
+        try:
+            sig = sign_fn(test_msg, secret_key)
+            if isinstance(sig, (bytes, bytearray)):
+                valid = verify_fn(test_msg, sig, public_key)
+            else:
+                # Signature object with .signature attribute
+                valid = verify_fn(test_msg, sig.signature, public_key)
+            if not valid:
+                raise ValueError("Verification returned False")
+        except (CryptoModuleError, NativeBackendUnavailableError):
+            # Could-not-run, not ran-and-failed — see the discipline note above.
+            raise
+        except Exception as exc:
+            _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
+            raise CryptoModuleError(
+                f"Module in error state: Pairwise test failed for {algo_name}"
+            ) from exc
 
 
 def pairwise_test_kem(
@@ -550,33 +737,42 @@ def pairwise_test_kem(
     ``.ciphertext`` / ``.shared_secret`` (the high-level ``kyber_encapsulate``
     shape) or a plain ``(ciphertext, shared_secret)`` tuple (the
     ``native_ml_kem_encapsulate`` shape); ``decaps_fn(ciphertext,
-    secret_key)`` must return the shared secret.  The equality check is an
-    ordinary comparison: both values are secrets this process derived
-    milliseconds ago from its own keypair, so there is no attacker-supplied
-    operand for a timing difference to leak anything about.
+    secret_key)`` must return the shared secret.  The two are compared in
+    constant time (INVARIANT-12): both are secrets, and no exemption exists
+    for a comparison whose operands this process derived itself.
     """
-    try:
-        encap = encaps_fn(public_key)
-        # Dispatch on the named attributes FIRST: a result class converted to
-        # a NamedTuple would satisfy isinstance(…, tuple) and silently switch
-        # to positional unpacking, which breaks the moment its field order
-        # changes.  The names are the contract; the bare tuple is the
-        # fallback for the native functions that return one.
-        if hasattr(encap, "ciphertext"):
-            ciphertext, shared_secret = encap.ciphertext, encap.shared_secret
-        else:
-            ciphertext, shared_secret = encap
-        ss = decaps_fn(ciphertext, secret_key)
-        if ss != shared_secret:
-            raise ValueError("Shared secrets do not match")
-    except (CryptoModuleError, NativeBackendUnavailableError):
-        # Could-not-run, not ran-and-failed — see the discipline note above.
-        raise
-    except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
-        raise CryptoModuleError(
-            f"Module in error state: Pairwise test failed for {algo_name}"
-        ) from exc
+    with _KeyReleasedOnlyIfConsistent(secret_key):
+        shared_secret: Any = None
+        ss: Any = None
+        try:
+            encap = encaps_fn(public_key)
+            # Dispatch on the named attributes FIRST: a result class converted to
+            # a NamedTuple would satisfy isinstance(…, tuple) and silently switch
+            # to positional unpacking, which breaks the moment its field order
+            # changes.  The names are the contract; the bare tuple is the
+            # fallback for the native functions that return one.
+            if hasattr(encap, "ciphertext"):
+                ciphertext, shared_secret = encap.ciphertext, encap.shared_secret
+            else:
+                ciphertext, shared_secret = encap
+            ss = decaps_fn(ciphertext, secret_key)
+            # Constant-time: both are secrets, and INVARIANT-12 covers every
+            # secret-dependent comparison (``!=`` exits at the first
+            # differing byte; PR #415 review).
+            if not secrets_match(ss, shared_secret):
+                raise ValueError("Shared secrets do not match")
+        except (CryptoModuleError, NativeBackendUnavailableError):
+            # Could-not-run, not ran-and-failed — see the discipline note above.
+            raise
+        except Exception as exc:
+            _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
+            raise CryptoModuleError(
+                f"Module in error state: Pairwise test failed for {algo_name}"
+            ) from exc
+        finally:
+            # Both shared secrets exist only to be compared (the container's, in
+            # the object form, dies with ``encap`` when this returns).
+            _scrub(ss, shared_secret)
 
 
 def pairwise_test_agreement(
@@ -605,22 +801,25 @@ def pairwise_test_agreement(
     ``ephemeral_keypair`` is ``(eph_public, eph_secret)``, generated by the
     CALLER without re-entering its own keygen path (which would recurse into
     this test): draw a scalar from ``secure_token_bytes`` and derive its
-    public half directly.  The equality check is an ordinary comparison —
-    both values are secrets this process derived from its own fresh keys, so
-    there is no attacker-supplied operand for a timing difference to leak
-    anything about.
+    public half directly.  The two shared secrets are compared in constant
+    time, as in :func:`pairwise_test_kem`.
     """
-    try:
-        eph_public, eph_secret = ephemeral_keypair
-        ours = agree_fn(secret_key, eph_public)
-        theirs = agree_fn(eph_secret, public_key)
-        if ours != theirs:
-            raise ValueError("DH roundtrip disagreed: the keypair halves do not correspond")
-    except (CryptoModuleError, NativeBackendUnavailableError):
-        # Could-not-run, not ran-and-failed — see the discipline note above.
-        raise
-    except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
-        raise CryptoModuleError(
-            f"Module in error state: Pairwise test failed for {algo_name}"
-        ) from exc
+    with _KeyReleasedOnlyIfConsistent(secret_key):
+        ours: Any = None
+        theirs: Any = None
+        try:
+            eph_public, eph_secret = ephemeral_keypair
+            ours = agree_fn(secret_key, eph_public)
+            theirs = agree_fn(eph_secret, public_key)
+            if not secrets_match(ours, theirs):
+                raise ValueError("DH roundtrip disagreed: the keypair halves do not correspond")
+        except (CryptoModuleError, NativeBackendUnavailableError):
+            # Could-not-run, not ran-and-failed — see the discipline note above.
+            raise
+        except Exception as exc:
+            _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
+            raise CryptoModuleError(
+                f"Module in error state: Pairwise test failed for {algo_name}"
+            ) from exc
+        finally:
+            _scrub(ours, theirs)

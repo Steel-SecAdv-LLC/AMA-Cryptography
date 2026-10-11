@@ -2,11 +2,12 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 """
-Canonical package-namespace entry point for the 3R Runtime Anomaly Monitor.
+Package-namespace alias for the 3R Runtime Anomaly Monitor.
 
-This module re-exports every public symbol from the historical top-level
-``ama_cryptography_monitor`` module so that new code can write the
-package-consistent import::
+The implementation lives in ``ama_cryptography.monitoring``.  Both this
+module and the historical top-level ``ama_cryptography_monitor`` module are
+aliases of it: this one re-exports its public symbols so new code can write
+the package-consistent import::
 
     from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
@@ -14,13 +15,11 @@ while existing code that still writes::
 
     from ama_cryptography_monitor import AmaCryptographyMonitor
 
-continues to work against the same module object.  See audit 2e
-(``INVARIANTS.md`` / the v2.1.5 scaffolding review) for the migration plan
-toward a single in-package source of truth.
-
-The top-level file remains the source of truth for now so that we do not
-break the declared ``py_modules=['ama_cryptography_monitor']`` packaging
-contract and the many tests that still import from the historical name.
+continues to work against the same module object (the top-level shim
+delegates here via ``sys.modules``, and this module registers the
+historical name below).  Both aliases are kept for the declared
+``py_modules=['ama_cryptography_monitor']`` packaging contract and the
+tests that still import from the historical name.
 """
 
 import sys

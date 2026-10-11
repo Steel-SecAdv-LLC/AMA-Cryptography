@@ -102,35 +102,20 @@ BARE_DRAW_CALLS = frozenset(
 #: anywhere else fails the sweep; a stale entry fails the count assertion at 0;
 #: a new draw added beside an exempt one now fails too, instead of being
 #: absorbed.  Bump the count here, with its own reason, only under review.
+#:
+#: The health-tested wrapper (``_module_state.secure_random_fill``) and POST's
+#: RNG stage held the two entries that granted three draws from
+#: ``secrets.token_bytes``.  Both now draw from the library's own native
+#: source, ``ama_random_bytes``, into caller-owned buffers, so the stdlib
+#: generator is reached from neither and both entries were removed when the
+#: count assertion read them at 0 (2026-10-08).
 ALLOWED_BARE_DRAWS: dict[tuple[str, str], tuple[int, str]] = {
-    ("_module_state.py", "secure_token_bytes"): (
-        1,
-        (
-            "the health-tested wrapper itself — this call IS the entropy source "
-            "the continuous check wraps"
-        ),
-    ),
     ("adaptive_posture.py", "CryptoPostureController.evaluate_and_respond"): (
         1,
         (
             "uuid4 names a PendingAction: an identifier that is logged in clear and "
             "only addresses the queued action through confirm_action(); it is not "
             "key material and nothing derives from it"
-        ),
-    ),
-    ("_self_test.py", "_run_rng_stage"): (
-        2,
-        (
-            "POST's RNG stage draws bare on purpose: it is the test that decides "
-            "whether the gated wrapper may be trusted at all"
-        ),
-    ),
-    ("_build_sign.py", "_generate_keypair_and_sign"): (
-        2,
-        (
-            "build-time ephemeral signer; runs while the package may be mid-"
-            "re-sign with POST structurally unavailable, and carries its own "
-            "two-draw stuck-entropy check at the call site"
         ),
     ),
     ("key_management.py", "SecureKeyStorage.delete_key"): (

@@ -570,9 +570,59 @@ class TestImportShadowingScan:
             pytest.skip(f"cannot create a directory symlink here: {exc}")
         faults = _scan(pkg)
         assert faults == [
-            "extra/__init__.py: symlinked package directory — the signed digest "
-            "does not walk directory symlinks"
+            "extra/: symlinked directory — neither the signed digest nor this "
+            "walk follows it, and its modules import"
         ]
+
+    def test_symlinked_namespace_directory_is_refused(self, tmp_path: Path) -> None:
+        """PIN.  No ``__init__``, so the former rule (symlinked *package*
+        directories only) passed it -- yet ``<pkg>.extra.mod`` imports, from a
+        directory neither the digest nor the walk enters (PR #415 review)."""
+        pkg = _shadow_tree(tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "mod.py").write_text("X = 3\n", encoding="utf-8")
+        try:
+            os.symlink(outside, pkg / "extra", target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"cannot create a directory symlink here: {exc}")
+        assert _scan(pkg) == [
+            "extra/: symlinked directory — neither the signed digest nor this "
+            "walk follows it, and its modules import"
+        ]
+
+    @pytest.mark.parametrize(
+        "planted",
+        ["evil.py", "evil.pyc", f"evil{importlib.machinery.EXTENSION_SUFFIXES[0]}", "sub/"],
+    )
+    def test_a_module_inside_pycache_is_refused(self, tmp_path: Path, planted: str) -> None:
+        """PIN.  ``__pycache__`` is a namespace portion: ``<pkg>.__pycache__.evil``
+        imports a ``.py``, a tagless ``.pyc`` or an extension there, and
+        every layer skips the directory (reproduced, PR #415 review).
+        Removing the ``_pycache_faults`` call fails this."""
+        pkg = _shadow_tree(tmp_path)
+        cache = pkg / "__pycache__"
+        cache.mkdir(exist_ok=True)
+        if planted.endswith("/"):
+            (cache / planted.rstrip("/")).mkdir()
+            expected = f"__pycache__/{planted}: directory inside __pycache__"
+        else:
+            (cache / planted).write_bytes(b"")
+            expected = f"__pycache__/{planted}: importable from __pycache__ as a module"
+        faults = _scan(pkg)
+        assert len(faults) == 1 and faults[0].startswith(expected), faults
+
+    def test_a_genuine_cache_in_pycache_is_not_refused(self, tmp_path: Path) -> None:
+        """RANGE.  PEP 3147 caches carry a dotted tag, which is not an
+        import name; an in-flight atomic write's temporary name has no
+        importable suffix."""
+        pkg = _shadow_tree(tmp_path)
+        cache = pkg / "__pycache__"
+        cache.mkdir(exist_ok=True)
+        tag = sys.implementation.cache_tag
+        for name in (f"crypto_api.{tag}.pyc", f"crypto_api.{tag}.opt-1.pyc", f"x.{tag}.pyc.1234"):
+            (cache / name).write_bytes(b"")
+        assert _scan(pkg) == []
 
 
 # ---------------------------------------------------------------------------

@@ -324,6 +324,8 @@ def demo_secure_storage() -> None:
     import secrets
     import tempfile
 
+    from ama_cryptography.secure_memory import constant_time_compare
+
     # Create temporary storage
     with tempfile.TemporaryDirectory() as tmpdir:
         # Generated, not literal.  A demo is copied, and a hardcoded master
@@ -354,7 +356,11 @@ def demo_secure_storage() -> None:
         all_match = True
         for key_id, original_key in keys_to_store.items():
             retrieved_key = storage.retrieve_key(key_id)
-            matches = retrieved_key == original_key
+            # Keys are compared in constant time; retrieve_key returns a
+            # wipeable bytearray, or None for an unknown id.
+            matches = retrieved_key is not None and constant_time_compare(
+                retrieved_key, original_key
+            )
             all_match = all_match and matches
             print(f"    {key_id}: {'✓ MATCH' if matches else '✗ MISMATCH'}")
 

@@ -698,6 +698,11 @@ class TestCalibration:
             "consttime-swap",
             "consttime-copy",
             "secure-memzero",
+            # The private-key PEM / JWK codec, and BIP32's private child step.
+            "base64",
+            "secp256k1-seckey",
+            # The repeated-output check on the OS CSPRNG: its input is secret.
+            "rng-repeat",
         }
     )
 
@@ -912,6 +917,11 @@ ENTRY_POINTS: dict[str, str] = {
     "consttime-swap": "ama_consttime_swap",
     "consttime-copy": "ama_consttime_copy",
     "secure-memzero": "ama_secure_memzero",
+    # Decode is the side that reads secret CHARACTERS; the driver round-trips.
+    "base64": "ama_base64_decode",
+    "secp256k1-seckey": "ama_secp256k1_seckey_tweak_add",
+    # The fused draw; the driver also drives the seam entry point beside it.
+    "rng-repeat": "ama_random_bytes_repeat_checked",
 }
 
 

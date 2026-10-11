@@ -48,11 +48,17 @@ import hashlib
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, ClassVar, List, Tuple, Union
+
+from ama_cryptography._module_state import check_crypto_permitted
 
 # FIPS 140-3 §4.9.2 output inhibition — combine()/encapsulate_hybrid()/
 # decapsulate_hybrid() derive shared secrets and must refuse in the error state.
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._secret_material import (
+    SecretMaterial,
+    constant_time_equality,
+    zeroize,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +72,27 @@ _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
 _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
 
 
+def _check_component_secret(label: str, ss: Any, type_refusal: str) -> None:
+    if not isinstance(ss, (bytes, bytearray)):
+        raise TypeError(f"{label} {type_refusal}")
+    if len(ss) == 0:
+        raise ValueError(f"{label} shared secret is empty")
+    if len(ss) > _MAX_SS_BYTES:
+        raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
+
+
+def _check_component_ciphertext(label: str, ct: Any) -> None:
+    if not isinstance(ct, bytes):
+        raise TypeError(f"{label} encapsulate must return (bytes, bytes or bytearray)")
+    if len(ct) == 0:
+        raise ValueError(f"{label} ciphertext is empty")
+    if len(ct) > _MAX_CT_BYTES:
+        raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
+
+
+@constant_time_equality()
 @dataclass
-class HybridEncapsulation:
+class HybridEncapsulation(SecretMaterial):
     """
     Result of a hybrid KEM encapsulation.
 
@@ -81,11 +106,20 @@ class HybridEncapsulation:
         pqc_shared_secret: Raw PQC shared secret (before combination)
     """
 
-    combined_secret: bytes
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = (
+        "combined_secret",
+        "classical_shared_secret",
+        "pqc_shared_secret",
+    )
+
+    combined_secret: Union[bytes, bytearray]
     classical_ciphertext: bytes
     pqc_ciphertext: bytes
-    classical_shared_secret: bytes
-    pqc_shared_secret: bytes
+    classical_shared_secret: Union[bytes, bytearray]
+    pqc_shared_secret: Union[bytes, bytearray]
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class HybridCombiner:
@@ -159,14 +193,14 @@ class HybridCombiner:
 
     def combine(
         self,
-        classical_ss: bytes,
-        pqc_ss: bytes,
+        classical_ss: Union[bytes, bytearray],
+        pqc_ss: Union[bytes, bytearray],
         classical_ct: bytes,
         pqc_ct: bytes,
         classical_pk: bytes = b"",
         pqc_pk: bytes = b"",
         output_len: int = 32,
-    ) -> bytes:
+    ) -> bytearray:
         """
         Combine two shared secrets via binding HKDF.
 
@@ -180,7 +214,8 @@ class HybridCombiner:
             output_len: Desired output length (default 32)
 
         Returns:
-            Combined shared secret of output_len bytes
+            Combined shared secret of output_len bytes, in a wipeable
+            ``bytearray`` (INVARIANT-6)
 
         The construction uses length-prefixed encoding to provide
         unambiguous domain separation and prevent component stripping::
@@ -225,7 +260,12 @@ class HybridCombiner:
             + struct.pack(">I", len(pqc_ct))
             + pqc_ct
         )
-        ikm = classical_ss + pqc_ss
+        # The IKM is both shared secrets.  Concatenating them minted an
+        # immutable bytes holding both that nothing could wipe; it is
+        # assembled in a bytearray instead and zeroed once HKDF has run.
+        ikm = bytearray(len(classical_ss) + len(pqc_ss))
+        ikm[: len(classical_ss)] = classical_ss
+        ikm[len(classical_ss) :] = pqc_ss
         # Component count (2) is bound to prevent downgrade to single-component
         info = (
             self.label
@@ -236,8 +276,11 @@ class HybridCombiner:
             + pqc_pk
         )
 
-        if self._has_native:
-            return self._hkdf_native(salt, ikm, info, output_len)
+        try:
+            if self._has_native:
+                return self._hkdf_native(salt, ikm, info, output_len)
+        finally:
+            memoryview(ikm)[:] = bytes(len(ikm))
         # INVARIANT-7: No cryptographic fallbacks, ever.
         # The Python HKDF is NOT constant-time and MUST NOT be used for
         # secret-dependent key combination.  The _hkdf_python static method
@@ -250,22 +293,37 @@ class HybridCombiner:
             "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
-    def _hkdf_native(self, salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
-        """HKDF via native C ama_hkdf (HMAC-SHA3-256)."""
+    def _hkdf_native(
+        self, salt: bytes, ikm: Union[bytes, bytearray], info: bytes, okm_len: int
+    ) -> bytearray:
+        """HKDF via native C ama_hkdf (HMAC-SHA3-256).
+
+        A ``bytearray`` IKM is lent to C in place, never copied.  The combined
+        secret is returned in a wipeable ``bytearray`` and the ctypes output
+        buffer is zeroed on every path.
+        """
         okm_buf = ctypes.create_string_buffer(okm_len)
-        rc = self._native_lib.ama_hkdf(
-            salt,
-            ctypes.c_size_t(len(salt)),
-            ikm,
-            ctypes.c_size_t(len(ikm)),
-            info,
-            ctypes.c_size_t(len(info)),
-            okm_buf,
-            ctypes.c_size_t(okm_len),
+        ikm_arg = (
+            (ctypes.c_char * len(ikm)).from_buffer(ikm)
+            if isinstance(ikm, bytearray) and ikm
+            else ikm
         )
-        if rc != 0:
-            raise RuntimeError(f"Native HKDF failed with error code {rc}")
-        return bytes(okm_buf)
+        try:
+            rc = self._native_lib.ama_hkdf(
+                salt,
+                ctypes.c_size_t(len(salt)),
+                ikm_arg,
+                ctypes.c_size_t(len(ikm)),
+                info,
+                ctypes.c_size_t(len(info)),
+                okm_buf,
+                ctypes.c_size_t(okm_len),
+            )
+            if rc != 0:
+                raise RuntimeError(f"Native HKDF failed with error code {rc}")
+            return bytearray(memoryview(okm_buf)[:okm_len])
+        finally:
+            ctypes.memset(okm_buf, 0, okm_len)
 
     @staticmethod
     def _hkdf_python(
@@ -367,45 +425,61 @@ class HybridCombiner:
 
         Returns:
             HybridEncapsulation with combined secret and component data
+
+        Ownership: the shared secrets the two callables return are this
+        method's.  If anything after them raises, each one that is a
+        ``bytearray`` is zeroed, as is the combined secret; on success the
+        returned container holds them.  A callable must therefore return a
+        fresh secret -- every KEM in this library does -- and not a buffer it
+        keeps using (INVARIANT-6).
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
-        classical_ct, classical_ss = classical_encapsulate(classical_pk)
-        pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
+        # Zeroed, not "released if unshared": PR #415 first decided ownership
+        # by reference count, which CPython 3.14 makes depend on where the
+        # count is read (it borrows some loads and not others), so inside this
+        # handler the count read high and nothing was zeroed.  Ownership is the
+        # contract stated above instead.
+        classical_ss: Any = None
+        pqc_ss: Any = None
+        combined: Any = None
+        try:
+            classical_ct, classical_ss = classical_encapsulate(classical_pk)
+            pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
 
-        # SECURITY FIX: Validate encapsulation outputs to prevent injection
-        # of zero-length secrets, oversized ciphertexts, or non-bytes types
-        # that could cause downstream key compromise or DoS (audit finding H4).
-        for label, ct, ss in [
-            ("Classical", classical_ct, classical_ss),
-            ("PQC", pqc_ct, pqc_ss),
-        ]:
-            if not isinstance(ct, bytes) or not isinstance(ss, bytes):
-                raise TypeError(f"{label} encapsulate must return (bytes, bytes)")
-            if len(ss) == 0:
-                raise ValueError(f"{label} shared secret is empty")
-            if len(ct) == 0:
-                raise ValueError(f"{label} ciphertext is empty")
-            if len(ct) > _MAX_CT_BYTES:
-                raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
-            if len(ss) > _MAX_SS_BYTES:
-                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
+            # SECURITY FIX: Validate encapsulation outputs to prevent injection
+            # of zero-length secrets, oversized ciphertexts, or non-bytes types
+            # that could cause downstream key compromise or DoS (audit finding
+            # H4).
+            _check_component_ciphertext("Classical", classical_ct)
+            _check_component_ciphertext("PQC", pqc_ct)
+            _check_component_secret(
+                "Classical", classical_ss, "encapsulate must return (bytes, bytes or bytearray)"
+            )
+            _check_component_secret(
+                "PQC", pqc_ss, "encapsulate must return (bytes, bytes or bytearray)"
+            )
 
-        combined = self.combine(
-            classical_ss=classical_ss,
-            pqc_ss=pqc_ss,
-            classical_ct=classical_ct,
-            pqc_ct=pqc_ct,
-            classical_pk=classical_pk,
-            pqc_pk=pqc_pk,
-        )
+            combined = self.combine(
+                classical_ss=classical_ss,
+                pqc_ss=pqc_ss,
+                classical_ct=classical_ct,
+                pqc_ct=pqc_ct,
+                classical_pk=classical_pk,
+                pqc_pk=pqc_pk,
+            )
 
-        return HybridEncapsulation(
-            combined_secret=combined,
-            classical_ciphertext=classical_ct,
-            pqc_ciphertext=pqc_ct,
-            classical_shared_secret=classical_ss,
-            pqc_shared_secret=pqc_ss,
-        )
+            return HybridEncapsulation(
+                combined_secret=combined,
+                classical_ciphertext=classical_ct,
+                pqc_ciphertext=pqc_ct,
+                classical_shared_secret=classical_ss,
+                pqc_shared_secret=pqc_ss,
+            )
+        except BaseException:
+            zeroize(classical_ss)
+            zeroize(pqc_ss)
+            zeroize(combined)
+            raise
 
     def decapsulate_hybrid(
         self,
@@ -413,11 +487,11 @@ class HybridCombiner:
         pqc_decapsulate: Any,
         classical_ct: bytes,
         pqc_ct: bytes,
-        classical_sk: bytes,
-        pqc_sk: bytes,
+        classical_sk: Union[bytes, bytearray],
+        pqc_sk: Union[bytes, bytearray],
         classical_pk: bytes = b"",
         pqc_pk: bytes = b"",
-    ) -> bytes:
+    ) -> bytearray:
         """
         Perform full hybrid decapsulation.
 
@@ -435,28 +509,40 @@ class HybridCombiner:
             pqc_pk: PQC public key (for info binding)
 
         Returns:
-            Combined shared secret (must match encapsulate output)
+            Combined shared secret (must match encapsulate output), in a
+            wipeable ``bytearray``.
+
+        Ownership: the shared secrets the two callables return are this
+        method's, consumed by the combination.  Each one that is a
+        ``bytearray`` is zeroed when this returns or raises, so a callable
+        must return a fresh secret -- every KEM in this library does -- and
+        not a buffer it keeps using (INVARIANT-6).
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
-        classical_ss = classical_decapsulate(classical_ct, classical_sk)
-        pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
+        # The guard starts before the first component exists: a raising second
+        # decapsulator dropped the first secret intact (PR #415 review).
+        classical_ss: Any = None
+        pqc_ss: Any = None
+        try:
+            classical_ss = classical_decapsulate(classical_ct, classical_sk)
+            pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
 
-        # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
-        # Same validation as encapsulate_hybrid — a buggy or attacker-controlled
-        # decapsulate callable could return empty, non-bytes, or oversized values.
-        for label, ss in [("Classical", classical_ss), ("PQC", pqc_ss)]:
-            if not isinstance(ss, bytes):
-                raise TypeError(f"{label} decapsulate must return bytes")
-            if len(ss) == 0:
-                raise ValueError(f"{label} shared secret is empty")
-            if len(ss) > _MAX_SS_BYTES:
-                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
-
-        return self.combine(
-            classical_ss=classical_ss,
-            pqc_ss=pqc_ss,
-            classical_ct=classical_ct,
-            pqc_ct=pqc_ct,
-            classical_pk=classical_pk,
-            pqc_pk=pqc_pk,
-        )
+            # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
+            # Same validation as encapsulate_hybrid — a buggy or
+            # attacker-controlled decapsulate callable could return empty,
+            # non-bytes, or oversized values.
+            _check_component_secret(
+                "Classical", classical_ss, "decapsulate must return bytes or bytearray"
+            )
+            _check_component_secret("PQC", pqc_ss, "decapsulate must return bytes or bytearray")
+            return self.combine(
+                classical_ss=classical_ss,
+                pqc_ss=pqc_ss,
+                classical_ct=classical_ct,
+                pqc_ct=pqc_ct,
+                classical_pk=classical_pk,
+                pqc_pk=pqc_pk,
+            )
+        finally:
+            zeroize(classical_ss)
+            zeroize(pqc_ss)

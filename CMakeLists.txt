@@ -809,6 +809,9 @@ endif()
 set(AMA_SOURCES
     src/c/ama_core.c
     src/c/ama_consttime.c
+    # Constant-time Base64 / Base64url (RFC 4648): the private-key PEM and JWK
+    # encodings.  Self-contained and table-free, so unconditional.
+    src/c/ama_base64.c
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
     # Agent-instance binding (INVARIANT-30): domain separation + fail-closed
@@ -877,6 +880,10 @@ set(AMA_SOURCES
 if(AMA_USE_NATIVE_PQC)
     list(APPEND AMA_SOURCES
         src/c/ama_platform_rand.c
+        # Repeated-output check fused with the draw.  Needs SHA-256, the
+        # constant-time compare and ama_platform_rand.c, so it joins it here
+        # and not in ama_platform_rand.c, which is also compiled standalone.
+        src/c/ama_rng_repeat.c
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_slhdsa.c
@@ -969,6 +976,16 @@ if(AMA_BUILD_SHARED)
         POSITION_INDEPENDENT_CODE ON
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
+
+    # The AArch64 shared link drops the C runtime startup objects
+    # (-nostartfiles, above) so the BTI/PAC property survives.  glibc's
+    # pthread_atfork() stub from libc_nonshared.a would clear that property and
+    # needs the `__dso_handle` crtbeginS.o defines, so in exactly this
+    # configuration src/c/ama_rng_repeat.c registers through libc.so's
+    # __register_atfork() and defines `__dso_handle` itself.
+    if(AMA_HAVE_BRANCH_PROTECTION AND AMA_HAVE_NOSTARTFILES)
+        target_compile_definitions(ama_cryptography_shared PRIVATE AMA_SHARED_NOSTARTFILES)
+    endif()
 
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_USE_NATIVE_PQC)
