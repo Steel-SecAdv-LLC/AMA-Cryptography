@@ -34,15 +34,13 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
+### Reverted: repeat-checked CSPRNG draw in C -- 2026-10-11
+
+`cbc2340d` added `ama_random_bytes_repeat_checked` / `ama_rng_repeat_check` with no caller: nothing in `ama_cryptography/` or the rest of `src/c` draws through them, so the check ran against no real draw. Wiring it is the only change that would make it live, and that moves live CSPRNG state into C and retires working FIPS 140-3 continuous-test PINs — a rank-1 change that needs its own mutation evidence, out of scope for closing out 5.0.0. Forward-reverted (no history rewrite): the ABI returns to its pre-`cbc2340d` surface with no `AMA_ERROR_RNG_REPEAT`, and the `rng-repeat` constant-time target and its C/Python suites are removed with it. `bad31e05`'s fixes to the private-key export/import and secret-writer tests are kept.
+
 ### CodeQL py/unused-import on the `secure_token_bytes` compatibility binding -- 2026-10-11
 
 `secure_memory` kept `secure_token_bytes` importable through the `import X as X` re-export form while deliberately leaving it out of `__all__` (it returns immutable `bytes`: for nonces, salts and identifiers, never secrets), and CodeQL's `py/unused-import` reads that combination as a dead import (code-scanning alert #762). The name is now bound by assignment from the already-imported `_module_state` module, which analyzers follow as a use; behaviour is unchanged. The binding's identity with `_module_state.secure_token_bytes` and its absence from `__all__` stay PIN by `tests/test_public_generator.py::test_secure_memory_still_binds_secure_token_bytes`, re-measured against this shape: removing the assignment fails it.
-
-### Repeat-checked CSPRNG draw in C -- 2026-10-10
-
-New `src/c/ama_rng_repeat.c` exports `ama_random_bytes_repeat_checked(buf, len)`, which draws like `ama_random_bytes` and refuses the draw (`AMA_ERROR_RNG_REPEAT = -10`, buffer zeroed) if a 32-byte window of it repeats the previous draw's, and `ama_rng_repeat_check(window)`, the comparison alone. Additive ABI (the code is appended after -9); the Python layer is not yet bound to either.
-It is a stuck-source check, not a FIPS 140-3 health test: one process-wide SHA-256 baseline, the first call unchecked, nothing latches, consecutive windows only. Compare and store are one critical section under a static lock, with `pthread_atfork` handlers so a forked child cannot inherit it held; a lock or registration failure refuses the draw.
-The AArch64 shared object registers through `__register_atfork` because glibc's `pthread_atfork` stub would strip its BTI/PAC property. The `rng-repeat` constant-time target is 0/0 in count and taint on gcc 13.3 and clang 18 (5,639,112 Ir per run, gcc 13.3.0 Release, x86-64 without SHA-NI); `tests/c/test_rng_repeat*.c` fail when any guard is removed.
 
 ### Signing path: no unwiped copies of the signing key or the derived keys -- 2026-10-10
 

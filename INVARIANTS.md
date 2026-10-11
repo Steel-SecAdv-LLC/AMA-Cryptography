@@ -3274,7 +3274,7 @@ rule does not touch, because the predicate is applied at
 ## INVARIANT-49 — A FROST Nonce Pair Is Single-Use and the Library Consumes It; Aggregation Verifies Every Share Before It Returns Success
 
 Two properties of the threshold-signing API, stated together because the
-2026-09 independent audit found both absent and because a coordinator that
+2026-09 audit found both absent and because a coordinator that
 can induce the first failure is exactly the party positioned to exploit the
 second.
 

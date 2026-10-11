@@ -67,9 +67,9 @@ The security analysis is self-assessed. The library has **not** been externally 
 >
 > **Integration:** AMA Cryptography is a standalone cryptographic library — any Python project can install and use it independently for quantum-resistant security. The library is designed for general-purpose use across AI agents, AI systems, and any application requiring post-quantum protection.
 
-> **Before production use.** This is a self-assessed implementation under active development. We recommend:
+> **Before production use.** This is a self-assessed implementation under active development; the project does not commission an independent review (see `SECURITY.md`). We recommend:
 > - an HSM validated to FIPS 140-3, Level 3 or higher, for master secrets
-> - independent review by qualified cryptographers
+> - an independent review you commission yourself, if you need third-party assurance
 > - constant-time verification on your target hardware
 > - restrictive permissions and encrypted volumes for key files and signed packages
 >
@@ -232,9 +232,9 @@ NIST-standardized post-quantum algorithms:
 
 ### C library inventory (v5.0.0)
 
-Top-level `src/c/*.c` — 30 translation units:
+Top-level `src/c/*.c` — 29 translation units:
 
-`ama_aes_bitsliced.c`, `ama_aes_gcm.c`, `ama_agent_binding.c`, `ama_argon2.c`, `ama_ascon.c`, `ama_base64.c`, `ama_chacha20poly1305.c`, `ama_consttime.c`, `ama_core.c`, `ama_cpuid.c`, `ama_dilithium.c`, `ama_ed25519.c`, `ama_frost.c`, `ama_hkdf.c`, `ama_hmac_sha256.c`, `ama_hmac_sha384.c`, `ama_kyber.c`, `ama_lms.c`, `ama_nistp.c`, `ama_pbkdf2.c`, `ama_platform_rand.c`, `ama_rng_repeat.c`, `ama_secp256k1.c`, `ama_secure_memory.c`, `ama_sha256.c`, `ama_sha256_ni.c`, `ama_sha3.c`, `ama_sha512.c`, `ama_slhdsa.c`, `ama_x25519.c`.
+`ama_aes_bitsliced.c`, `ama_aes_gcm.c`, `ama_agent_binding.c`, `ama_argon2.c`, `ama_ascon.c`, `ama_base64.c`, `ama_chacha20poly1305.c`, `ama_consttime.c`, `ama_core.c`, `ama_cpuid.c`, `ama_dilithium.c`, `ama_ed25519.c`, `ama_frost.c`, `ama_hkdf.c`, `ama_hmac_sha256.c`, `ama_hmac_sha384.c`, `ama_kyber.c`, `ama_lms.c`, `ama_nistp.c`, `ama_pbkdf2.c`, `ama_platform_rand.c`, `ama_secp256k1.c`, `ama_secure_memory.c`, `ama_sha256.c`, `ama_sha256_ni.c`, `ama_sha3.c`, `ama_sha512.c`, `ama_slhdsa.c`, `ama_x25519.c`.
 
 Public headers under `include/` — 4: `ama_cryptography.h` (top-level API), `ama_cpuid.h`, `ama_dispatch.h`, `ama_uint128.h`.
 
@@ -927,7 +927,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*7,252 test functions across 289 Python test files plus 103 C test suites (105 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*7,230 test functions across 288 Python test files plus 96 C test suites (98 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1486,7 +1486,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on the standards in [CSRC_STANDARDS.md](CSRC_STANDARDS.md) — not custom cryptography
 - **Quantified claims:** Every published figure names its host, command and record ([docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md), `benchmarks/canonical-host.json`)
-- **Rigorous testing:** 7,252 test functions across 289 Python files plus 103 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
+- **Rigorous testing:** 7,230 test functions across 288 Python files plus 96 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
 - **Regression detection:** Benchmark floors measured on each CI runner class (x86_64 45% tolerance; aarch64 15–25%)
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by the weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1494,7 +1494,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 ### What Requires Caution
 
-- **No Independent Audit:** All security analysis is self-assessed. Production deployment requires review by qualified cryptographers.
+- **No Independent Audit:** All security analysis is self-assessed, and the project does not commission an independent review. A deployment that needs third-party assurance commissions its own review by qualified cryptographers.
 - **AI-Generated Code:** May contain subtle implementation errors that appear correct. Constant-time properties and side-channel resistance require independent verification.
 - **New PQC Standards:** ML-DSA-65, ML-KEM-1024, and SLH-DSA are recent NIST standards with limited real-world deployment history.
 - **Implementation vs. Specification:** Using correct algorithms doesn't guarantee correct implementation.
