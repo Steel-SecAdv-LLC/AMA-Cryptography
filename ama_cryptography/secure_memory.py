@@ -73,22 +73,24 @@ from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 
+from ama_cryptography import _module_state
 from ama_cryptography._module_state import (
     secure_random_fill as secure_random_fill,
 )
 from ama_cryptography._module_state import (
     secure_token_bytearray as secure_token_bytearray,
 )
+from ama_cryptography.exceptions import AmaCryptographyError
 
 # Kept importable: this name was bound here before the wipeable draws were
 # re-exported, so ``from ama_cryptography.secure_memory import
 # secure_token_bytes`` keeps working.  It returns immutable ``bytes``: for
 # nonces, salts and identifiers, never secrets (use ``secure_token_bytearray``).
-# Deliberately not in ``__all__``, as before.
-from ama_cryptography._module_state import (
-    secure_token_bytes as secure_token_bytes,
-)
-from ama_cryptography.exceptions import AmaCryptographyError
+# Deliberately not in ``__all__``, as before — so it is bound by assignment,
+# not in the ``import X as X`` re-export form, which reads as an unused import
+# to analyzers that treat only ``__all__`` members as used (CodeQL
+# py/unused-import, code-scanning alert #762).
+secure_token_bytes = _module_state.secure_token_bytes
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-10 |
+| Last Updated | 2026-10-11 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -33,6 +33,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### CodeQL py/unused-import on the `secure_token_bytes` compatibility binding -- 2026-10-11
+
+`secure_memory` kept `secure_token_bytes` importable through the `import X as X` re-export form while deliberately leaving it out of `__all__` (it returns immutable `bytes`: for nonces, salts and identifiers, never secrets), and CodeQL's `py/unused-import` reads that combination as a dead import (code-scanning alert #762). The name is now bound by assignment from the already-imported `_module_state` module, which analyzers follow as a use; behaviour is unchanged. The binding's identity with `_module_state.secure_token_bytes` and its absence from `__all__` stay PIN by `tests/test_public_generator.py::test_secure_memory_still_binds_secure_token_bytes`, re-measured against this shape: removing the assignment fails it.
 
 ### Repeat-checked CSPRNG draw in C -- 2026-10-10
 
