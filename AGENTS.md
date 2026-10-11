@@ -410,18 +410,27 @@ not an acceptable substitute.
 four parsers and asserts four properties across them. That is a standing check,
 not a reduction in the figures above, which count no fuzzing.
 
-Release prerequisites are recorded in pull request #394's description, under
-"Prerequisites for release" (corrected per section 6.6 on 2026-10-03: this
-sentence pointed at "the pull request description" while the live pull
-request had moved to #407, which records none — a pointer that dangled the
-moment #394 merged). Each requires hardware, a protected credential, or a
-workflow dispatch; none is blocked by a defect in the tree. Of the four:
-the canonical-host re-measurement (2) is done, below; the dry run (3) is
-stale and its last two dispatches (2026-09-17/18) failed in cibuildwheel
-ubuntu-24.04-arm before the `-mno-outline-atomics` fix merged, so a fresh
-dispatch from the release commit must be observed green; the independent
-cryptographic review (1) and the signed v5.0.0 tag (4) remain with the
-maintainer, and no gate enforces (1).
+Release items are recorded in pull request #394's description (corrected per
+section 6.6 on 2026-10-03: that sentence pointed at "the pull request
+description" while the live pull request had moved to #407, which records
+none — a pointer that dangled the moment #394 merged). None is blocked by a
+defect in the tree. The canonical-host re-measurement is done, below. The
+release dry run is stale: its last two dispatches (2026-09-17/18) failed in
+cibuildwheel ubuntu-24.04-arm before the `-mno-outline-atomics` fix merged,
+so a fresh dispatch from the release commit should be observed green before
+the artifacts it produces are published. The signed v5.0.0 tag is applied by
+the maintainer.
+
+Independent cryptographic review is **not** a release prerequisite and no
+gate enforces it; the project does not commission one. What the project does
+stand behind: the standardized primitives are implemented to their FIPS and
+RFC specifications and checked against official vectors (ACVP, Wycheproof,
+KATs), and the constant-time and memory-hygiene invariants are enforced by
+the gates in `tools/`. What it does not claim: the composition protocol that
+combines those primitives is original work and is **self-attested, not
+independently audited**. A downstream user who needs third-party assurance
+should commission their own review. The project states this unreviewed
+status plainly (INVARIANT-16) rather than implying an audit it has not had.
 
 Two follow-ups #394 recorded only in its merge-commit message were carried
 here (one more, the visuals manifest, was closed by
