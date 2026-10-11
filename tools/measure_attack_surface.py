@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""Generate the attack-surface inventory (``docs/ATTACK_SURFACE.md``).
+
+The 2026-10-08 diagnostics recorded that no document mapped the attack
+surface to its defences, and measured 13 exported entry points reached by
+no C test and no fuzz harness.  This instrument is that document's
+generator, and ``tests/test_attack_surface_map.py`` holds both properties:
+the committed page is at fixpoint with this generator, and the gap list is
+empty.
+
+What is measured
+----------------
+The declared C ABI is every ``AMA_API`` function in ``include/*.h`` —
+AGENTS.md's architecture table states that every exported symbol is
+declared there, and the suite pins that the built library exports exactly
+this set.  For each symbol, four evidence classes are collected by
+word-boundary reference search (``\\bname\\b``), so ``ama_hkdf`` is not
+credited with ``ama_hkdf_sha256``'s references:
+
+* **C tests** — ``tests/c/**``: the suites CTest runs.
+* **Fuzz** — ``fuzz/**`` and ``oss-fuzz/**``: the registered harnesses.
+* **CT gate** — ``tools/check_ghash_constant_time.py`` and
+  ``tools/constant_time/**``: the instruction-count and dudect targets.
+* **Python layer** — ``ama_cryptography/**`` and ``src/cython/**``: the
+  ctypes and Cython bindings the Python suites drive.
+
+What it is not
+--------------
+A reference is evidence that a suite names the symbol, not proof that a
+given test run executed it; execution is the branch-coverage instrument's
+subject (``tools/measure_branch_coverage.py``).  A symbol with no C-test
+and no fuzz reference, though, is reached by neither suite under any
+configuration, which is the gap class the 2026-10-08 measurement counted
+and ``tests/c/test_export_coverage.c`` closed.
+
+Usage
+-----
+``python tools/measure_attack_surface.py --check`` (the default) exits 1
+when ``docs/ATTACK_SURFACE.md`` does not match the tree;
+``--write`` regenerates it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from typing import Sequence
+
+REPO = Path(__file__).resolve().parent.parent
+DOC = REPO / "docs" / "ATTACK_SURFACE.md"
+
+#: Evidence classes, in column order: (name, heading, path globs).
+EVIDENCE: list[tuple[str, str, list[str]]] = [
+    ("c_tests", "C tests", ["tests/c/**/*.c", "tests/c/**/*.h"]),
+    ("fuzz", "Fuzz", ["fuzz/**/*.c", "fuzz/**/*.h", "oss-fuzz/**/*.c"]),
+    (
+        "ct_gate",
+        "CT gate",
+        ["tools/check_ghash_constant_time.py", "tools/constant_time/**/*.c"],
+    ),
+    (
+        "python",
+        "Python layer",
+        ["ama_cryptography/**/*.py", "src/cython/**/*.pyx", "src/cython/**/*.pxd"],
+    ),
+]
+
+_DECL = re.compile(r"AMA_API\s+[\w\s\*]+?\b(ama_\w+)\s*\(")
+
+
+def declared_abi(root: Path) -> list[str]:
+    """Every ``AMA_API`` function declared under ``include/``, sorted."""
+    names: set[str] = set()
+    for header in sorted((root / "include").glob("*.h")):
+        names.update(_DECL.findall(header.read_text(encoding="utf-8")))
+    return sorted(names)
+
+
+def _referencing_files(
+    root: Path, globs: Sequence[str], symbols: Sequence[str]
+) -> dict[str, list[str]]:
+    """``symbol -> sorted files`` whose text holds the symbol on a word boundary."""
+    hits: dict[str, list[str]] = {name: [] for name in symbols}
+    patterns = {name: re.compile(rf"\b{re.escape(name)}\b") for name in symbols}
+    for glob in globs:
+        for path in sorted(root.glob(glob)):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            rel = path.relative_to(root).as_posix()
+            for name, pattern in patterns.items():
+                if pattern.search(text):
+                    hits[name].append(rel)
+    return hits
+
+
+def measure(root: Path) -> dict[str, dict[str, list[str]]]:
+    """``symbol -> {evidence class -> referencing files}`` for the whole ABI."""
+    symbols = declared_abi(root)
+    by_class = {key: _referencing_files(root, globs, symbols) for key, _, globs in EVIDENCE}
+    return {name: {key: by_class[key][name] for key, _, _ in EVIDENCE} for name in symbols}
+
+
+def gaps(inventory: dict[str, dict[str, list[str]]]) -> list[str]:
+    """Symbols reached by neither a C test nor a fuzz harness."""
+    return [
+        name
+        for name, evidence in inventory.items()
+        if not evidence["c_tests"] and not evidence["fuzz"]
+    ]
+
+
+def render(inventory: dict[str, dict[str, list[str]]]) -> str:
+    """The inventory as the committed Markdown page (no timestamps, so the
+    output is a pure function of the tree and the fixpoint gate can hold)."""
+    total = len(inventory)
+    counts = {
+        key: sum(1 for evidence in inventory.values() if evidence[key]) for key, _, _ in EVIDENCE
+    }
+    missing = gaps(inventory)
+
+    lines = [
+        "# Attack Surface Inventory",
+        "",
+        "Generated by `tools/measure_attack_surface.py --write`; do not edit by",
+        "hand.  `tests/test_attack_surface_map.py` fails when this page drifts",
+        "from the tree, and when any exported entry point is reached by neither",
+        "a C test nor a fuzz harness.",
+        "",
+        "The declared C ABI is every `AMA_API` function in `include/*.h`.  For",
+        "each symbol the table records which evidence classes reference it on a",
+        "word boundary: the CTest suites (`tests/c/`), the fuzz harnesses",
+        "(`fuzz/`, `oss-fuzz/`), the constant-time gate and its harnesses",
+        "(`tools/check_ghash_constant_time.py`, `tools/constant_time/`), and the",
+        "Python layer's bindings (`ama_cryptography/`, `src/cython/`).  A",
+        "reference says a suite names the symbol, not that a given run executed",
+        "it; execution is `tools/measure_branch_coverage.py`'s subject.",
+        "",
+        "## Summary",
+        "",
+        f"- Declared / exported entry points: **{total}**",
+    ]
+    for key, heading, _ in EVIDENCE:
+        lines.append(f"- Referenced by {heading}: **{counts[key]}**")
+    lines.append(f"- Reached by neither a C test nor a fuzz harness: **{len(missing)}**")
+    lines.append("")
+    if missing:
+        lines.append("## Gaps (reached by neither a C test nor a fuzz harness)")
+        lines.append("")
+        lines.extend(f"- `{name}`" for name in missing)
+        lines.append("")
+    lines.append("## Inventory")
+    lines.append("")
+    header_cells = ["Entry point", *(heading for _, heading, _ in EVIDENCE)]
+    lines.append("| " + " | ".join(header_cells) + " |")
+    lines.append("|" + "---|" * len(header_cells))
+    for name, evidence in inventory.items():
+        row = [f"`{name}`"]
+        for key, _, _ in EVIDENCE:
+            row.append(str(len(evidence[key])) if evidence[key] else "—")
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--write", action="store_true", help="regenerate docs/ATTACK_SURFACE.md")
+    args = parser.parse_args(argv)
+
+    inventory = measure(REPO)
+    page = render(inventory)
+    missing = gaps(inventory)
+
+    if args.write:
+        DOC.write_text(page, encoding="utf-8")
+        print(f"wrote {DOC.relative_to(REPO)} ({len(inventory)} entry points)")
+    else:
+        current = DOC.read_text(encoding="utf-8") if DOC.exists() else ""
+        if current != page:
+            print(
+                "FAIL: docs/ATTACK_SURFACE.md does not match the tree; "
+                "regenerate with: python tools/measure_attack_surface.py --write",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"OK: docs/ATTACK_SURFACE.md matches the tree ({len(inventory)} entry points)")
+    if missing:
+        print(
+            "FAIL: entry points reached by neither a C test nor a fuzz harness: "
+            + ", ".join(missing),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

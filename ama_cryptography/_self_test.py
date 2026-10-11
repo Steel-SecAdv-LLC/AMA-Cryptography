@@ -1412,14 +1412,30 @@ def _check_execution_integrity() -> Tuple[bool, int, int, List[str]]:
     any check fails; ``problems`` lists the faults (capped when logged).
     """
     # The scan lives in the package ``__init__`` because it must run there
-    # before any submodule — this one included — is imported; importing it
-    # from a submodule would let that submodule be the thing it inspects.
-    from ama_cryptography import _find_import_shadowing
+    # before any submodule — this one included — is imported; defining it in
+    # a submodule would let that submodule be the thing it inspects
+    # (INVARIANT-40: the ``__init__`` is the checker).  It is read back here
+    # through ``sys.modules`` rather than an import statement: an import of a
+    # name the ``__init__`` defines is an edge into the ``__init__``, which
+    # imports this module — the one cycle ``main`` carried, now refused by
+    # ``tests/test_package_import_graph.py``.  The lookup adds no edge, and
+    # the ``__init__`` defines the scan before it imports this module, so a
+    # missing attribute is a fault, not an ordering state: the stage fails
+    # closed rather than skipping pass 1.
+    package = sys.modules.get("ama_cryptography")
+    find_import_shadowing = getattr(package, "_find_import_shadowing", None)
 
     pkg_dir = Path(__file__).resolve().parent
     verified = 0
     skipped = 0
-    problems: List[str] = list(_find_import_shadowing(str(pkg_dir)))
+    if find_import_shadowing is None:
+        problems: List[str] = [
+            "execution-integrity: ama_cryptography._find_import_shadowing is "
+            "unavailable (the package __init__ has not defined it), so the "
+            "import-shadowing scan cannot run"
+        ]
+    else:
+        problems = list(find_import_shadowing(str(pkg_dir)))
 
     # Recursive, matching _compute_module_digest: a subpackage .py outside
     # this walk would be outside the bytecode-poisoning check as well as the

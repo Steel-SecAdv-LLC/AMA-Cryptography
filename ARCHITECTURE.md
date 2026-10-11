@@ -781,7 +781,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | `--cov` floor 75% (`pyproject.toml`) | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 96 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
+| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 97 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | Adversarial and residue tests | `test_crypto_core_penetration.py`, `test_memory_security.py`, `tests/c/test_csprng_failure_residue.c`, `tests/c/test_slhdsa_fault_residue.c` |
@@ -790,7 +790,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
 | Wycheproof | Adversarial vectors | 15 vendored corpora | `wycheproof_vectors/run_wycheproof.py` |
 
-**Total:** 7,230 Python test functions across 288 test files, plus the
+**Total:** 7,238 Python test functions across 290 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the set of C tests depends on `AMA_USE_NATIVE_PQC`, `AMA_AES_CONSTTIME`, the ISA

@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 1159,
+      "Core Crypto\n& NIST KATs": 1160,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4213,
+      "Other": 4220,
       "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 288,
-    "total_tests": 7230,
+    "n_files": 290,
+    "total_tests": 7238,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -36,6 +36,7 @@
       "test_apt_retry_gate.py",
       "test_artefact_cache_poisoning.py",
       "test_ascon.py",
+      "test_attack_surface_map.py",
       "test_ava_descent.py",
       "test_avx_scoping_gate.py",
       "test_bandit_severity_gate.py",
@@ -161,6 +162,7 @@
       "test_secp256k1_ecdsa_noncanonical_pubkey.py",
       "test_secp256k1_ecdsa_rfc6979.py",
       "test_secret_division_gate.py",
+      "test_secret_holder_inventory.py",
       "test_secret_residue.py",
       "test_secret_scan_config.py",
       "test_secret_scanner.py",

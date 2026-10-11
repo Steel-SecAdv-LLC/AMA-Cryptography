@@ -649,6 +649,18 @@ class TestRealTree:
         assert not ok
         assert "planted: canary" in problems
 
+    def test_a_missing_shadowing_scan_fails_the_stage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PIN.  The stage reads the scan back through ``sys.modules`` — an
+        import of it would be an edge into the ``__init__``, the one cycle
+        ``main`` carried — and absent the attribute it fails closed rather
+        than skipping pass 1."""
+        monkeypatch.delattr(ama_cryptography, "_find_import_shadowing")
+        ok, _verified, _skipped, problems = st._check_execution_integrity()
+        assert not ok
+        assert any("_find_import_shadowing is unavailable" in p for p in problems)
+
 
 # ---------------------------------------------------------------------------
 # 5. End to end: a poisoned .pyc fails POST and the import

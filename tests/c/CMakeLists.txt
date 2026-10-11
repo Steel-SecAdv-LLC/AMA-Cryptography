@@ -335,6 +335,12 @@ add_ama_test(test_ed25519_expanded test_ed25519_expanded.c)
 if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_hybrid_sig test_hybrid_sig.c)
     add_ama_residue_probe(test_aead_stack_residue test_aead_stack_residue.c)
+    # The exported entry points no other suite reached (the 2026-10-08
+    # diagnostics' list of 13): the generic KEM wrappers, dilithium_sign_ctx,
+    # the HKDF-SHA2 and PBKDF2 one-shots, sha384, sha3_384, the trust-anchor
+    # readout and the Ed25519 fold knobs.  Gated because the KEM and ML-DSA
+    # halves need the AMA_USE_NATIVE_PQC source group.
+    add_ama_test(test_export_coverage test_export_coverage.c)
 endif()
 
 # The same probe applied to the Ed25519 signing path: the clamped scalar and

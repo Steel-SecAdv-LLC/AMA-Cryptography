@@ -114,9 +114,12 @@ def test_the_wipeable_draws_are_public() -> None:
 
 def test_secure_memory_still_binds_secure_token_bytes() -> None:
     """PIN.  ``secure_memory.secure_token_bytes`` stays importable (immutable
-    ``bytes``, not in ``__all__``)."""
-    from ama_cryptography.secure_memory import secure_token_bytes
-
+    ``bytes``, not in ``__all__``).  The name resolves through PEP 562 module
+    ``__getattr__``, and ``from ama_cryptography.secure_memory import
+    secure_token_bytes`` runs exactly this attribute resolution — asserted
+    here as ``getattr`` so this module imports ``secure_memory`` in one form
+    (CodeQL py/import-and-import-from, alert #775)."""
+    secure_token_bytes = secure_memory.secure_token_bytes
     assert secure_token_bytes is ms.secure_token_bytes
     assert "secure_token_bytes" not in secure_memory.__all__
     out = secure_token_bytes(24)

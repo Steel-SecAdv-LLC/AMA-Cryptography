@@ -12,14 +12,17 @@ taken at a time the reader cannot see -- which is how CodeQL's
 inside a function) and CodeQL flagged them after review; this test fails on
 them locally, before a push.
 
-Scope: cycles among the package's modules.  An edge INTO the package's
-``__init__`` -- an import of a name the ``__init__`` defines -- is not
-counted.  Counted, ``main`` has one cycle through it when this was written
-(``_self_test`` reads ``_find_import_shadowing`` from the ``__init__``, which
-imports ``_self_test``), and a gate that must carry it would be an exemption
-list (AGENTS.md section 10).  It is recorded in the CHANGELOG, measured by
-:func:`import_graph` with ``include_package_init=True``.  Within this scope
-``main`` had no cycle, so the gate needs no exemption.
+Scope: cycles among the package's modules, the package ``__init__``
+included.  An edge INTO the ``__init__`` -- an import of a name the
+``__init__`` defines -- was originally left out of the gate, because
+``main`` carried one such cycle (``_self_test`` imported
+``_find_import_shadowing`` from the ``__init__``, which imports
+``_self_test``) and a gate that must carry it would be an exemption list
+(AGENTS.md section 10).  That cycle is closed -- ``_self_test``
+reads the scan back through ``sys.modules``, a lookup that adds no edge --
+so the gate now counts every edge and needs no exemption.
+``include_package_init=False`` remains only to state the two scopes in
+:func:`test_a_cycle_through_the_package_init_is_counted`.
 """
 
 from __future__ import annotations
@@ -106,8 +109,10 @@ def cycles(graph: dict[str, set[str]]) -> list[list[str]]:
 
 def test_the_package_import_graph_has_no_cycle() -> None:
     """PIN.  Restoring ``_module_state``'s or ``_secret_material``'s
-    function-level import of ``secure_memory`` fails this."""
-    found = cycles(import_graph(REPO / PACKAGE))
+    function-level import of ``secure_memory`` fails this, and so does
+    restoring ``_self_test``'s import of ``_find_import_shadowing`` from the
+    package ``__init__``."""
+    found = cycles(import_graph(REPO / PACKAGE, include_package_init=True))
     assert found == [], "import cycles: " + "; ".join(" -> ".join(c) for c in found)
 
 
@@ -146,8 +151,9 @@ def test_the_graph_sees_every_form_of_import(tmp_path: Path, files: dict[str, st
     assert cycles(import_graph(_write_package(tmp_path, files)))
 
 
-def test_a_cycle_through_the_package_init_is_measured_not_gated(tmp_path: Path) -> None:
-    """RANGE: the scope stated in the module docstring, both ways."""
+def test_a_cycle_through_the_package_init_is_counted(tmp_path: Path) -> None:
+    """RANGE: the two scopes stated in the module docstring.  The gate runs
+    the inclusive one, so a cycle through the ``__init__`` fails it."""
     root = _write_package(
         tmp_path, {"__init__.py": "from .a import y\n", "a.py": "from pkg import z\ny = 1\n"}
     )
