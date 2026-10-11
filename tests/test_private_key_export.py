@@ -556,24 +556,30 @@ def test_dropping_a_key_after_a_failed_export_still_wipes_it(
         real_zero(value)
 
     monkeypatch.setattr(sm, "_zero", spy)
-    kept: Any = None
+    kept: Any
     try:
         run(key)
+        pytest.fail("the patched writer piece did not raise")
     except RuntimeError as exc:
         if retained == "exception":
             kept = exc
         else:
             # The root of the description of the failed write: the `piece` that
             # `build` was given, found in the frame that holds it.
+            found: Any = None
             walk = exc.__traceback__
             while walk is not None:
                 if walk.tb_frame.f_code.co_name == "build":
-                    kept = walk.tb_frame.f_locals["piece"]
+                    found = walk.tb_frame.f_locals["piece"]
                 walk = walk.tb_next
-            assert kept is not None, "no build() frame in the traceback"
+            assert found is not None, "no build() frame in the traceback"
+            kept = found
+            # ``kept`` must become the piece's only reference: the test's
+            # second half frees the piece and requires its buffer to die.
+            del found
     del key
     gc.collect()
-    kept = None
+    del kept
     gc.collect()
     unwiped = sorted(which for which, target in targets.items() if target not in seen)
     assert not unwiped, f"the dropped key's {unwiped} buffer was not zeroed by its finalizer"

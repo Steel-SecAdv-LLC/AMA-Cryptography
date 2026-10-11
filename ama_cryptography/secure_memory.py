@@ -82,15 +82,23 @@ from ama_cryptography._module_state import (
 )
 from ama_cryptography.exceptions import AmaCryptographyError
 
+
 # Kept importable: this name was bound here before the wipeable draws were
 # re-exported, so ``from ama_cryptography.secure_memory import
 # secure_token_bytes`` keeps working.  It returns immutable ``bytes``: for
 # nonces, salts and identifiers, never secrets (use ``secure_token_bytearray``).
-# Deliberately not in ``__all__``, as before — so it is bound by assignment,
-# not in the ``import X as X`` re-export form, which reads as an unused import
-# to analyzers that treat only ``__all__`` members as used (CodeQL
-# py/unused-import, code-scanning alert #762).
-secure_token_bytes = _module_state.secure_token_bytes
+# Deliberately not in ``__all__``, as before — and therefore resolved through
+# PEP 562 rather than held as a module binding: an ``import X as X``
+# re-export read as a dead import (CodeQL py/unused-import, alert #762) and a
+# module-level assignment as an unused global (py/unused-global-variable,
+# alert #770), because an analyzer counts only ``__all__`` members as used.
+# The function below is the module's only such compatibility name; any other
+# attribute misses it and raises, exactly as without it.
+def __getattr__(name: str) -> Callable[[int], bytes]:
+    if name == "secure_token_bytes":
+        return _module_state.secure_token_bytes
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 logger = logging.getLogger(__name__)
 

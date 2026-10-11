@@ -22,10 +22,10 @@ from typing import Any, Callable
 
 import pytest
 
-import ama_cryptography._asn1 as asn1
-import ama_cryptography._secret_material as sm
 import ama_cryptography.key_formats as kf
 import ama_cryptography.pqc_backends as pb
+from ama_cryptography import _asn1 as asn1
+from ama_cryptography import _secret_material as sm
 from ama_cryptography._asn1 import cbor_decode_canonical, cbor_encode_canonical
 from ama_cryptography._secret_material import ZeroizingBytearray
 from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatError

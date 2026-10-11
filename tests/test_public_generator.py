@@ -16,9 +16,9 @@ from typing import Any, Callable
 import pytest
 
 import ama_cryptography
+import ama_cryptography._build_sign as bs
 import ama_cryptography._module_state as ms
-from ama_cryptography import _build_sign as bs
-from ama_cryptography import secure_memory
+import ama_cryptography.secure_memory as secure_memory
 from ama_cryptography.exceptions import CryptoModuleError
 
 

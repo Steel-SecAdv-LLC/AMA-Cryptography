@@ -254,7 +254,10 @@ def test_the_probe_scans_the_locals_of_watched_frames_only() -> None:
         _dict = {"k": bytes(secret)}
         _key = {bytes(secret): 1}
         _set = {bytes(secret)}
-        len(_copy)
+        # Read every binding so none is dead code; the expression tuple is
+        # transient and never appears in the frame's locals, so the probe
+        # still sees exactly the six named copies above.
+        len((_copy, _list, _tuple, _dict, _key, _set))
 
     held = _Held()
     held.append((bytearray(_SECRET), _SECRET))

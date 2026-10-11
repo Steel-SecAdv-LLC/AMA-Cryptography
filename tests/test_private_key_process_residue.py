@@ -338,7 +338,7 @@ def test_the_scan_sees_a_live_copy_and_a_freed_unwiped_copy(tmp_path: Path) -> N
     memory is not zeroed), each raise the raw count over what it was.  Without
     this, a scan that read nothing would pass every export."""
     steps = _run_all(tmp_path, "P-256", ["control_live", "control_freed"])
-    (_, baseline), (_, live), (_, freed), _dropped = steps
+    (_, baseline), (_, live), (_, freed), _ = steps
     assert _raw(baseline) >= 3, f"the key's own buffer was not found: {baseline}"
     assert _raw(live) - _raw(baseline) >= 3, _grown(baseline, live)
     assert _raw(freed) - _raw(live) >= 3 * 32, _grown(live, freed)
