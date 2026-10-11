@@ -97,14 +97,14 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,467 |
 | Tests (`tests/**/*.py`) | 293 | 144,579 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,984 |
-| **Whole project** (source + docs + config) | 809 | **497,823** |
+| **Whole project** (source + docs + config) | 809 | **497,406** |
 
 **Library total (the figure that most closely tracks "library size"):
 101,051 lines** across 122 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`497,823` lines across Python, C, headers,
+**Whole-project total** (`497,406` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -164,15 +164,15 @@ the whole-project figure overstates hand-written code.
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
 | Library (Python + C + headers) | 101,051 | 20.3% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 144,579 | 29.0% | `tests/**/*.py` |
+| Tests | 144,579 | 29.1% | `tests/**/*.py` |
 | Top-level Python | 1,467 | 0.3% | `*.py` at repo root |
 | Cython | 1,984 | 0.4% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 248,742 | 50.0% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **497,823** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 248,325 | 49.9% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **497,406** | **100%** | sum of the scopes above |
 
-Test code (29.0%) is roughly 1.4x the size of the library (20.3%) — i.e. the test-to-library ratio is roughly **1.43**, and that
+Test code (29.1%) is roughly 1.4x the size of the library (20.3%) — i.e. the test-to-library ratio is roughly **1.43**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (50.0%) is dominated by the
+in the remainder row. The remainder (49.9%) is dominated by the
 vendored NIST ACVP and Wycheproof JSON corpora (72,854 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
