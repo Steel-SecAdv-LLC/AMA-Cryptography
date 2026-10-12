@@ -159,7 +159,6 @@ import types
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -196,7 +195,7 @@ _FENCE = re.compile(r"^(?P<indent>\s*)(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>.*?)[
 _DIRECTIVE = re.compile(r"<!--\s*example:\s*(?P<body>.+?)\s*-->\s*$")
 
 
-def _opening_fence(line: str) -> Optional[tuple[str, str, str]]:
+def _opening_fence(line: str) -> typing.Optional[tuple[str, str, str]]:
     """``(indent, fence, language)`` when ``line`` opens a fenced block."""
     match = _FENCE.match(line)
     if match is None:
@@ -265,12 +264,12 @@ class Block:
     path: str
     line: int  # 1-based line of the opening fence
     language: str
-    directive: Optional[str]  # raw directive body, or None when unmarked
+    directive: typing.Optional[str]  # raw directive body, or None when unmarked
     code: str
     #: A ``pycon`` block's text as written — prompts and the output lines —
     #: which ``python-run`` executes under doctest.  ``code`` holds only its
     #: source lines, prompts stripped.  None for every other language.
-    transcript: Optional[str] = None
+    transcript: typing.Optional[str] = None
 
     @property
     def family(self) -> str:
@@ -373,7 +372,7 @@ def extract_blocks(path: Path, repo: Path = REPO) -> list[Block]:
         if language not in CHECKED_LANGUAGES:
             continue
         text = "\n".join(_dedent(body, fence_indent)) + "\n"
-        transcript: Optional[str] = None
+        transcript: typing.Optional[str] = None
         if language == "pycon":
             transcript, text = text, pycon_source(text)
         blocks.append(
@@ -400,13 +399,13 @@ def pycon_source(transcript: str) -> str:
     return "".join(example.source for example in examples)
 
 
-def _dedent(body: Sequence[str], indent: str) -> list[str]:
+def _dedent(body: typing.Sequence[str], indent: str) -> list[str]:
     if not indent:
         return list(body)
     return [line[len(indent) :] if line.startswith(indent) else line for line in body]
 
 
-def _directive_above(lines: Sequence[str], fence_index: int) -> Optional[str]:
+def _directive_above(lines: typing.Sequence[str], fence_index: int) -> typing.Optional[str]:
     """The ``<!-- example: ... -->`` directly above the fence, if any."""
     cursor = fence_index - 1
     while cursor >= 0 and not lines[cursor].strip():
@@ -422,7 +421,7 @@ def _directive_above(lines: Sequence[str], fence_index: int) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _load_encodability_predicate() -> Callable[[str], list[str]]:
+def _load_encodability_predicate() -> typing.Callable[[str], list[str]]:
     """``unencodable_characters`` from the gate that owns INVARIANT-43.
 
     Loaded by path rather than imported by name: ``tools/`` is not a package,
@@ -437,7 +436,7 @@ def _load_encodability_predicate() -> Callable[[str], list[str]]:
         raise RuntimeError("cannot load tools/check_log_message_encodability.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    predicate: Callable[[str], list[str]] = module.unencodable_characters
+    predicate: typing.Callable[[str], list[str]] = module.unencodable_characters
     return predicate
 
 
@@ -477,7 +476,7 @@ def _cp1252_offenders(code: str) -> list[tuple[int, str, list[str]]]:
         if not (isinstance(func, _ast.Name) and func.id == "print"):
             continue
         for piece in _ast.walk(node):
-            text: Optional[str] = None
+            text: typing.Optional[str] = None
             if isinstance(piece, _ast.Constant) and isinstance(piece.value, str):
                 text = piece.value
             elif isinstance(piece, _ast.JoinedStr):
@@ -529,7 +528,7 @@ sys.exit(1 if runner.failures else 0)
 
 
 def run_python(
-    block: Block, report: Report, repo: Path, code: Optional[str] = None, prelude: str = ""
+    block: Block, report: Report, repo: Path, code: typing.Optional[str] = None, prelude: str = ""
 ) -> None:
     """Run the block in a fresh interpreter.
 
@@ -626,7 +625,7 @@ def _logical_lines(code: str) -> list[str]:
     return joined
 
 
-def _resolve_module(block: Block, report: Report) -> Optional[object]:
+def _resolve_module(block: Block, report: Report) -> typing.Optional[object]:
     module_name = block.options.get("module")
     if not module_name:
         report.fail(block, f"{block.mode} needs module=<dotted.module>")
@@ -860,7 +859,7 @@ def _canonical(annotation: object) -> str:
         return "None"
     if annotation is Ellipsis:
         return "..."
-    if isinstance(annotation, list):  # Callable[[int, str], X] parameter lists
+    if isinstance(annotation, list):  # typing.Callable[[int, str], X] parameter lists
         return "[" + ",".join(_canonical(item) for item in annotation) + "]"
     origin = typing.get_origin(annotation)
     if origin is None:
@@ -925,7 +924,7 @@ def _evaluate_type_expression(node: ast.expr, namespace: dict[str, object]) -> o
             raise _NotATypeExpressionError(ast.unparse(node)) from exc
     if isinstance(node, ast.Tuple):
         return tuple(_evaluate_type_expression(item, namespace) for item in node.elts)
-    if isinstance(node, ast.List):  # the parameter list of Callable[[int], X]
+    if isinstance(node, ast.List):  # the parameter list of typing.Callable[[int], X]
         return [_evaluate_type_expression(item, namespace) for item in node.elts]
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         left = typing.cast(typing.Any, _evaluate_type_expression(node.left, namespace))
@@ -1018,7 +1017,7 @@ def _normalise_c(text: str) -> str:
 
 
 def check_c_declarations(
-    block: Block, report: Report, repo: Path, exported: Optional[frozenset[str]]
+    block: Block, report: Report, repo: Path, exported: typing.Optional[frozenset[str]]
 ) -> None:
     header = (repo / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
     flat_header = _normalise_c(header)
@@ -1130,7 +1129,7 @@ def exported_symbols(library: Path) -> frozenset[str]:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    reader: Callable[[Path], frozenset[str]] = module.dynamic_symbols
+    reader: typing.Callable[[Path], frozenset[str]] = module.dynamic_symbols
     return reader(library)
 
 
@@ -1155,7 +1154,7 @@ _LIBRARY_PATTERNS: tuple[str, ...] = (
 )
 
 
-def find_library(directory: Optional[Path]) -> Optional[Path]:
+def find_library(directory: typing.Optional[Path]) -> typing.Optional[Path]:
     """The built shared object in ``directory``, whatever this platform calls it."""
     if directory is None or not directory.is_dir():
         return None
@@ -1251,17 +1250,17 @@ def run_c(
 
 
 def check_blocks(
-    blocks: Iterable[Block],
+    blocks: typing.Iterable[Block],
     *,
     repo: Path = REPO,
     languages: frozenset[str] = frozenset({"python", "c"}),
-    include_dir: Optional[Path] = None,
-    library_dir: Optional[Path] = None,
+    include_dir: typing.Optional[Path] = None,
+    library_dir: typing.Optional[Path] = None,
     compiler: str = "cc",
     use_valgrind: bool = True,
 ) -> Report:
     report = Report()
-    exported: Optional[frozenset[str]] = None
+    exported: typing.Optional[frozenset[str]] = None
     #: Per page: the code the last python-run block executed, for the
     #: ``continues`` blocks that follow it.
     running_example: dict[str, str] = {}
@@ -1359,7 +1358,7 @@ def check_blocks(
     return report
 
 
-def collect(repo: Path = REPO, files: Optional[Sequence[str]] = None) -> list[Block]:
+def collect(repo: Path = REPO, files: typing.Optional[typing.Sequence[str]] = None) -> list[Block]:
     blocks: list[Block] = []
     for relative in files if files is not None else covered_files(repo):
         path = repo / relative
@@ -1369,7 +1368,7 @@ def collect(repo: Path = REPO, files: Optional[Sequence[str]] = None) -> list[Bl
     return blocks
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: typing.Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run the documented examples.")
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument(

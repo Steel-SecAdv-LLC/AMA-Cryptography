@@ -29,8 +29,8 @@ What must never regress, pinned here from both directions:
 
 from __future__ import annotations
 
+import array
 import ctypes
-from array import array
 from contextlib import ExitStack
 from typing import Any, Callable
 
@@ -200,8 +200,6 @@ class TestValidation:
             stack.enter_context(_CBufferViews(grid))
 
     def test_wide_itemsize_buffer_rejected(self) -> None:
-        import array
-
         wide = memoryview(array.array("I", [1, 2, 3, 4]))
         with pytest.raises(TypeError, match="contiguous byte buffer"), ExitStack() as stack:
             stack.enter_context(_CBufferViews(wide))
@@ -213,8 +211,6 @@ class TestValidation:
         view passed a 32-byte key-length check and was then copied as 128
         bytes.  Both borrow helpers refuse it now.
         """
-        import array
-
         wide = memoryview(array.array("I", range(32))).toreadonly()
         assert len(wide) == 32 and wide.nbytes == 128
         with pytest.raises(TypeError, match="contiguous byte buffer"), ExitStack() as stack:
@@ -350,11 +346,11 @@ def _hmac_buffers() -> dict[str, Any]:
         "bytearray": bytearray(b"abcd"),
         "writable view": memoryview(bytearray(b"abcd")),
         "read-only view": memoryview(b"abcd"),
-        "unsigned octets": memoryview(array("B", b"abcd")),
-        "signed octets": memoryview(array("b", b"abcd")),
+        "unsigned octets": memoryview(array.array("B", b"abcd")),
+        "signed octets": memoryview(array.array("b", b"abcd")),
         "char octets": memoryview(bytearray(b"abcd")).cast("c"),
-        "empty signed octets": memoryview(array("b")),
-        "wide items": memoryview(array("I", [1, 2, 3, 4])),
+        "empty signed octets": memoryview(array.array("b")),
+        "wide items": memoryview(array.array("I", [1, 2, 3, 4])),
         "strided": memoryview(bytearray(b"abcdefgh"))[::2],
         "two dimensions": memoryview(bytearray(b"abcd")).cast("B", (2, 2)),
     }
