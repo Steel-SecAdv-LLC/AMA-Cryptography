@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-11 |
+| Last Updated | 2026-10-12 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -33,6 +33,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### Dev/CI toolchain moved as one set: mypy 2.4.0, black 26.10.0, ruff 0.16.10, cmake 4.4.4 — 2026-10-12
+
+Dependabot's group bump (12 updates: the dev trio above plus hypothesis 6.168.5, coverage 7.16.2, types-setuptools 84.0.0.20261006, cmake 4.4.4 in the hash-pinned release-build manifest, the `cryptography>=50.0.2` bench/legacy floor, and four transitives) lands together with the pins Dependabot cannot reach, because `tests/test_lint_job_environment.py` holds them in lockstep: the two workflow lint lanes (`ci.yml`, `ci-build-test.yml`), the three pre-commit revs, and `setup.py`'s `_BUILD_REQS` cmake floor (4.4.4, matching the pyproject build floor). The mypy cap moves 2.4→2.5 under its own recorded condition: the docstring-inline-config boundary was re-measured on 2.4.0 (the suppression-hygiene premise test is two-sided and passes; `check_type_check_scope.py`'s two measured claims re-measured and unchanged; `mypy --strict`, CI's exact invocation, clean on 438 files). No package code changes.
 
 ### Reverted: repeat-checked CSPRNG draw in C — 2026-10-11
 

@@ -200,23 +200,25 @@ dev = [
     "pytest>=9.1.1,<9.2",
     "pytest-cov>=4.0.0",
     "hypothesis>=6.168.5",
-    # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
+    # Black's floor carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
-    # black and ruff: the lint lanes pin ==26.5.1/==0.16.8, and
+    # black and ruff: the lint lanes pin ==26.10.0/==0.16.10, and
     # tests/test_ci_gate_negative.py asserts the accept side of each tool's
     # DEFAULT behaviour -- the surface that moves between releases (black
     # revises its stable style on calendar majors; ruff's default rule set
     # moves on minors).  Capped so one CI run measures one black and one ruff.
     "black>=26.10.0,<27",
     "ruff>=0.16.10,<0.17",
-    # Capped below 2.4: the lint job, pre-commit and requirements-lock.txt run
-    # 2.3.1, and this extra floated past them.  mypy 2.4.0 stopped honouring a
-    # `# mypy:` inline-config line inside a docstring (measured: the same file
-    # and flags exit 0 under 2.3.1 and 1 under 2.4.0), so the test lanes that
-    # install this extra measured a different mypy from the one CI type-checks
-    # with, and test_suppression_hygiene_gate.py's premise test went red on
-    # them alone.  Raise the cap with the pins, after re-measuring that test.
+    # Floor and lock moved to 2.4.0 together with the lint-lane and
+    # pre-commit pins (test_lint_job_environment.py holds them in lockstep).
+    # The 2.3→2.4 boundary changed one measured behaviour: 2.4.0 stopped
+    # honouring a `# mypy:` inline-config line inside a docstring.
+    # Re-measured 2026-10-12 before raising the cap, as the previous note
+    # required: test_suppression_hygiene_gate.py's premise test is two-sided
+    # (`_HONOURED_BEFORE`) and passes under 2.4.0 (111 passed), and
+    # `mypy --strict` with CI's exact invocation is clean on all 438 files.
+    # Capped below 2.5 so one CI run measures one mypy.
     "mypy>=2.4.0,<2.5",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
@@ -472,7 +474,7 @@ skip-string-normalization = false
 # Static-analysis target = the project's minimum supported runtime.  The
 # project dropped Python 3.9 (requires-python >= 3.10; see the classifiers and
 # CI matrix), so 3.10 is now both the runtime floor and the type-analysis
-# floor.  This also satisfies mypy >= 2.0 (2.3.1 via the python-dependencies
+# floor.  This also satisfies mypy >= 2.0 (2.4.0 via the python-dependencies
 # group), which refuses python_version="3.9".
 python_version = "3.10"
 strict = true

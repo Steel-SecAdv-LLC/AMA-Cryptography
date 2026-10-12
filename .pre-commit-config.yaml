@@ -56,20 +56,20 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/psf/black
-    rev: 26.5.1
+    rev: 26.10.0
     hooks:
       - id: black
         language_version: python3
         args: ['--line-length=100']
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.8
+    rev: v0.16.10
     hooks:
       - id: ruff
         args: ['--fix', '--exit-non-zero-on-fix']
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.1
+    rev: v2.4.0
     hooks:
       - id: mypy
         # --explicit-package-bases: without it this hook did not run at all on
@@ -130,7 +130,7 @@ repos:
           - types-PyYAML==6.0.12.20260906
           - PyYAML==6.0.3
           - pytest==9.1.1
-          - types-setuptools==84.0.0.20260812
+          - types-setuptools==84.0.0.20261006
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4
