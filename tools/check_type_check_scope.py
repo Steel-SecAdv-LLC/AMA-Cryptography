@@ -30,7 +30,8 @@ HOW IT WORKS
 is keyed by the ABSOLUTE PATH of every SOURCE mypy was given — the files the
 command line names, directly or through a directory.  A module mypy only
 reached by following an import is analysed (an error in it is reported) but is
-NOT a key of that map.  Measured with the pinned mypy 2.3.1, both on a single
+NOT a key of that map.  Measured with the then-pinned mypy 2.3.1 and
+re-measured identically on the pinned 2.4.0 (2026-10-12), both on a single
 followed module and on the CI shape (``MYPYPATH=. mypy --strict
 --explicit-package-bases tests/`` with ``tests/`` importing ``schemas.x``):
 the report lists ``tests/t.py`` alone.  This docstring used to say the
@@ -49,7 +50,9 @@ IN THE REPORT IS NOT THE SAME AS CHECKED
 
 A file can be analysed, and therefore be a key of the report, while every
 error in it is thrown away.  Three spellings do that.  Each was measured
-against mypy 2.3.1 with a deliberate ``x: int = "s"`` in the file (the
+against mypy 2.3.1, and the comment-token form re-measured against the
+pinned 2.4.0 (2026-10-12: exit 0, the file still a report key), with a
+deliberate ``x: int = "s"`` in the file (the
 configuration form through both a ``mypy.ini`` ``[mypy-<module>]`` section and
 a ``[[tool.mypy.overrides]]`` table): mypy reported no error for the file, and
 ``coverage.json`` listed it.

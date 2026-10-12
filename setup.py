@@ -46,7 +46,7 @@ from typing import Any, Callable, Optional
 #     floor is pinned at 84.0.0 to match pyproject.toml's [build-system].
 #   * wheel >= 0.48.0:        0.47.0 closes GHSA-8rrh-rw8j-w5fx and 0.48.0
 #     closes GHSA-vgq5-9859-3mmw.
-#   * cmake >= 4.4.3:         supply-chain floor (matches pyproject.toml's
+#   * cmake >= 4.4.4:         supply-chain floor (matches pyproject.toml's
 #     [build-system].requires).  CMakeLists.txt's cmake_minimum_required is
 #     3.15, but this higher floor is enforced for supply-chain security.
 #   * Cython >= 3.3.0:        floor for the math_engine extension's
@@ -68,7 +68,7 @@ _BUILD_REQS = {
     "setuptools": ((84, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
     "wheel": ((0, 48, 0), "GHSA-8rrh-rw8j-w5fx, GHSA-vgq5-9859-3mmw"),
     "cmake": (
-        (4, 4, 3),
+        (4, 4, 4),
         "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
         " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
         " floor is enforced for supply-chain security",
@@ -112,7 +112,7 @@ def _parse_version(raw: str) -> tuple[int, int, int]:
 
 _REMEDY = (
     "  python3 -m pip install --upgrade "
-    "'setuptools>=84.0.0' 'wheel>=0.48.0' 'cmake>=4.4.3' "
+    "'setuptools>=84.0.0' 'wheel>=0.48.0' 'cmake>=4.4.4' "
     "'Cython>=3.3.0' 'numpy>=1.24.0'\n"
 )
 
