@@ -463,15 +463,20 @@ class TestSecureKeyStorageComprehensive:
 
         def fake_decrypt(
             key: object, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes
-        ) -> bytes:
+        ) -> bytearray:
             seen.append(("decrypt", type(key)))
-            return ciphertext
+            return bytearray(ciphertext)
 
         monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_encrypt", fake_encrypt)
-        monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_decrypt", fake_decrypt)
+        # retrieve_key decrypts a stored key through the wipeable core, which
+        # returns the plaintext in a bytearray (INVARIANT-6).
+        monkeypatch.setattr(
+            "ama_cryptography.pqc_backends._aes256_gcm_decrypt_wipeable", fake_decrypt
+        )
 
         secure_storage.store_key("test-key", b"secret")
-        assert secure_storage.retrieve_key("test-key") == b"secret"
+        retrieved = secure_storage.retrieve_key("test-key")
+        assert isinstance(retrieved, bytearray) and retrieved == b"secret"
         assert seen == [("encrypt", bytearray), ("decrypt", bytearray)]
 
     def test_store_retrieve_with_metadata(
@@ -783,7 +788,7 @@ class TestSecureKeyStorageLegacyKDF:
         # After migration the store opens under the default policy, and the
         # key stored before the migration is still readable.
         upgraded = SecureKeyStorage(temp_storage_path, master_password=sample_password)
-        assert upgraded.retrieve_key("legacy-key") == b"\x11" * 32
+        assert upgraded.retrieve_key("legacy-key") == bytearray(b"\x11" * 32)
 
         # And the refusal is genuinely gone, not merely suppressed.
         try:
@@ -1005,7 +1010,7 @@ class TestKDFMetadataIsUntrusted:
         self._weaken(temp_storage_path, **original)
         reopened = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         assert reopened.kdf_params["algorithm"] == "Argon2id"
-        assert reopened.retrieve_key("survivor") == b"payload"
+        assert reopened.retrieve_key("survivor") == bytearray(b"payload")
 
     def test_floor_is_checked_before_any_derivation(
         self, temp_storage_path: Any, sample_password: Any
@@ -1040,7 +1045,7 @@ class TestKDFMetadataIsUntrusted:
 
         assert record["version"] == STORAGE_FORMAT_VERSION
         assert record["kdf_params"] == storage.kdf_params
-        assert storage.retrieve_key("provenance") == b"\x42" * 32
+        assert storage.retrieve_key("provenance") == bytearray(b"\x42" * 32)
 
     def test_recorded_parameters_are_covered_by_the_tag(
         self, temp_storage_path: Any, sample_password: Any
@@ -1101,7 +1106,7 @@ class TestKDFMetadataIsUntrusted:
                 f,
             )
 
-        assert storage.retrieve_key("legacy-record") == b"\x5a" * 32
+        assert storage.retrieve_key("legacy-record") == bytearray(b"\x5a" * 32)
 
 
 class TestArgon2idIsRequiredNotSubstituted:
@@ -1179,7 +1184,7 @@ class TestArgon2idIsRequiredNotSubstituted:
         self._without_argon2id(monkeypatch)
         storage = SecureKeyStorage(temp_storage_path)
         storage.store_key("k", b"\x01" * 32)
-        assert storage.retrieve_key("k") == b"\x01" * 32
+        assert storage.retrieve_key("k") == bytearray(b"\x01" * 32)
 
     def test_migrate_refuses_without_argon2id_and_changes_nothing(
         self,
@@ -1206,7 +1211,7 @@ class TestArgon2idIsRequiredNotSubstituted:
         monkeypatch.undo()
         reopened = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         assert reopened.kdf_params["algorithm"] == "Argon2id"
-        assert reopened.retrieve_key("kept") == b"\x22" * 32
+        assert reopened.retrieve_key("kept") == bytearray(b"\x22" * 32)
 
     def test_pbkdf2_metadata_is_refused_without_argon2id(
         self,
@@ -1270,7 +1275,7 @@ class TestArgon2idIsRequiredNotSubstituted:
             "iterations": MIN_PBKDF2_ITERATIONS,
         }
         legacy.store_key("v2", b"\x5b" * 32, {})
-        assert legacy.retrieve_key("v2") == b"\x5b" * 32
+        assert legacy.retrieve_key("v2") == bytearray(b"\x5b" * 32)
 
 
 # =============================================================================
@@ -1422,7 +1427,7 @@ class TestMigrateKdfPreservesEveryRecord:
         storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         storage.store_key("normal", b"payload", {})
         storage.store_key("sentinel", b"", {})
-        assert storage.retrieve_key("sentinel") == b""
+        assert storage.retrieve_key("sentinel") == bytearray(b"")
 
         assert storage.migrate_kdf(sample_password) is True
 
@@ -1431,5 +1436,5 @@ class TestMigrateKdfPreservesEveryRecord:
         # The ordinary value is the non-vacuity control: if migration were
         # broken outright, this would fail too and the assertion below would
         # not be evidence about zero-length handling specifically.
-        assert reopened.retrieve_key("normal") == b"payload"
-        assert reopened.retrieve_key("sentinel") == b""
+        assert reopened.retrieve_key("normal") == bytearray(b"payload")
+        assert reopened.retrieve_key("sentinel") == bytearray(b"")

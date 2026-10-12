@@ -122,7 +122,7 @@ class TestSecureKeyStorageGCM:
 
             retrieved = storage.retrieve_key("test-key")
 
-            assert retrieved == original_key
+            assert retrieved == bytearray(original_key)
 
     def test_retrieve_nonexistent_returns_none(self) -> None:
         """Retrieving non-existent key returns None."""
@@ -225,4 +225,4 @@ class TestSecureKeyStorageGCM:
             storage2 = SecureKeyStorage.from_existing(path, "test-password")
             retrieved = storage2.retrieve_key("test-key")
 
-            assert retrieved == b"secret-data"
+            assert retrieved == bytearray(b"secret-data")

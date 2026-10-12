@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 95 C test suites, 274 Python test modules |
+| `tests/c/`, `tests/` | 97 C test suites, 290 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -410,28 +410,47 @@ not an acceptable substitute.
 four parsers and asserts four properties across them. That is a standing check,
 not a reduction in the figures above, which count no fuzzing.
 
-Release prerequisites are recorded in pull request #394's description, under
-"Prerequisites for release" (corrected per section 6.6 on 2026-10-03: this
-sentence pointed at "the pull request description" while the live pull
-request had moved to #407, which records none — a pointer that dangled the
-moment #394 merged). Each requires hardware, a protected credential, or a
-workflow dispatch; none is blocked by a defect in the tree. Of the four:
-the canonical-host re-measurement (2) is done, below; the dry run (3) is
-stale and its last two dispatches (2026-09-17/18) failed in cibuildwheel
-ubuntu-24.04-arm before the `-mno-outline-atomics` fix merged, so a fresh
-dispatch from the release commit must be observed green; the independent
-cryptographic review (1) and the signed v5.0.0 tag (4) remain with the
-maintainer, and no gate enforces (1).
+Release items are recorded in pull request #394's description (corrected per
+section 6.6 on 2026-10-03: that sentence pointed at "the pull request
+description" while the live pull request had moved to #407, which records
+none — a pointer that dangled the moment #394 merged). None is blocked by a
+defect in the tree. The canonical-host re-measurement is done, below. The
+release dry run is stale: its last two dispatches (2026-09-17/18) failed in
+cibuildwheel ubuntu-24.04-arm before the `-mno-outline-atomics` fix merged,
+so a fresh dispatch from the release commit should be observed green before
+the artifacts it produces are published. The signed v5.0.0 tag is applied by
+the maintainer.
 
-Two follow-ups #394 recorded only in its merge-commit message, carried here
-so they live in the tree (one more, the visuals manifest, was closed by
-`tools/refresh_derived_docs.py` and its gate): the ML-DSA and ML-KEM keygens
-in `ama_cryptography/pqc_backends.py` return `bytes`-typed secret keys, an
-immutable copy no caller can wipe (the SLH-DSA keygens' interim copy of the
-same shape was removed on 2026-10-03 by copying through a memoryview); and
-`tools/verify_install_oob.py` scans only the package directory's top level
-for bindings while its bytecode pass reads only `__pycache__`, measured
-passing with a planted `crypto_api/__init__.pyc`. The canonical-host benchmark figures have a
+Independent cryptographic review is **not** a release prerequisite and no
+gate enforces it; the project does not commission one. What the project does
+stand behind: the standardized primitives are implemented to their FIPS and
+RFC specifications and checked against official vectors (ACVP, Wycheproof,
+KATs), and the constant-time and memory-hygiene invariants are enforced by
+the gates in `tools/`. What it does not claim: the composition protocol that
+combines those primitives is original work and is **self-attested, not
+independently audited**. A downstream user who needs third-party assurance
+should commission their own review. The project states this unreviewed
+status plainly (INVARIANT-16) rather than implying an audit it has not had.
+
+Two follow-ups #394 recorded only in its merge-commit message were carried
+here (one more, the visuals manifest, was closed by
+`tools/refresh_derived_docs.py` and its gate). `tools/verify_install_oob.py`
+passing a planted `crypto_api/__init__.pyc` was closed on 2026-10-08: the
+tool now applies the in-process import-shadowing rule out of band, pinned
+to it by a parity test. The other, as stated here, was narrower than the
+defect (corrected per section 6.6 on 2026-10-08): nine public keygens
+returned `bytes` secret keys, and the root was the library's only CSPRNG
+entry point drawing through `secrets.token_bytes`. Both that and a second
+item escalated the same day -- `key_formats` encoding private keys through
+CPython's table-driven base64 (INVARIANT-12 rule 4) -- were closed on
+2026-10-08 (CHANGELOG, "Secrets wipeable end to end"): every secret draw is
+written in place by the native `ama_random_bytes`, every secret the Python
+layer mints is a `bytearray`, private-key PEM and JWK go through the native
+constant-time `src/c/ama_base64.c`, and BIP32 child derivation moved out of
+Python integers into `ama_secp256k1_seckey_tweak_add`. What stays open is
+stated where it is measured: `tools/measure_secret_residue.py` finds no live
+copy of a secret after its holder wipes it, and does not claim to see freed
+memory. The canonical-host benchmark figures have a
 drift mechanism (`tools/check_canonical_benchmarks.py` against
 `benchmarks/canonical-host.json`), so an edited, invented or quietly deleted
 figure fails CI, and they were re-measured on the 5.0.0 tree on 2026-09-24 on

@@ -44,6 +44,7 @@ def _bench(**overrides: Any) -> dict[str, Any]:
                 "description": "SHA3-256",
                 "ops_per_second": 1000.0,
                 "baseline_value": 900.0,
+                "tolerance_percent": 45,
                 "passed": True,
             }
         ],
@@ -128,7 +129,8 @@ class TestThePayloadIsEmbeddedOnceAndStaysInItsScript:
 
     ``str.replace`` substitutes every occurrence, so each render carried a
     second copy of the whole data payload inside that ``<!-- -->`` comment
-    (the committed ``benchmarks/dashboard.html`` shows it on line 2), where a
+    (the 2026-07-29 render of ``benchmarks/dashboard.html`` showed it on line
+    2; the 2026-10-08 render carries the payload once), where a
     ``-->`` in any change-log string would have closed the comment and
     printed the rest of the JSON as page text.  The remaining copy had the
     same exposure to ``</script>``, and the chained substitutions would have
@@ -172,3 +174,31 @@ class TestThePayloadIsEmbeddedOnceAndStaysInItsScript:
         tmpl = f"__VERSION__ __MEASURED__ __GENERATED__ /*__DATA__*/ {marker}"
         with pytest.raises(RuntimeError, match="exactly once"):
             gd.fill_template(tmpl, {})
+
+
+class TestEveryRowIsLabelledAndFiled:
+    """``ed25519_sign_expanded`` rendered under its raw key, filed as a hash.
+
+    ``build`` looked labels and families up with defaults, so a benchmark row
+    added to ``baseline.json`` without a dashboard entry was drawn in the
+    "Hash / MAC / KDF" colour under its internal name -- the 2026-10-08 page
+    shipped exactly that.  The lookups are now exact and ``build`` refuses an
+    unmapped row.
+    """
+
+    def test_every_gated_row_has_a_label_and_a_family(self) -> None:
+        repo = Path(gd.__file__).resolve().parent.parent
+        names: set[str] = set()
+        for path in ("benchmarks/baseline.json", "benchmarks/arm-baseline.json"):
+            data = json.loads((repo / path).read_text(encoding="utf-8"))
+            for section in ("benchmarks", "pqc_benchmarks"):
+                names.update(data.get(section, {}))
+        assert names, "no benchmark rows were read"
+        assert not names - gd.PRETTY.keys(), sorted(names - gd.PRETTY.keys())
+        assert not names - gd.FAMILY_OF.keys(), sorted(names - gd.FAMILY_OF.keys())
+
+    def test_an_unmapped_row_is_refused_not_misfiled(self) -> None:
+        bench = _bench()
+        bench["results"][0]["name"] = "a_row_the_dashboard_has_never_seen"
+        with pytest.raises(RuntimeError, match="a_row_the_dashboard_has_never_seen"):
+            _render(bench)

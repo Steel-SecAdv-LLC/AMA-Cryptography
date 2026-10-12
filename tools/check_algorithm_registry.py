@@ -143,6 +143,13 @@ FAMILY_REGISTRY_TOKENS: dict[str, str | tuple[str, ...] | None] = {
     "keypair": None,  # generic keypair helper over the families above
     "sign": None,  # generic dispatch wrapper
     "verify": None,  # generic dispatch wrapper
+    # The operating-system CSPRNG behind every random draw (getrandom,
+    # getentropy, BCryptGenRandom): an interface, not an approved DRBG, which
+    # CSRC_STANDARDS.md section 3 states.
+    "random": None,
+    # RFC 4648 Base64 / Base64url: an encoding, not a cryptographic algorithm.
+    # Native so private-key PEM and JWK bodies are encoded in constant time.
+    "base64": None,
 }
 
 #: Enumerators of the header's parameter-set enums.  These are what makes the

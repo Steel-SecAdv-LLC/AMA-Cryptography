@@ -48,7 +48,8 @@ X25519_BASEPOINT = bytes([9]) + b"\x00" * 31
 
 
 def _derive_x25519(secret: bytes) -> bytes:
-    return pb.native_x25519_key_exchange(secret, X25519_BASEPOINT)
+    # X25519(k, 9) is the public key: bytes, as the keypair functions return it.
+    return bytes(pb.native_x25519_key_exchange(secret, X25519_BASEPOINT))
 
 
 def _derive_ed25519(secret: bytes) -> bytes:

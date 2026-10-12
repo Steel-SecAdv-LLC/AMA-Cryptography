@@ -51,7 +51,7 @@ class TestHybridCombinerEdgeCases:
             classical_ct=_random(32),
             pqc_ct=_random(1568),
         )
-        assert isinstance(result, bytes)
+        assert isinstance(result, bytearray)  # wipeable (INVARIANT-6)
         assert len(result) == 32
 
     def test_empty_pqc_shared_secret(self, combiner: HybridCombiner) -> None:
@@ -63,7 +63,7 @@ class TestHybridCombinerEdgeCases:
             classical_ct=_random(32),
             pqc_ct=_random(1568),
         )
-        assert isinstance(result, bytes)
+        assert isinstance(result, bytearray)  # wipeable (INVARIANT-6)
         assert len(result) == 32
 
     def test_very_large_inputs(self, combiner: HybridCombiner) -> None:
@@ -146,7 +146,7 @@ class TestHybridCombinerEdgeCases:
             classical_pk=b"",
             pqc_pk=b"",
         )
-        assert isinstance(result, bytes)
+        assert isinstance(result, bytearray)  # wipeable (INVARIANT-6)
         assert len(result) == 32
 
     def test_corrupted_ciphertext_binding(self, combiner: HybridCombiner) -> None:

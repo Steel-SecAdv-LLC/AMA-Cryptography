@@ -259,6 +259,25 @@ def verify_all_codes() -> Dict[str, Dict[str, float]]:
 # ============================================================================
 
 
+def _squared_distance(x: Vec, x_star: Vec) -> float:
+    """``||x - x*||^2`` for equal-length vectors, or ``+inf`` past the float range.
+
+    Every term is non-negative, so an ``OverflowError`` here -- from a square
+    (float power raises past the range where multiplication would give inf)
+    or from ``fsum``'s partial sums -- proves the true value exceeds the
+    largest finite double, and ``+inf`` is its IEEE reading.  Representable
+    values take the unchanged ``sum_(diff**2)`` path, so they are bit-for-bit
+    what they were.  Callers that publish the value decide what an infinite
+    one means: :func:`lyapunov_function` refuses it for finite inputs, and
+    ``AvaDescent.descend`` turns it into its own named refusal.
+    """
+    diff = x - x_star
+    try:
+        return float(sum_(diff**2))
+    except OverflowError:
+        return math.inf
+
+
 def lyapunov_function(state: object, target: object) -> float:
     """
     Lyapunov function V(x) = ||x - x*||².
@@ -275,7 +294,9 @@ def lyapunov_function(state: object, target: object) -> float:
 
     Raises:
         TypeError: An argument is not array-like, or holds non-numbers.
-        ValueError: An argument is not 1-D, or the two lengths differ.
+        ValueError: An argument is not 1-D, the two lengths differ, or both
+            are finite and V(x) exceeds the largest finite float (it has
+            no float value; non-finite inputs still yield inf or nan).
 
     .. versionchanged:: 4.0
        ``numpy.ndarray`` and other 1-D array-likes are accepted; see
@@ -288,8 +309,13 @@ def lyapunov_function(state: object, target: object) -> float:
             f"lyapunov_function: state has {len(x)} elements but target has "
             f"{len(x_star)}; V(x) = ||x - x*||^2 needs them to match"
         )
-    diff = x - x_star
-    return float(sum_(diff**2))
+    value = _squared_distance(x, x_star)
+    if value == math.inf and all(math.isfinite(c) for c in (*x.tolist(), *x_star.tolist())):
+        raise ValueError(
+            "lyapunov_function: V(x) = ||x - x*||^2 exceeds the largest finite "
+            "float; the state is too far from the target to evaluate"
+        )
+    return value
 
 
 def lyapunov_derivative(V: float, lambda_decay: float = LAMBDA_DECAY) -> float:

@@ -81,14 +81,14 @@ def _kyber_keygen() -> tuple[bytes, bytes]:
     return kp.public_key, bytes(kp.secret_key)
 
 
-def _kyber_encap(pk: bytes) -> tuple[bytes, bytes]:
+def _kyber_encap(pk: bytes) -> tuple[bytes, bytes | bytearray]:
     from ama_cryptography.pqc_backends import kyber_encapsulate
 
     result = kyber_encapsulate(pk)
     return result.ciphertext, result.shared_secret
 
 
-def _kyber_decap(ct: bytes, sk: bytes) -> bytes:
+def _kyber_decap(ct: bytes, sk: bytes) -> bytearray:
     from ama_cryptography.pqc_backends import kyber_decapsulate
 
     return kyber_decapsulate(ct, sk)
@@ -362,7 +362,7 @@ class TestOracleResistance:
 
         zero_ct = b"\x00" * KYBER_CT
         ss_zero = _kyber_decap(zero_ct, sk)
-        assert isinstance(ss_zero, bytes)
+        assert isinstance(ss_zero, bytearray)  # wipeable (INVARIANT-6)
 
 
 # ===========================================================================

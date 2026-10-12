@@ -115,8 +115,13 @@ if _sys.platform == "win32":
 #     imported in its place;
 #   * a package directory (any importable ``__init__``) beside a module file
 #     of the same name — the directory is imported in its place;
-#   * a symlinked package directory — the digest walk does not follow
-#     directory symlinks, so nothing in it is signed.
+#   * a symlinked directory, with or without an ``__init__`` — neither the
+#     digest walk nor this one follows it, and a directory with no
+#     ``__init__`` still imports, as a namespace package;
+#   * anything in a ``__pycache__`` that imports as a module of it (a ``.py``,
+#     a tagless ``.pyc``, an extension, a subdirectory) -- the directory is
+#     itself a namespace portion, and every layer skips it.  (PR #415 review:
+#     both imported, reproduced; neither was refused.)
 #
 # None of these is drift a rebuild can produce, so every build refuses, and
 # ``AMA_POST_DIAGNOSTIC_IMPORT`` does not demote it: importing the planted
@@ -156,6 +161,9 @@ def _find_import_shadowing(pkg_dir: str) -> list[str]:
         )
 
     for dirpath, dirnames, filenames in _os.walk(root, onerror=_unlistable):
+        if "__pycache__" in dirnames:
+            cache = _os.path.join(dirpath, "__pycache__")
+            faults.extend(_pycache_faults(cache, root, ordered))
         # A .pyc INSIDE __pycache__ is bound to its signed source by the
         # execution-integrity stage, and ignored by the import system when that
         # source is absent (PEP 3147), so the caches are not walked.
@@ -192,6 +200,16 @@ def _find_import_shadowing(pkg_dir: str) -> list[str]:
 
         for dirname in dirnames:
             full = _os.path.join(dirpath, dirname)
+            if _os.path.islink(full):
+                # Neither os.walk nor the digest's rglob descends into it,
+                # so nothing below it is examined or signed; and with no
+                # __init__ it still imports, as a namespace package.
+                faults.append(
+                    f"{_rel(full)}/: symlinked directory — neither the "
+                    "signed digest nor this walk follows it, and its modules "
+                    "import"
+                )
+                continue
             init = next(
                 (
                     "__init__" + s
@@ -211,12 +229,48 @@ def _find_import_shadowing(pkg_dir: str) -> list[str]:
                     f"{rel}/{init}: package directory shadows {shadowed[0][1]} — "
                     "the import system resolves a package directory first"
                 )
-            if _os.path.islink(full):
-                faults.append(
-                    f"{rel}/{init}: symlinked package directory — the signed "
-                    "digest does not walk directory symlinks"
-                )
     return faults
+
+
+def _pycache_faults(cache: str, root: str, ordered: list[str]) -> list[str]:
+    """What in ``cache``, a ``__pycache__`` directory, imports as a module.
+
+    PEP 3147 names a cache ``<module>.<tag>.pyc``, and a dotted stem is not
+    an import name.  Anything else there imports as ``<pkg>.__pycache__.<name>``
+    -- the directory is a namespace portion -- whether a ``.py``, a tagless
+    ``.pyc``, an extension or a subdirectory, and every integrity layer skips
+    ``__pycache__``.  Part of the import-shadowing rule.
+    """
+
+    def _rel(path: str) -> str:
+        return _os.path.relpath(path, root).replace(_os.sep, "/")
+
+    try:
+        entries = sorted(_os.listdir(cache))
+    except OSError as exc:
+        return [
+            f"{_rel(cache)}: directory cannot be listed ({exc.strerror}) — "
+            "cannot establish that it holds nothing importable"
+        ]
+    found: list[str] = []
+    for entry in entries:
+        full = _os.path.join(cache, entry)
+        if _os.path.isdir(full):
+            found.append(
+                f"{_rel(full)}/: directory inside __pycache__ — importable as a "
+                "namespace package, and covered by no integrity layer"
+            )
+            continue
+        suffix = next(
+            (s for s in ordered if entry.endswith(s) and len(entry) > len(s)),
+            None,
+        )
+        if suffix is not None and entry[: -len(suffix)].isidentifier():
+            found.append(
+                f"{_rel(full)}: importable from __pycache__ as a module — "
+                "covered by no integrity layer"
+            )
+    return found
 
 
 def _refuse_import_shadowing_before_import() -> None:
@@ -406,6 +460,9 @@ _refuse_tampered_bindings_before_import()
 
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
+from ama_cryptography._module_state import (
+    register_secret_comparator as _module_state_register_secret_comparator,
+)
 from ama_cryptography._self_test import _run_self_tests as _post
 from ama_cryptography._self_test import (
     check_crypto_permitted as check_crypto_permitted,
@@ -440,6 +497,24 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
 )
+from ama_cryptography.secure_memory import (
+    constant_time_compare as _constant_time_compare,
+)
+from ama_cryptography.secure_memory import (
+    secure_random_fill as secure_random_fill,
+)
+from ama_cryptography.secure_memory import (
+    secure_token_bytearray as secure_token_bytearray,
+)
+
+# Every secret comparison below this package's API -- the pairwise tests POST
+# runs, the secret containers' ``__eq__`` -- goes through the native
+# constant-time comparison.  ``_module_state`` holds it by injection, because
+# importing ``secure_memory`` from there is an import cycle (CodeQL
+# py/cyclic-import, PR #415); it is wired here, before POST, so the first
+# pairwise test finds it.  Unwired, a comparison refuses rather than falling
+# back to ``==``.
+_module_state_register_secret_comparator(_constant_time_compare)
 
 # FIPS 140-3 §4.9.2: a module whose power-on self-tests failed must not
 # present itself as usable.
@@ -930,6 +1005,8 @@ __all__ = [
     "post_duration_ms",
     "reset_module",
     "secure_token_bytes",
+    "secure_token_bytearray",
+    "secure_random_fill",
     "AlgorithmType",
     "AmaCryptography",
     "CryptoPackageConfig",

@@ -828,6 +828,44 @@ class TestTheCythonBindingScan:
             == [("cy_one", 1)]
         )
 
+    def test_a_wrapped_signature_is_stepped_over(self, tool: ModuleType, tmp_path: Path) -> None:
+        """A signature on two lines is still a signature.  The scan took the
+        continuation line for the body, read its deeper indentation as the
+        body's, and reported a correctly guarded binding (``cy_hkdf``, whose
+        typed-view parameters do not fit on one line) as ungated."""
+        assert (
+            self._pyx(
+                tool,
+                tmp_path,
+                """
+                def cy_wrapped(const unsigned char[::1] key,
+                               const unsigned char[::1] msg=None):
+                    check_crypto_permitted()
+                    return ama_wrapped(key, msg)
+                """,
+            )
+            == []
+        )
+
+    def test_a_wrapped_signature_does_not_hide_a_missing_guard(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Stepping over the signature must not step over the body: an
+        unguarded binding with a wrapped signature is still reported, at the
+        ``def`` line."""
+        assert (
+            self._pyx(
+                tool,
+                tmp_path,
+                """
+                def cy_wrapped(const unsigned char[::1] key,
+                               const unsigned char[::1] msg=None):
+                    return ama_wrapped(key, msg)
+                """,
+            )
+            == [("cy_wrapped", 1)]
+        )
+
     def test_the_reported_line_is_the_def(self, tool: ModuleType, tmp_path: Path) -> None:
         assert (
             self._pyx(

@@ -53,13 +53,10 @@
  * IMPLEMENTATION
  * ============================================================================ */
 
-ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
-    if (buf == NULL && len > 0) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-    if (len == 0) {
-        return AMA_SUCCESS;
-    }
+/* The OS draw itself.  Every platform arm below can fail after earlier
+ * iterations have already written output into `buf`; the scrub on that exit
+ * lives in ama_randombytes(), once, rather than in each arm. */
+static ama_error_t platform_fill(uint8_t *buf, size_t len) {
 
 #if defined(__linux__)
     /*
@@ -195,4 +192,37 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     return AMA_SUCCESS;
 
 #endif
+}
+
+/* A failed draw can leave partial CSPRNG output in the caller's buffer --
+ * secret the moment it is written (a seed, a nonce, a key).  Eight call sites
+ * once returned that error without scrubbing (tests/c/
+ * test_csprng_failure_residue.c records them); scrubbing here, at the one
+ * place every draw passes through, makes the guarantee hold for every caller,
+ * present and future.  A volatile store loop, not ama_secure_memzero(): this
+ * file is compiled on its own by the platform-arm tests, and a self-contained
+ * scrub is the same idiom with no link dependency. */
+static void scrub(uint8_t *buf, size_t len) {
+    volatile uint8_t *p = buf;
+    for (size_t i = 0; i < len; i++) {
+        p[i] = 0;
+    }
+}
+
+ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
+    if (buf == NULL && len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (len == 0) {
+        return AMA_SUCCESS;
+    }
+    ama_error_t rc = platform_fill(buf, len);
+    if (rc != AMA_SUCCESS) {
+        scrub(buf, len);
+    }
+    return rc;
+}
+
+AMA_API ama_error_t ama_random_bytes(uint8_t *buf, size_t len) {
+    return ama_randombytes(buf, len);
 }

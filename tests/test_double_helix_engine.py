@@ -19,6 +19,7 @@ AI Co-Architects:
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -166,6 +167,27 @@ class TestConvergence(unittest.TestCase):
 
         # Should stop before max_steps if converged
         self.assertLessEqual(len(history), 100)
+
+    def test_an_unrepresentable_lyapunov_state_is_refused_not_leaked(self) -> None:
+        """converge() documents ValueError for out-of-domain input; a state
+        whose ||x - x*||^2 exceeds the largest double leaked a raw
+        OverflowError (errno 34) from the helix path's Lyapunov term instead
+        (recorded 2026-10-08, PIN: removing the refusal in
+        lyapunov_function makes every subtest here fail with OverflowError).
+        Finite in-range states still converge -- the boundary sits where the
+        arithmetic puts it, not lower."""
+        dim = self.engine.state_dim
+        for name, state in (
+            ("all components 1e308", [1e308] * dim),
+            ("alternating sign 1e200", [1e200 if i % 2 else -1e200 for i in range(dim)]),
+            ("one component 1.4e154", [1.4e154] + [0.0] * (dim - 1)),
+        ):
+            with self.subTest(name):
+                with self.assertRaisesRegex(ValueError, "exceeds the largest finite float"):
+                    self.engine.converge(state, max_steps=5)
+        final, history = self.engine.converge([1.3e154] + [0.0] * (dim - 1), max_steps=5)
+        self.assertTrue(all(math.isfinite(v) for v in final.tolist()))
+        self.assertTrue(all(math.isfinite(v) for v in history))
 
     def test_convergence_rollback_on_instability(self) -> None:
         """Test rollback occurs if Lyapunov V̇ > 0 (instability)."""

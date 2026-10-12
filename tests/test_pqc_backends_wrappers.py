@@ -118,7 +118,7 @@ class TestX25519Batch:
         # in) and the scalar tail.
         scalars: list[bytes] = []
         points: list[bytes] = []
-        expected: list[bytes] = []
+        expected: list[bytearray] = []
         for _ in range(7):
             _our_pk, our_sk = pq.native_x25519_keypair()
             their_pk, _their_sk = pq.native_x25519_keypair()
@@ -148,7 +148,8 @@ class TestArgon2idValidation:
 
     def test_basic_derivation(self) -> None:
         out = pq.native_argon2id(b"hunter2", self._GOOD_SALT, t_cost=1, m_cost=8, parallelism=1)
-        assert isinstance(out, bytes) and len(out) == 32
+        # A bytearray, so the derived key can be zeroed (CHANGELOG [5.0.0] row 24).
+        assert isinstance(out, bytearray) and len(out) == 32
 
     def test_salt_too_short(self) -> None:
         with pytest.raises(ValueError, match="salt"):
@@ -229,7 +230,7 @@ class TestArgon2idLegacyVerify:
     _P = 1
     _OUT_LEN = 32
 
-    def _legacy_tag(self) -> bytes:
+    def _legacy_tag(self) -> bytearray:
         """Derive a legacy (pre-2.1.5) tag via the public wrapper.
 
         We exercise ``native_argon2id_legacy`` because ``native_argon2id``

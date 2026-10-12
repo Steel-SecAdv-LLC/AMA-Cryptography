@@ -390,6 +390,20 @@ _FILE_SCOPED_AFTER_HEADER = {
 }
 
 
+#: Forms a mypy release stopped honouring, and the first release that does not.
+#: mypy 2.4.0 no longer applies a ``# mypy:``
+#: line inside a docstring (measured 2026-10-08: the
+#: docstring row exits 0 under 2.3.1 and 1 under 2.4.0, same file and flags).
+_HONOURED_BEFORE: dict[str, tuple[int, int]] = {"mypy-inside-docstring": (2, 4)}
+
+
+def _mypy_version() -> tuple[int, int]:
+    from mypy.version import __version__
+
+    major, minor = __version__.split(".")[:2]
+    return int(major), int(minor)
+
+
 class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
     """mypy's file-scoped forms are defined by POSITION, not by line 1.
 
@@ -430,6 +444,12 @@ class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
                 str(target),
             ]
         )
+        if label in _HONOURED_BEFORE and _mypy_version() >= _HONOURED_BEFORE[label]:
+            # Measured on both sides: mypy 2.3.1 is silenced by this form and
+            # 2.4.0 is not.  The gate keeps refusing it, because every mypy
+            # below the boundary -- CI's pin among them -- still honours it.
+            assert status == 1, f"{label}: mypy {_mypy_version()} is silenced again"
+            return
         assert status == 0, f"{label}: mypy was NOT silenced:\n{out}{err}"
 
     def test_the_control_body_fails_mypy(self, tmp_path: Path) -> None:

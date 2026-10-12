@@ -271,12 +271,12 @@ class TestKeyManagementDecryptPaths:
         # Retrieve
         retrieved = temp_storage.retrieve_key(key_id)
 
-        assert retrieved == key_data
-        assert isinstance(retrieved, bytes)
+        assert retrieved == bytearray(key_data)
+        assert isinstance(retrieved, bytearray)
 
     @skip_no_native_aes
-    def test_retrieve_returns_bytes_type(self, temp_storage: Any) -> None:
-        """Retrieved key is explicitly bytes type."""
+    def test_retrieve_returns_bytearray_type(self, temp_storage: Any) -> None:
+        """Retrieved key is a bytearray, so its holder can wipe it."""
         import secrets
 
         key_data = secrets.token_bytes(32)
@@ -285,8 +285,9 @@ class TestKeyManagementDecryptPaths:
         temp_storage.store_key(key_id, key_data)
         retrieved = temp_storage.retrieve_key(key_id)
 
-        # Type check - this tests our type annotation fix
-        assert type(retrieved) is bytes
+        # Exactly bytearray: an immutable bytes copy could not be zeroed
+        # (INVARIANT-6).
+        assert type(retrieved) is bytearray
 
     def test_retrieve_nonexistent_key_returns_none(self, temp_storage: Any) -> None:
         """Retrieving non-existent key returns None."""
@@ -405,14 +406,15 @@ class TestKeyManagementContextManager:
 class TestHDKeyDerivation:
     """Tests for HD key derivation."""
 
-    def test_derive_key_returns_bytes(self) -> None:
-        """derive_path with hardened-only path returns bytes."""
+    def test_derive_key_returns_a_wipeable_bytearray(self) -> None:
+        """derive_path with hardened-only path returns a bytearray (INVARIANT-6;
+        CHANGELOG [5.0.0] row 24), which the caller can zero."""
         from ama_cryptography.key_management import HDKeyDerivation
 
         hd = HDKeyDerivation()
         key, _ = hd.derive_path("m/44'/0'/0'")
 
-        assert isinstance(key, bytes)
+        assert isinstance(key, bytearray)
         assert len(key) == 32
 
     def test_different_indices_different_keys(self) -> None:
@@ -513,11 +515,12 @@ class TestSecureRandomBytes:
     """Additional tests for secure random bytes."""
 
     def test_zero_length(self) -> None:
-        """Zero length returns empty bytes."""
+        """Zero length returns an empty bytearray."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(0)
-        assert result == b""
+        assert type(result) is bytearray
+        assert result == bytearray()
 
     def test_large_size(self) -> None:
         """Can generate large random buffers."""
@@ -527,7 +530,7 @@ class TestSecureRandomBytes:
         result = secure_random_bytes(size)
 
         assert len(result) == size
-        assert isinstance(result, bytes)
+        assert type(result) is bytearray
 
     def test_entropy_quality(self) -> None:
         """Random bytes have reasonable entropy."""
@@ -613,6 +616,8 @@ class TestModuleExports:
             "secure_mlock",
             "secure_munlock",
             "secure_random_bytes",
+            "secure_random_fill",
+            "secure_token_bytearray",
         ]
 
         for name in expected_exports:

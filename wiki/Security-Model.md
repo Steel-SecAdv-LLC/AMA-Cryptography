@@ -10,12 +10,12 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | **Not externally audited** |
 | Version | 5.0.0 |
-| Last Updated | 2026-10-05 |
+| Last Updated | 2026-10-08 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
-> **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
+> **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit, and the project does not commission one: the composition protocol is self-attested, not independently audited, and a downstream user who needs third-party assurance commissions their own review. Recommended for production use:
 > - An HSM validated to FIPS 140-3 Level 3 or higher for master secrets
-> - Independent security review by qualified cryptographers
+> - An independent security review, commissioned by the deployer, by qualified cryptographers
 > - Constant-time implementation verification
 > - Secure file permissions for key files (encrypted volumes, restricted access)
 
@@ -156,7 +156,7 @@ which is authoritative.
 | Version | Security Support |
 |---------|-----------------|
 | 5.0.x | ✓ Current line; 5.0.0 released 2026-10-08 |
-| 4.0.x | ✗ Superseded by v5.0 (eleven breaking changes — see CHANGELOG `[5.0.0]`) |
+| 4.0.x | ✗ Superseded by v5.0 (twelve breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | ✗ Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
 | 3.3.x | ✗ Superseded by v3.4 (no public API removals) |
@@ -201,7 +201,7 @@ which is authoritative.
 Before deploying AMA Cryptography in production:
 
 - [ ] Master secrets stored in an HSM validated to FIPS 140-3 Level 3 or higher
-- [ ] Independent security review by qualified cryptographers
+- [ ] Independent security review commissioned by the deployer, where third-party assurance is needed (the project is self-attested and does not commission one)
 - [ ] Constant-time AES confirmed enabled (default `AMA_AES_CONSTTIME=ON`; verify in CMake output)
 - [ ] Key file permissions restricted (mode 0600, encrypted volume)
 - [ ] If timestamps are relied upon: the token's issuer is established **outside AMA** (authenticated channel to the TSA, or out-of-band validation before storage). Configuring a reputable TSA alone has no verification consequence — AMA checks the §2.4.2 binding only and accepts a forged token identically

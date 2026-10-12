@@ -607,7 +607,7 @@ class TestTheAuthorityKeyIsAnInputNotOnlyAGate:
         ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
         key = binding.derive_key(ikm, 32, salt=salt, info=info, authority_key=AUTHORITY_KEY)
 
-        def rebuilt(binder_key: bytes) -> bytes:
+        def rebuilt(binder_key: bytes) -> bytearray:
             return native_hkdf(
                 ikm,
                 32,

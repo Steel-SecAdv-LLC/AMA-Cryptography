@@ -110,7 +110,7 @@ def _load(name: str) -> dict[str, Any]:
 
 
 def _pem(record: dict[str, Any]) -> str:
-    return kf.encode_pem(base64.b64decode(record["pem_b64"]), record["label"])
+    return kf.encode_pem(base64.b64decode(record["pem_b64"]), record["label"]).decode("ascii")
 
 
 def _der(record: dict[str, Any]) -> bytes:
@@ -170,7 +170,7 @@ def _reencode(key: kf.PublicKey | kf.PrivateKey, which: str) -> bytes:
         assert isinstance(key, kf.PublicKey), which
         return key.to_spki()
     assert isinstance(key, kf.PrivateKey), which
-    return key.to_pkcs8()
+    return bytes(key.to_pkcs8())
 
 
 def make_key(name: str) -> tuple[kf.PublicKey, kf.PrivateKey]:
@@ -314,7 +314,8 @@ def test_pq_seed_and_expanded_forms_describe_the_same_key() -> None:
             by_algorithm.setdefault(key.algorithm, []).append((record["arm"], key))
         for algorithm, entries in by_algorithm.items():
             assert len(entries) == 3, f"{algorithm}: expected all three arms"
-            keys = {arm: key.key for arm, key in entries}
+            # bytes() for hashing: private keys are held in bytearrays.
+            keys = {arm: bytes(key.key) for arm, key in entries}
             key_lengths = {arm: len(v) for arm, v in keys.items()}
             assert len(set(keys.values())) == 1, (
                 f"{algorithm}: the seed, expandedKey and both arms of the same "
@@ -702,7 +703,7 @@ def test_a_scalar_with_leading_zero_octets_keeps_its_width(name: str, shape: str
         "a leading zero was dropped somewhere"
     )
     # The JWK 'd' member is fixed width too (RFC 7518 §6.2.2.1).
-    d = private.to_jwk()["d"]
+    d = json.loads(private.to_jwk())["d"]
     assert len(base64.urlsafe_b64decode(d + "=" * (-len(d) % 4))) == width
 
 
@@ -789,7 +790,12 @@ def test_rfc8037_private_jwk_vector() -> None:
         "the JWK's 'x' is not what its 'd' derives to — either the base64url "
         "decode or the Ed25519 public-key derivation is wrong"
     )
-    assert key.to_jwk() == record["jwk"]
+    # The private JWK is text in a bytearray (a dict would hold `d` in an
+    # immutable str): same members and values as RFC 8037 A.1 ...
+    assert json.loads(key.to_jwk()) == record["jwk"]
+    # ... in this module's fixed member order, byte for byte.
+    expected = {m: record["jwk"][m] for m in ("kty", "crv", "x", "d")}
+    assert bytes(key.to_jwk()) == json.dumps(expected, separators=(",", ":")).encode()
 
 
 def test_rfc8037_public_jwk_vector() -> None:
@@ -1045,7 +1051,7 @@ def test_a_private_key_never_leaks_into_a_public_encoding(name: str) -> None:
     for key in (private, seeded):
         if key is None:
             continue
-        secrets: list[tuple[str, bytes]] = [("key", key.key)]
+        secrets: list[tuple[str, bytes | bytearray]] = [("key", key.key)]
         if key.seed is not None:
             secrets.append(("seed", key.seed))
         for form, encoded in _public_encodings(key.public()):
@@ -1321,7 +1327,7 @@ def test_the_pkcs8_version_must_agree_with_the_publickey_field(name: str) -> Non
     reject RFC 9500 §2.3's own keys.
     """
     _, private = make_key(name)
-    conventional = private.to_pkcs8()
+    conventional = bytes(private.to_pkcs8())
     assert kf.load_pkcs8(conventional).key == private.key
 
     # v2 with no outer publicKey — the case that used to be accepted.
@@ -1334,7 +1340,7 @@ def test_the_pkcs8_version_must_agree_with_the_publickey_field(name: str) -> Non
         # the conventional setting.
         return
     # The converse: an outer publicKey with the version left at v1.
-    with_public = private.to_pkcs8(include_public_key=True)
+    with_public = bytes(private.to_pkcs8(include_public_key=True))
     assert kf.load_pkcs8(with_public).public_key == private.public().key
     with pytest.raises(KeyFormatError, match="requires v2"):
         kf.load_pkcs8(_with_pkcs8_version(with_public, 0))
@@ -1479,6 +1485,32 @@ def test_jwk_with_padded_or_standard_base64_is_refused() -> None:
             kf.jwk_to_public_key(jwk)
 
 
+def test_jwk_with_non_zero_trailing_pad_bits_is_refused() -> None:
+    """RFC 4648 §3.5: the unused low bits of the final character must be zero.
+
+    A 32-byte Ed25519 ``d`` encodes to 43 characters whose last one carries
+    only four significant bits, so ``...A`` and ``...B`` decoded to the same
+    private key — two JWKs, one secret, two thumbprints.  The re-encode
+    comparison in ``_unb64u`` is the only guard against it (PIN: replacing
+    that comparison with ``True`` makes this test fail; the padded and
+    standard-alphabet refusals above do not cover it).
+    """
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    record = next(r for r in JOSE_COSE if r["format"] == "jwk" and r["kind"] == "private")
+    jwk = dict(record["jwk"])
+    d = jwk["d"]
+    unused_bits = (len(d) * 6) % 8
+    assert unused_bits, "fixture: this member length leaves no unused pad bits"
+    last = alphabet.index(d[-1])
+    assert last & ((1 << unused_bits) - 1) == 0, "fixture: the published vector is canonical"
+    jwk["d"] = d[:-1] + alphabet[last | 1]
+    assert base64.urlsafe_b64decode(jwk["d"] + "=") == base64.urlsafe_b64decode(
+        d + "="
+    ), "fixture: both spellings must decode to the same key for this to test anything"
+    with pytest.raises(KeyFormatError, match="not canonically encoded"):
+        kf.jwk_to_private_key(jwk)
+
+
 def test_jwk_with_a_non_string_member_is_refused() -> None:
     public, _ = make_key("P-256")
     jwk = public.to_jwk()
@@ -1522,7 +1554,7 @@ def test_jwk_that_is_not_an_object_is_refused() -> None:
 def test_jwk_private_key_whose_halves_disagree_is_refused() -> None:
     _, private = make_key("P-256")
     _, other = make_key("P-256")
-    jwk = private.to_jwk()
+    jwk = json.loads(private.to_jwk())
     jwk["d"] = base64.urlsafe_b64encode(other.key).rstrip(b"=").decode()
     with pytest.raises(KeyFormatError, match="inconsistent"):
         kf.jwk_to_private_key(jwk)
@@ -1530,7 +1562,7 @@ def test_jwk_private_key_whose_halves_disagree_is_refused() -> None:
 
 def test_jwk_private_key_of_the_wrong_width_is_refused() -> None:
     _, private = make_key("P-256")
-    jwk = private.to_jwk()
+    jwk = json.loads(private.to_jwk())
     jwk["d"] = base64.urlsafe_b64encode(private.key[:-1]).rstrip(b"=").decode()
     with pytest.raises(KeyFormatError, match="'d' must be 32 bytes"):
         kf.jwk_to_private_key(jwk)
@@ -1791,7 +1823,7 @@ def test_the_conventional_answer_matches_what_the_encoder_emitted(name: str) -> 
     """
     _, private = make_key(name)
     reparsed = kf.load_pkcs8(private.to_pkcs8())
-    carries_public = _pkcs8_carries_a_public_key(private.to_pkcs8(), kf.ALGORITHMS[name])
+    carries_public = _pkcs8_carries_a_public_key(bytes(private.to_pkcs8()), kf.ALGORITHMS[name])
     assert carries_public is kf.conventional_include_public_key(name)
     assert reparsed.key == private.key
 
@@ -2300,7 +2332,7 @@ def test_pem_footer_must_start_its_own_line() -> None:
 
     # The same hole on a private key, and via the PKCS#8 parser.
     _, private = make_key("P-384")
-    priv_pem = private.to_pem()
+    priv_pem = private.to_pem().decode("ascii")
     glued_priv = priv_pem.replace("\n-----END PRIVATE KEY-----", "-----END PRIVATE KEY-----")
     with pytest.raises(KeyFormatError, match="RFC 7468"):
         kf.load_pkcs8(glued_priv)
@@ -2420,6 +2452,7 @@ def _key_material_window(
     correct as encodings change.
     """
     alg = kf.ALGORITHMS[name]
+    material: bytes | bytearray
     if which == "spki":
         material = (b"\x04" + public.key) if alg.kind == "ec" else public.key
     else:
@@ -2469,7 +2502,7 @@ def test_mutated_der_is_refused_cleanly(name: str, which: str) -> None:
        is zero, and zero is asserted.
     """
     public, private = make_key(name)
-    original = public.to_spki() if which == "spki" else private.to_pkcs8()
+    original = public.to_spki() if which == "spki" else bytes(private.to_pkcs8())
     load = kf.load_spki if which == "spki" else kf.load_pkcs8
     window = _key_material_window(name, which, public, private, original)
 
@@ -2543,7 +2576,7 @@ def test_every_structural_octet_is_refused_when_corrupted(name: str, which: str)
     most, so a whole class of corruption could go unexercised for years.
     """
     public, private = make_key(name)
-    original = public.to_spki() if which == "spki" else private.to_pkcs8()
+    original = public.to_spki() if which == "spki" else bytes(private.to_pkcs8())
     load = kf.load_spki if which == "spki" else kf.load_pkcs8
     window = _key_material_window(name, which, public, private, original)
 

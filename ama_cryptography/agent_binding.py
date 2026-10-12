@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import ctypes
 import enum
-from typing import Any, Optional, Union
+from typing import Any, Optional, Tuple, Union
 
 from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import AmaCryptographyError
@@ -272,6 +272,24 @@ def _as_bytes(name: str, value: _BufferInput, expected: Optional[int] = None) ->
     return out
 
 
+def _secret_arg(name: str, value: _BufferInput) -> Tuple[Any, int]:
+    """``(holder, length)`` for a SECRET argument -- the authority key, HKDF
+    input keying material -- passed to C in its own storage.
+
+    ``_as_bytes`` copies, and a copy of a secret into ``bytes`` is one no
+    caller can wipe (INVARIANT-6): a ``bytearray`` key handed in so it could
+    be zeroed afterwards left an immutable copy on every call (PR #415 review
+    sweep).  Borrowed through ``pqc_backends._borrow``, the rule every other
+    wrapper follows.  Keep the holder alive across the native call.
+    """
+    from ama_cryptography.pqc_backends import _borrow
+
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{name} must be bytes-like, got {type(value).__name__}")
+    length = memoryview(value).nbytes
+    return (_borrow(value) if length else None), length
+
+
 def _raise_for_rc(rc: int, operation: str) -> None:
     if rc == _AMA_SUCCESS:
         return
@@ -422,13 +440,12 @@ class AgentBinding:
         Operator-side call.  Requires the authority key an agent does not hold.
         """
         lib = _require_native()
-        key = _as_bytes("authority_key", authority_key)
-        if len(key) < AUTHORITY_KEY_MIN_BYTES:
+        key, key_len = _secret_arg("authority_key", authority_key)
+        if key_len < AUTHORITY_KEY_MIN_BYTES:
             raise ValueError(
-                f"authority_key must be at least {AUTHORITY_KEY_MIN_BYTES} bytes, "
-                f"got {len(key)}"
+                f"authority_key must be at least {AUTHORITY_KEY_MIN_BYTES} bytes, " f"got {key_len}"
             )
-        rc = lib.ama_agent_binding_authorize(ctypes.byref(self._c), key, ctypes.c_size_t(len(key)))
+        rc = lib.ama_agent_binding_authorize(ctypes.byref(self._c), key, ctypes.c_size_t(key_len))
         _raise_for_rc(rc, "agent binding authorize")
 
     def check(self, authority_key: Optional[_BufferInput] = None) -> None:
@@ -437,10 +454,10 @@ class AgentBinding:
         Unrestricted bindings pass with ``authority_key=None``.
         """
         lib = _require_native()
-        key = None if authority_key is None else _as_bytes("authority_key", authority_key)
-        rc = lib.ama_agent_binding_check(
-            ctypes.byref(self._c), key, ctypes.c_size_t(0 if key is None else len(key))
+        key, key_len = (
+            (None, 0) if authority_key is None else _secret_arg("authority_key", authority_key)
         )
+        rc = lib.ama_agent_binding_check(ctypes.byref(self._c), key, ctypes.c_size_t(key_len))
         _raise_for_rc(rc, "agent binding check")
 
     def is_permitted(self, authority_key: Optional[_BufferInput] = None) -> bool:
@@ -471,12 +488,14 @@ class AgentBinding:
         context does not verify under this one, whatever the binding.
         """
         lib = _require_native()
-        key = None if authority_key is None else _as_bytes("authority_key", authority_key)
+        key, key_len = (
+            (None, 0) if authority_key is None else _secret_arg("authority_key", authority_key)
+        )
         out = (ctypes.c_uint8 * SIGNATURE_CONTEXT_BYTES)()
         rc = lib.ama_agent_binding_context(
             ctypes.byref(self._c),
             key,
-            ctypes.c_size_t(0 if key is None else len(key)),
+            ctypes.c_size_t(key_len),
             out,
         )
         _raise_for_rc(rc, "agent binding signature context")
@@ -489,8 +508,9 @@ class AgentBinding:
         salt: Optional[_BufferInput] = None,
         info: Optional[_BufferInput] = None,
         authority_key: Optional[_BufferInput] = None,
-    ) -> bytes:
-        """HKDF-SHA3-256 with this binding folded into ``info``.
+    ) -> bytearray:
+        """HKDF-SHA3-256 with this binding folded into ``info``, returned in a
+        wipeable ``bytearray`` (INVARIANT-6).
 
         For a RESTRICTED binding the output is a function of ``authority_key``
         as well — the C side mixes in a binder derived from it — so an agent
@@ -520,24 +540,34 @@ class AgentBinding:
         if length <= 0 or length > _HKDF_MAX_OUTPUT:
             raise ValueError(f"length must be 1..{_HKDF_MAX_OUTPUT}, got {length}")
 
-        ikm_b = _as_bytes("ikm", ikm)
+        from ama_cryptography.pqc_backends import _take_secret, _wipe
+
+        ikm_buf, ikm_len = _secret_arg("ikm", ikm)
         salt_b = None if salt is None else _as_bytes("salt", salt)
         info_b = None if info is None else _as_bytes("info", info)
-        key = None if authority_key is None else _as_bytes("authority_key", authority_key)
-
-        out = (ctypes.c_uint8 * length)()
-        rc = lib.ama_hkdf_agent_bound(
-            ctypes.byref(self._c),
-            key,
-            ctypes.c_size_t(0 if key is None else len(key)),
-            salt_b,
-            ctypes.c_size_t(0 if salt_b is None else len(salt_b)),
-            ikm_b,
-            ctypes.c_size_t(len(ikm_b)),
-            info_b,
-            ctypes.c_size_t(0 if info_b is None else len(info_b)),
-            out,
-            ctypes.c_size_t(length),
+        key, key_len = (
+            (None, 0) if authority_key is None else _secret_arg("authority_key", authority_key)
         )
-        _raise_for_rc(rc, "agent-bound HKDF")
-        return bytes(out)
+
+        # The derived key is moved into a wipeable bytearray and the ctypes
+        # output buffer scrubbed on every path; ``bytes(out)`` returned an
+        # immutable copy and left the buffer populated (PR #415 review sweep).
+        out = (ctypes.c_uint8 * length)()
+        try:
+            rc = lib.ama_hkdf_agent_bound(
+                ctypes.byref(self._c),
+                key,
+                ctypes.c_size_t(key_len),
+                salt_b,
+                ctypes.c_size_t(0 if salt_b is None else len(salt_b)),
+                ikm_buf,
+                ctypes.c_size_t(ikm_len),
+                info_b,
+                ctypes.c_size_t(0 if info_b is None else len(info_b)),
+                out,
+                ctypes.c_size_t(length),
+            )
+            _raise_for_rc(rc, "agent-bound HKDF")
+            return _take_secret(out)
+        finally:
+            _wipe(out)

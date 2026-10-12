@@ -133,9 +133,6 @@
   .sl1 { background: var(--s1); } .sl2 { background: var(--s2); }
   .sl3 { background: var(--s3); } .sl4 { background: var(--s4); }
   .sl5 { background: var(--s5); }
-  /* A ratio below 1.0 is a floor above delivered throughput — a distinct state,
-     not a series, so it takes the reserved status colour and says so in words. */
-  .deficit { background: var(--critical); }
 
   .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 16px; padding: 0; list-style: none; }
   .legend li { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-secondary); }
@@ -205,7 +202,7 @@
   </section>
 
   <section class="card">
-    <h2>secp256k1 — fixed-base comb vs. Montgomery ladder</h2>
+    <h2>secp256k1 — fixed-base comb vs. Montgomery ladder (recorded 2026-07-29)</h2>
     <p class="note">
       Public-key derivation and the ECDSA signing nonce both compute
       <code>d·G</code> against the compile-time generator. Both used the generic
@@ -213,6 +210,9 @@
       scalar bit because it must not branch. A 4-block precomputed comb replaces
       256 of each with 64. Verification is deliberately unchanged — it is
       variable-time by design and already uses Shamir's trick. Raw C, µs/op.
+      These six figures are the before/after record of that change (#379,
+      <code>docs/BENCHMARK_HISTORY.md</code>, 2026-07-29), fixed in this page; they are
+      not part of the run above.
     </p>
     <div id="secp"></div>
     <p class="axisnote">
@@ -222,42 +222,24 @@
     </p>
   </section>
 
-  <section class="card">
-    <h2>Measured ÷ floor, against the <em>old</em> floors</h2>
-    <p class="note">
-      What the regression gate was actually comparing before this recalibration.
-      The floors were calibrated against v2.1.2 and declared valid through v3.0.0
-      while the library shipped __VERSION__ — and nothing read that field, so the
-      gate kept reporting PASS against four-release-old numbers. A ratio of 18×
-      means throughput would have to fall 94 % before the gate noticed; a gate
-      that cannot fail is worse than no gate, because it manufactures assurance.
-      Bars below 1.0 are the opposite problem — a floor already at or above what
-      this host delivers — and are marked in red.
-    </p>
-    <div class="rows" id="headroom"></div>
-    <p class="axisnote">
-      New floors are 0.65 × min(measured, canonical) per the project's documented
-      35 %-headroom convention, so a floor can never exceed what the canonical
-      runner achieves. No floor was lowered: where this host measures slower than
-      canonical (AES-GCM, X25519) the existing floor stands. That combination is
-      what makes the recalibration robust to this host's run-to-run variance —
-      the canonical cap absorbs high outliers and the never-lower rule absorbs low
-      ones. <strong>AES-GCM is the one entry to watch:</strong> its floor was already
-      above this host's throughput before any change here, so it clears the gate
-      only on the 40 % tolerance. It needs a canonical-runner measurement, not a
-      floor edit.
-    </p>
-  </section>
 
   <section class="card">
     <h2>All measurements</h2>
     <p class="note">
-      The table view. It is also the accessibility relief for the three light-mode
-      hues that sit below 3:1 against the surface.
+      One run of <code>benchmark_runner.py</code> on the host named at the top. Each
+      figure is the fastest of the run's sampled batches: there is one sample per row,
+      so no confidence interval, and differences of a few percent are within this
+      runner's run-to-run variation. Rows measure different work (a 1 KiB hash, one
+      signature, a batch of four scalar multiplications) and are not comparable with
+      each other. A row fails the gate only below <em>floor × (1 − tolerance)</em>, the
+      column shown; the floors were calibrated on the host <code>baseline.json</code>
+      names, so this run's ops/sec divided by a floor is not a like-for-like ratio
+      when the two hosts differ. The table is also the accessibility relief for the
+      three light-mode hues that sit below 3:1 against the surface.
     </p>
     <div class="tablewrap"><table id="maintable">
       <thead><tr>
-        <th>Primitive</th><th>Family</th><th>ops/sec</th><th>Floor</th><th>Margin</th><th>Gate</th>
+        <th>Primitive</th><th>Family</th><th>ops/sec</th><th>Floor</th><th>Tolerance</th><th>Fails below</th><th>Gate</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -291,10 +273,9 @@ const SECP = [
   { op: "ECDSA verify",      before: 282.45, after: 274.98 },
 ];
 const tiles = [
-  { k: "secp256k1 pubkey", v: "4.26×", d: "355 → 83 µs/op", up: true },
-  { k: "secp256k1 sign",   v: "3.13×", d: "393 → 126 µs/op", up: true },
-  { k: "Regression gate",  v: DATA.results.filter(r => r.passed).length + "/" + DATA.results.length, d: "against recalibrated floors" },
-  { k: "Tightest re-floor", v: "12.0×", d: "crypto package create" },
+  { k: "secp256k1 pubkey", v: "4.26×", d: "355 → 83 µs/op (recorded 2026-07-29)", up: true },
+  { k: "secp256k1 sign",   v: "3.13×", d: "393 → 126 µs/op (recorded 2026-07-29)", up: true },
+  { k: "Regression gate",  v: DATA.results.filter(r => r.passed).length + "/" + DATA.results.length, d: "rows within tolerance, this run" },
   { k: "Library version",  v: DATA.version, d: "floors now valid through " + DATA.baselineMeta.applies_through_release },
 ];
 const tw = document.getElementById("tiles");
@@ -360,40 +341,14 @@ SECP.forEach(s => {
   sh.append(p);
 });
 
-/* ---------- headroom (pre-recalibration) ---------- */
-const OLD_FLOORS = {
-  ama_sha3_256_hash: 31000, hmac_sha3_256: 19500, ed25519_keygen: 10560,
-  ed25519_sign: 10430, ed25519_verify: 5113, secp256k1_ecdsa_sign: 1370,
-  secp256k1_ecdsa_verify: 2000, hkdf_derive: 12500, full_package_create: 200,
-  full_package_verify: 700, dilithium_keygen: 1943, dilithium_sign: 130,
-  dilithium_verify: 900, kyber_keygen: 2200, kyber_encapsulate: 2400,
-  aes_256_gcm_encrypt: 150000, chacha20poly1305_encrypt: 32000,
-  x25519_scalarmult: 13000, x25519_scalarmult_batch4: 2600,
-};
-const hr = DATA.results.map(r => ({ ...r, mult: r.ops / OLD_FLOORS[r.key] }))
-  .sort((a, b) => b.mult - a.mult);
-const hmax = Math.max(...hr.map(r => r.mult));
-const hh = document.getElementById("headroom");
-hr.forEach(r => {
-  const row = el("div", "row");
-  row.append(el("div", "name", r.label));
-  const track = el("div", "track");
-  const bar = el("div", "bar " + (r.mult < 1 ? "deficit" : "sl" + r.slot));
-  const w = Math.max(1.5, r.mult / hmax * 100);
-  bar.style.width = w + "%";
-  bar.append(el("span", "val" + (w < 16 ? " outside" : ""), r.mult.toFixed(2) + "×"));
-  track.append(bar);
-  row.append(track);
-  hh.append(row);
-});
-
 /* ---------- tables ---------- */
 const tb = document.querySelector("#maintable tbody");
 sorted.forEach(r => {
   const tr = el("tr");
   tr.append(el("td", null, r.label), el("td", null, r.family),
             el("td", null, fmt(r.ops)), el("td", null, fmt(r.floor)),
-            el("td", null, (r.ops / r.floor).toFixed(2) + "×"));
+            el("td", null, r.tolerance + " %"),
+            el("td", null, fmt(r.floor * (1 - r.tolerance / 100))));
   const g = el("td"); const p = el("span", "pill", r.passed ? "pass" : "FAIL");
   if (!r.passed) p.style.color = "var(--critical)";
   g.append(p); tr.append(g);

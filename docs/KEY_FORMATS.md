@@ -43,19 +43,26 @@ from ama_cryptography.key_formats import (
     load_spki,
 )
 from ama_cryptography.pqc_backends import native_nistp_keypair
+from ama_cryptography.secure_memory import secure_memzero
 
 pub, priv = native_nistp_keypair("P-256")
 private = PrivateKey("P-256", priv, pub)
 public = PublicKey("P-256", pub)
 
-Path("key.pem").write_text(private.to_pem())      # PKCS#8, RFC 5958
-Path("key.pub").write_text(public.to_pem())       # SPKI
+pem = private.to_pem()                            # PKCS#8, RFC 5958: a bytearray
+Path("key.pem").write_bytes(pem)                  # bytes out, not text
+secure_memzero(pem)                               # wipe it when you are done
+Path("key.pub").write_text(public.to_pem())       # SPKI: public, so a str
 
 jwk = public.to_jwk()                             # RFC 7518 / 8037
 thumbprint = jwk_thumbprint(jwk)                  # RFC 7638
 cose = public.to_cose()                           # RFC 9052, deterministic CBOR
 
-reloaded = load_pkcs8(Path("key.pem").read_text())   # DER or strict PEM
+buffer = bytearray(Path("key.pem").stat().st_size)
+with open("key.pem", "rb") as handle:             # read into a buffer you can wipe
+    handle.readinto(buffer)
+reloaded = load_pkcs8(buffer)                     # DER or strict PEM
+secure_memzero(buffer)
 assert reloaded.public().key == public.key
 assert load_spki(Path("key.pub").read_text()).key == public.key
 ```
@@ -68,8 +75,56 @@ touch a key file.
 `tests/test_documented_examples.py` runs this block verbatim, so a snippet that
 has drifted is a failing test rather than a new user's first error.
 
-`load_spki` and `load_pkcs8` accept DER bytes, a PEM string, or bytes holding
-PEM text — a file read in binary mode is the common case and works.
+`load_spki` and `load_pkcs8` accept DER, or PEM as a `str` or as bytes-like
+(`bytes`, `bytearray`, `memoryview`) — a file read in binary mode is the common
+case and works. Private-key output is a wipeable `bytearray`; see
+[Wiping private-key output](#wiping-private-key-output).
+
+## Wiping private-key output
+
+A private key's encodings contain the key, and a Python `bytes`, `str` or `dict`
+cannot be zeroed. So the private encodings are returned in a `bytearray`
+(INVARIANT-6), built once into a buffer of exactly its size with no immutable
+copy of the key made on the way, and every scratch buffer the library makes is
+zeroed on success, refusal and exception.
+
+| Call | Returns |
+|---|---|
+| `PrivateKey.to_pkcs8()` | `bytearray`: the DER |
+| `PrivateKey.to_pem()` | `bytearray`: ASCII RFC 7468 text, not a `str` |
+| `PrivateKey.to_jwk()`, `private_key_to_jwk()` | `bytearray`: compact UTF-8 JSON, members `kty`, `crv`, `x`, (`y`), `d` |
+| `PrivateKey.to_cose()`, `private_key_to_cose()` | `bytearray`: deterministic CBOR |
+| `encode_pem(der, label)` | `bytearray`, for any label |
+| `decode_pem(text)` | `(label, bytearray)` |
+| `PublicKey.to_spki()` / `to_pem()` / `to_jwk()` / `to_cose()` | unchanged: `bytes` / `str` / `dict` / `bytes` |
+
+The object is a `ZeroizingBytearray`, a `bytearray` subclass that zeroes itself
+when collected, prints its length and never its content, refuses `pickle` and
+`copy`, and stays unhashable. Call `ama_cryptography.secure_memory.secure_memzero(x)`
+to wipe it sooner, and compare secrets with `constant_time_compare`. The loaders
+(`load_pkcs8`, `decode_pem`, `cose_to_private_key`) read the caller's buffer in
+place, never modify it, and parse from one work copy they zero; they accept `str`
+or bytes-like input.
+
+Outside the guarantee: anything made from the result (`bytes(x)`, `x.decode()`,
+`x[:n]`, `json.loads(x)`, `write_text`, logging), a `str` passed in (immutable and
+the caller's), the JSON parser's own copies when loading a JWK, and swap, core
+dumps and registers. An asynchronous exception between the native Base64 codec
+returning and the assignment that names its buffer leaves that buffer unwiped.
+
+For callers: `Path.write_text(key.to_pem())`, `hash(x)`, `json.dumps(x)` and `str`
+methods raise `TypeError`; `isinstance(x, bytes)` is `False` and `x == some_str`
+is silently `False`. Exports cost about 1.4x to 2.4x the instructions of the
+immutable encoders (P-256 `to_pkcs8` 176,488 to 307,293 retired instructions per
+call, Intel Xeon 2.80 GHz, gcc 13.3.0 Release, CPython 3.13.16); loaders are
+within 1.5 %.
+
+Interop (CPython 3.13.16, x86-64 Linux): pyca `cryptography`, `openssl pkey`,
+`hashlib`, `base64`, `Path.write_bytes`, `json.loads`, `cbor2`, `pycose`,
+`jwcrypto` and `joserfc`/`Authlib` (PEM) take the returned buffer directly.
+`PyJWT` and `python-jose` `encode`, `PyJWT` `from_jwk`, and `joserfc`/`Authlib`
+`import_key` of a JWK need `bytes(x)`, `x.decode()` or `json.loads(x)`; each
+conversion is a copy outside the guarantee.
 
 ## Standards
 
@@ -279,7 +334,7 @@ bounds.
 | RFC 8037 Appendix A / RFC 8152 Appendix C.7.1 | Ed25519 JWK, the RFC 7638 thumbprint *and its canonical input string*, P-256 and P-521 `COSE_Key` |
 | `tests/kat/keyformats/rfc9500_ec.json` — 3 records | the IETF's own P-256/P-384/P-521 `ECPrivateKey`, the structure RFC 5915 defines without an example |
 | `tests/ref_keyformat.py` | a second encoder transcribed from the RFCs' ASN.1 — AMA's own, importing nothing from `ama_cryptography` — covering every algorithm and option, anchored against RFC 9500 §2.3 and RFC 8410 §10.1 |
-| `tests/test_key_formats.py` — 587 tests | the above in both directions, plus the negative space |
+| `tests/test_key_formats.py` — 588 tests | the above in both directions, plus the negative space |
 | `fuzz/python/fuzz_key_formats.py` | continuous hostile input across all ten parser entry points, run per PR by `fuzzing.yml` (INVARIANT-33) |
 
 The counts above are not decoration and they are not taken on trust:

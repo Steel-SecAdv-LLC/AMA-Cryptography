@@ -73,6 +73,7 @@ FAMILY_OF = {
     "hkdf_derive": "Hash / MAC / KDF",
     "ed25519_keygen": "Signature",
     "ed25519_sign": "Signature",
+    "ed25519_sign_expanded": "Signature",
     "ed25519_verify": "Signature",
     "secp256k1_ecdsa_sign": "Signature",
     "secp256k1_ecdsa_verify": "Signature",
@@ -95,6 +96,7 @@ PRETTY = {
     "hkdf_derive": "HKDF-SHA3-256 (3 keys)",
     "ed25519_keygen": "Ed25519 keygen",
     "ed25519_sign": "Ed25519 sign",
+    "ed25519_sign_expanded": "Ed25519 sign (expanded key)",
     "ed25519_verify": "Ed25519 verify",
     "secp256k1_ecdsa_sign": "secp256k1 ECDSA sign",
     "secp256k1_ecdsa_verify": "secp256k1 ECDSA verify",
@@ -223,6 +225,15 @@ def _utc_minute(timestamp: object) -> str | None:
 
 def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str, Any]) -> str:
     results = bench["results"]
+    # A row with no label or family used to render under its raw key and the
+    # first family's colour: ed25519_sign_expanded was filed under "Hash /
+    # MAC / KDF" on the 2026-10-08 page.  Refuse instead of mis-filing.
+    unmapped = sorted({r["name"] for r in results} - (PRETTY.keys() & FAMILY_OF.keys()))
+    if unmapped:
+        raise RuntimeError(
+            f"benchmark rows with no PRETTY label or FAMILY_OF entry: {unmapped}; "
+            "add them to benchmarks/generate_dashboard.py"
+        )
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     # The version and measured-at come from the measurement artefact's own
@@ -282,11 +293,12 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
         "results": [
             {
                 "key": r["name"],
-                "label": PRETTY.get(r["name"], r["name"]),
-                "family": FAMILY_OF.get(r["name"], "Hash / MAC / KDF"),
-                "slot": FAMILY_SLOT[FAMILY_OF.get(r["name"], "Hash / MAC / KDF")],
+                "label": PRETTY[r["name"]],
+                "family": FAMILY_OF[r["name"]],
+                "slot": FAMILY_SLOT[FAMILY_OF[r["name"]]],
                 "ops": r["ops_per_second"],
                 "floor": r["baseline_value"],
+                "tolerance": r["tolerance_percent"],
                 "passed": r["passed"],
                 "description": r["description"],
             }

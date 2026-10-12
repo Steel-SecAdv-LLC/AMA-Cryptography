@@ -216,7 +216,7 @@ class TestSecureRandomBytes:
 
         result = secure_random_bytes(32)
         assert len(result) == 32
-        assert isinstance(result, bytes)
+        assert type(result) is bytearray
 
     def test_large_size(self) -> None:
         """secure_random_bytes handles large sizes."""

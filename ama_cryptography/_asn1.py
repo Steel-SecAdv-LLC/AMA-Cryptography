@@ -54,8 +54,9 @@ distinct thumbprints.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Generic, TypeVar, Union
 
+from ama_cryptography._secret_material import zeroize
 from ama_cryptography.exceptions import KeyFormatError
 
 __all__ = [
@@ -95,7 +96,7 @@ def _der_len(n: int) -> bytes:
     return bytes([0x80 | len(body)]) + body
 
 
-def _tlv(tag: int, body: bytes) -> bytes:
+def _tlv(tag: int, body: Union[bytes, bytearray]) -> bytes:
     return bytes([tag]) + _der_len(len(body)) + body
 
 
@@ -110,7 +111,7 @@ def der_integer(value: int) -> bytes:
     return _tlv(TAG_INTEGER, body)
 
 
-def der_octet_string(data: bytes) -> bytes:
+def der_octet_string(data: Union[bytes, bytearray]) -> bytes:
     return _tlv(TAG_OCTET_STRING, data)
 
 
@@ -127,7 +128,7 @@ def der_sequence(*elements: bytes) -> bytes:
     return _tlv(TAG_SEQUENCE, b"".join(elements))
 
 
-def der_tagged(number: int, body: bytes, *, constructed: bool = True) -> bytes:
+def der_tagged(number: int, body: Union[bytes, bytearray], *, constructed: bool = True) -> bytes:
     """Encode a context-specific ``[number]`` tag."""
     if not 0 <= number <= 30:
         raise KeyFormatError(f"context tag {number} out of the supported range")
@@ -276,7 +277,13 @@ def oid_to_string(body: bytes) -> str:
 # ---------------------------------------------------------------------------
 # DER decoding
 # ---------------------------------------------------------------------------
-class DerReader:
+#: The octet type a DerReader is over, and returns slices of: ``bytes`` for
+#: public structures, ``bytearray`` for a private key's DER, so that every
+#: slice of the key is a wipeable copy rather than an immutable one.
+_Octets = TypeVar("_Octets", bytes, bytearray)
+
+
+class DerReader(Generic[_Octets]):
     """A strict, non-backtracking DER reader over a byte string.
 
     Every accessor consumes exactly one TLV and validates it. ``finish()`` is
@@ -287,8 +294,8 @@ class DerReader:
 
     __slots__ = ("_buf", "_end", "_pos")
 
-    def __init__(self, data: bytes, start: int = 0, end: int | None = None) -> None:
-        self._buf = data
+    def __init__(self, data: _Octets, start: int = 0, end: int | None = None) -> None:
+        self._buf: _Octets = data
         self._pos = start
         self._end = len(data) if end is None else end
 
@@ -339,12 +346,12 @@ class DerReader:
             return None
         return self._buf[self._pos]
 
-    def read_sequence(self) -> DerReader:
+    def read_sequence(self) -> DerReader[_Octets]:
         _, start, end = self._read_header(TAG_SEQUENCE)
         self._pos = end
         return DerReader(self._buf, start, end)
 
-    def read_set(self) -> DerReader:
+    def read_set(self) -> DerReader[_Octets]:
         """Read a SET (or SET OF) and return a reader over its contents.
 
         Needed by the RFC 5652 ``SignedData`` descent in
@@ -356,7 +363,7 @@ class DerReader:
         self._pos = end
         return DerReader(self._buf, start, end)
 
-    def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader:
+    def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader[_Octets]:
         tag = 0x80 | number | (0x20 if constructed else 0x00)
         _, start, end = self._read_header(tag)
         self._pos = end
@@ -374,12 +381,12 @@ class DerReader:
         self._pos = end
         return int.from_bytes(body, "big")
 
-    def read_octet_string(self) -> bytes:
+    def read_octet_string(self) -> _Octets:
         _, start, end = self._read_header(TAG_OCTET_STRING)
         self._pos = end
         return self._buf[start:end]
 
-    def read_bit_string(self) -> bytes:
+    def read_bit_string(self) -> _Octets:
         _, start, end = self._read_header(TAG_BIT_STRING)
         if end - start < 1:
             raise KeyFormatError("empty BIT STRING")
@@ -394,7 +401,7 @@ class DerReader:
     def read_oid(self) -> str:
         _, start, end = self._read_header(TAG_OID)
         self._pos = end
-        return oid_to_string(self._buf[start:end])
+        return oid_to_string(bytes(self._buf[start:end]))
 
     def read_null(self) -> None:
         _, start, end = self._read_header(TAG_NULL)
@@ -402,7 +409,7 @@ class DerReader:
             raise KeyFormatError("NULL with a non-empty body")
         self._pos = end
 
-    def read_any_raw(self) -> bytes:
+    def read_any_raw(self) -> _Octets:
         """Consume one TLV and return its complete encoding."""
         start_tlv = self._pos
         _, _, end = self._read_header(None)
@@ -471,8 +478,10 @@ def cbor_encode_canonical(value: Any) -> bytes:
         if value >= 0:
             return _cbor_head(_CBOR_UINT, value)
         return _cbor_head(_CBOR_NEGINT, -value - 1)
-    if isinstance(value, bytes):
-        return _cbor_head(_CBOR_BYTES, len(value)) + value
+    if isinstance(value, (bytes, bytearray)):
+        # A bytearray is a byte string too: private keys are held in one so
+        # they can be wiped (INVARIANT-6).
+        return _cbor_head(_CBOR_BYTES, len(value)) + bytes(value)
     if isinstance(value, str):
         raw = value.encode("utf-8")
         return _cbor_head(_CBOR_TEXT, len(raw)) + raw
@@ -490,10 +499,37 @@ def cbor_encode_canonical(value: Any) -> bytes:
     raise KeyFormatError(f"unsupported CBOR type {type(value).__name__}")
 
 
+def scrub_decoded(value: Any) -> None:
+    """Zero every ``bytearray`` byte string in a decoded CBOR item: the item
+    itself, an array's elements, a map's values, at any depth.
+
+    For a decode that is refused part-way, or whose result is refused: the
+    slices it already took of a private buffer -- a COSE key's ``d`` -- are
+    independent copies that nothing else would zero (INVARIANT-6).  ``bytes``
+    and scalars are left as they are.
+    """
+    if isinstance(value, dict):
+        for item in value.values():
+            scrub_decoded(item)
+    elif isinstance(value, list):
+        for item in value:
+            scrub_decoded(item)
+    else:
+        zeroize(value)
+
+
 class _CborReader:
+    """Reads one CBOR item from ``data``.
+
+    A byte string comes back as a slice of ``data``: ``bytes`` from a
+    ``bytes`` buffer, a wipeable ``bytearray`` from a ``bytearray`` one (a
+    COSE private key's ``d``, INVARIANT-6).  Map keys are always ``bytes``,
+    so a byte-string key stays hashable either way.
+    """
+
     __slots__ = ("_buf", "_pos")
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes | bytearray) -> None:
         self._buf = data
         self._pos = 0
 
@@ -565,22 +601,37 @@ class _CborReader:
             except UnicodeDecodeError:
                 raise KeyFormatError("invalid UTF-8 in CBOR text string") from None
         if major == _CBOR_ARRAY:
-            # `value` is bounded by the head, but an 8-byte head can declare
-            # 2^64 elements; `_need(1)` inside the first `decode` is what stops
-            # the list comprehension from being asked to preallocate. Check the
-            # declared count against the octets that remain before entering it,
-            # since every element costs at least one octet.
-            self._need(value)
-            return [self.decode(depth + 1) for _ in range(value)]
+            return self._decode_array(value, depth)
         if major == _CBOR_MAP:
-            # Every pair costs at least two octets.
-            self._need(2 * value)
-            mapping: dict[Any, Any] = {}
-            previous: bytes | None = None
+            return self._decode_map(value, depth)
+        raise KeyFormatError(f"unsupported CBOR major type {major}")
+
+    def _decode_array(self, value: int, depth: int) -> list[Any]:
+        # `value` is bounded by the head, but an 8-byte head can declare
+        # 2^64 elements. Check the declared count against the octets that
+        # remain before looping, since every element costs at least one octet.
+        self._need(value)
+        items: list[Any] = []
+        try:
+            for _ in range(value):
+                items.append(self.decode(depth + 1))
+        except BaseException:
+            scrub_decoded(items)
+            raise
+        return items
+
+    def _decode_map(self, value: int, depth: int) -> dict[Any, Any]:
+        # Every pair costs at least two octets.
+        self._need(2 * value)
+        mapping: dict[Any, Any] = {}
+        previous: bytes | None = None
+        try:
             for _ in range(value):
                 key_start = self._pos
                 key = self.decode(depth + 1)
-                key_bytes = self._buf[key_start : self._pos]
+                if isinstance(key, bytearray):
+                    key = bytes(key)
+                key_bytes = bytes(self._buf[key_start : self._pos])
                 if previous is not None and key_bytes <= previous:
                     raise KeyFormatError(
                         "CBOR map keys are not in canonical order (or are duplicated)"
@@ -589,14 +640,23 @@ class _CborReader:
                 if isinstance(key, (list, dict)):
                     raise KeyFormatError("non-scalar CBOR map key")
                 mapping[key] = self.decode(depth + 1)
-            return mapping
-        raise KeyFormatError(f"unsupported CBOR major type {major}")
+        except BaseException:
+            # The values decoded so far are slices of the buffer -- for a
+            # private COSE_Key, ``d`` among them (PR #415 review).
+            scrub_decoded(mapping)
+            raise
+        return mapping
 
 
-def cbor_decode_canonical(data: bytes) -> Any:
-    """Decode one canonically-encoded CBOR item, rejecting trailing data."""
+def cbor_decode_canonical(data: bytes | bytearray) -> Any:
+    """Decode one canonically-encoded CBOR item, rejecting trailing data.
+
+    Byte strings are slices of ``data``, so a ``bytearray`` ``data`` yields
+    ``bytearray`` byte strings the caller can zero (see ``_CborReader``).
+    """
     reader = _CborReader(data)
     value = reader.decode()
     if reader.pos != len(data):
+        scrub_decoded(value)
         raise KeyFormatError(f"{len(data) - reader.pos} trailing octet(s) after the CBOR item")
     return value

@@ -243,7 +243,7 @@ class TestKeyManagementWorkflows:
             # Retrieve and verify
             for key_id, original in test_keys.items():
                 retrieved = storage.retrieve_key(key_id)
-                assert retrieved == original
+                assert retrieved == bytearray(original)
 
             # Delete and verify deletion
             for key_id in test_keys:

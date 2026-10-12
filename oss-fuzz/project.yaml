@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 homepage: "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 language: c
-primary_contact: "security@steelsecadv.com"
-auto_ccs:
-  - "ama-dev@steelsecadv.com"
+primary_contact: "steel.sa.llc@gmail.com"
 main_repo: "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git"
 fuzzing_engines:
   - libfuzzer

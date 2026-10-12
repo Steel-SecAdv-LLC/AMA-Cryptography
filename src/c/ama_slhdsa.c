@@ -56,7 +56,6 @@
 
 #include "../include/ama_cryptography.h"
 #include "ama_sha256.h"
-#include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
 #include "internal/ama_testing_exports.h"

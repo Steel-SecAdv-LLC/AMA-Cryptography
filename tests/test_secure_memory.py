@@ -444,12 +444,12 @@ class TestSecureRandomBytes:
             result = secure_random_bytes(size)
             assert len(result) == size
 
-    def test_returns_bytes(self) -> None:
-        """secure_random_bytes returns bytes type."""
+    def test_returns_bytearray(self) -> None:
+        """secure_random_bytes returns a wipeable bytearray, not bytes."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(32)
-        assert isinstance(result, bytes)
+        assert type(result) is bytearray
 
     def test_different_each_call(self) -> None:
         """secure_random_bytes returns different values each call."""
@@ -457,7 +457,7 @@ class TestSecureRandomBytes:
 
         results = [secure_random_bytes(32) for _ in range(10)]
         # All should be unique (with overwhelming probability)
-        assert len(set(results)) == 10
+        assert len({bytes(r) for r in results}) == 10
 
     def test_negative_size_raises(self) -> None:
         """secure_random_bytes with negative size raises ValueError."""

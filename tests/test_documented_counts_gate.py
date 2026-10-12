@@ -1194,3 +1194,66 @@ class TestCountsAreTakenOverTrackedFiles:
         (repo / "tests" / "c" / "test_one.c").write_text("int x;\n", encoding="utf-8")
         assert tool.measure_static_test_counts(repo) == (2, 2)
         assert tool.measure_c_suite_counts(repo) == (1, 1)
+
+
+class TestInventoryListsAreCheckedNameForName:
+    """README's inventories state a count and then list what they count.  The
+    gate read only the count, so a heading of 29 translation units over a list
+    of 28 passed (PR #415: ``ama_base64.c``, and ``_secret_material`` missing
+    from the module list).  Where a list follows the count, it must name
+    exactly the tracked files."""
+
+    @staticmethod
+    def _repo(tmp_path: Path, c_list: str, py_list: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "src" / "c").mkdir(parents=True)
+        for name in ("one.c", "two.c"):
+            (repo / "src" / "c" / name).write_text("int x;\n", encoding="utf-8")
+        (repo / "ama_cryptography").mkdir()
+        for name in ("__init__.py", "__main__.py", "m.py", "n.py"):
+            (repo / "ama_cryptography" / name).write_text("\n", encoding="utf-8")
+        (repo / "README.md").write_text(
+            "Top-level `src/c/*.c` — 2 translation units:\n\n"
+            f"{c_list}\n\n"
+            "### Python package (`ama_cryptography/`, 2 modules + `__init__` + `__main__`)\n\n"
+            f"{py_list}\n\nNext section.\n",
+            encoding="utf-8",
+        )
+        return repo
+
+    def test_complete_lists_are_clean(self, tool: ModuleType, tmp_path: Path) -> None:
+        """Asides in parentheses name other things and are not entries; a
+        generated ``.py`` the paragraph mentions is not a module entry."""
+        repo = self._repo(
+            tmp_path,
+            "`one.c`, `two.c`.",
+            "`m` (wraps `chmod`), `n`, `__main__`. The build writes `_generated.py`.",
+        )
+        assert tool.check_source_inventory_counts(repo) == []
+
+    def test_an_omitted_unit_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        """PIN: without the list check the count (2) alone passes this."""
+        repo = self._repo(tmp_path, "`one.c`.", "`m`, `n`, `__main__`.")
+        assert tool.check_source_inventory_counts(repo) == [
+            "README.md: the top-level src/c list omits ['two.c']"
+        ]
+
+    def test_an_omitted_module_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        """PIN, likewise for the package list."""
+        repo = self._repo(tmp_path, "`one.c`, `two.c`.", "`m`, `__main__`.")
+        assert tool.check_source_inventory_counts(repo) == [
+            "README.md: the package module list omits ['n']"
+        ]
+
+    def test_a_name_not_in_the_tree_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "`one.c`, `two.c`, `gone.c`.", "`m`, `n`, `gone`.")
+        assert tool.check_source_inventory_counts(repo) == [
+            "README.md: the top-level src/c list names ['gone.c'], not in the tree",
+            "README.md: the package module list names ['gone'], not in the tree",
+        ]
+
+    def test_a_count_with_no_list_is_checked_as_a_count_only(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo(tmp_path, "Prose, not a list.", "Prose, not a list.")
+        assert tool.check_source_inventory_counts(repo) == []

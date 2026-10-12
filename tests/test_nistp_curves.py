@@ -413,7 +413,8 @@ def test_keypair_generation_is_valid_and_varied(name: str) -> None:
         assert 1 <= int.from_bytes(priv, "big") < CURVES[name]["n"]
         assert pb.native_nistp_pubkey_validate(name, pub)
         assert pb.native_nistp_pubkey_from_privkey(name, priv) == pub
-        seen.add(priv)
+        assert isinstance(priv, bytearray), "the private key must be wipeable (INVARIANT-6)"
+        seen.add(bytes(priv))
     assert len(seen) == 4, "keygen returned a repeated private key"
 
 

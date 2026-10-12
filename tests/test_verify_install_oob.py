@@ -22,8 +22,10 @@ function localises the fault immediately.
 
 import ast
 import hashlib
+import importlib.machinery
 import importlib.util
 import marshal
+import os
 import random
 import shutil
 import subprocess
@@ -513,9 +515,160 @@ class TestCliAgainstRepoTree:
         assert "RESULT: FAIL" in result.stdout
 
 
+def _plant_shadow(pkg: Path, case: str) -> None:
+    """One instance of each file-system shape the import system would load in
+    place of, or outside of, the signed source set."""
+    ext = importlib.machinery.EXTENSION_SUFFIXES[0]
+    pyc = importlib.util.MAGIC_NUMBER + bytes(12) + marshal.dumps(compile("", "x", "exec"))
+    if case == "sourceless_top_level":
+        (pkg / "crypto_api.pyc").write_bytes(pyc)
+    elif case == "package_dir_over_module":
+        (pkg / "crypto_api").mkdir()
+        (pkg / "crypto_api" / "__init__.pyc").write_bytes(pyc)
+    elif case == "source_package_over_module":
+        (pkg / "pqc_backends").mkdir()
+        (pkg / "pqc_backends" / "__init__.py").write_text("", encoding="utf-8")
+    elif case == "extension_below_top_level":
+        (pkg / "_post_kats" / f"implant{ext}").write_bytes(b"compiled code")
+    elif case == "extension_over_source":
+        (pkg / f"crypto_api{ext}").write_bytes(b"compiled code")
+    elif case == "symlinked_package_dir":
+        target = pkg.parent / "elsewhere"
+        target.mkdir()
+        (target / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "planted_pkg").symlink_to(target, target_is_directory=True)
+    elif case == "symlinked_namespace_dir":
+        target = pkg.parent / "elsewhere"
+        target.mkdir()
+        (target / "mod.py").write_text("", encoding="utf-8")
+        (pkg / "planted_ns").symlink_to(target, target_is_directory=True)
+    elif case in ("pycache_source", "pycache_tagless_bytecode", "pycache_extension"):
+        name = {"pycache_source": "evil.py", "pycache_tagless_bytecode": "evil.pyc"}.get(
+            case, f"evil{ext}"
+        )
+        (pkg / "__pycache__").mkdir(exist_ok=True)
+        (pkg / "__pycache__" / name).write_bytes(pyc)
+    elif case == "pycache_subdirectory":
+        (pkg / "__pycache__" / "sub").mkdir(parents=True)
+    else:
+        raise AssertionError(case)
+
+
+_SHADOW_CASES = (
+    "sourceless_top_level",
+    "package_dir_over_module",
+    "source_package_over_module",
+    "extension_below_top_level",
+    "extension_over_source",
+    "symlinked_package_dir",
+    "symlinked_namespace_dir",
+    "pycache_source",
+    "pycache_tagless_bytecode",
+    "pycache_extension",
+    "pycache_subdirectory",
+)
+
+
+class TestImportShadowingMirrorsTheInProcessCheck:
+    """The tool re-states ``ama_cryptography._find_import_shadowing`` because
+    the in-process copy lives in the tree an attacker controls.  Two copies of
+    a rule drift unless something holds them together: this pins identical
+    verdicts on a clean tree and on every fault class either copy names."""
+
+    @staticmethod
+    def _minimal_tree(tmp_path: Path) -> Path:
+        pkg = tmp_path / "ama_cryptography"
+        (pkg / "_post_kats").mkdir(parents=True)
+        for name in ("__init__.py", "crypto_api.py", "pqc_backends.py"):
+            (pkg / name).write_text("", encoding="utf-8")
+        (pkg / "_post_kats" / "kat.json").write_text("{}", encoding="utf-8")
+        return pkg
+
+    def test_a_clean_tree_has_no_faults_in_either_copy(self, tmp_path: Path) -> None:
+        from ama_cryptography import _find_import_shadowing
+
+        pkg = self._minimal_tree(tmp_path)
+        assert oob.find_import_shadowing(pkg) == []
+        assert _find_import_shadowing(str(pkg)) == []
+
+    @pytest.mark.parametrize("case", _SHADOW_CASES)
+    def test_both_copies_return_the_same_faults(self, tmp_path: Path, case: str) -> None:
+        from ama_cryptography import _find_import_shadowing
+
+        if case.startswith("symlinked_") and not hasattr(os, "symlink"):
+            pytest.skip("platform cannot create symlinks")
+        pkg = self._minimal_tree(tmp_path)
+        try:
+            _plant_shadow(pkg, case)
+        except OSError as exc:
+            pytest.skip(f"cannot plant {case} here: {exc}")
+        tool = oob.find_import_shadowing(pkg)
+        assert tool, f"{case}: the tool found nothing"
+        assert tool == _find_import_shadowing(str(pkg))
+
+
+@requires_signed_tree
+@requires_native_lib
+class TestCliRefusesImportShadowing:
+    """A sourceless ``crypto_api/__init__.pyc`` replaced the signed module
+    while the tool reported PASS: the digest covers top-level ``.py`` files,
+    the binding map top-level extensions, the bytecode pass ``__pycache__``,
+    and the planted file sits in none of them — yet the import system resolves
+    the package directory ahead of ``crypto_api.py``.  Measured on 2026-10-08
+    against the working tree's artefact (PIN: deleting the shadow stage from
+    ``main`` makes this test fail)."""
+
+    def test_a_planted_package_directory_fails_the_run(self, installed_tree: Path) -> None:
+        assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
+        _plant_shadow(installed_tree, "package_dir_over_module")
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
+        assert result.returncode != 0, f"stdout:\n{result.stdout}"
+        assert "crypto_api/__init__.pyc: package directory shadows crypto_api.py" in result.stdout
+        assert "RESULT: FAIL" in result.stdout
+
+    @pytest.mark.parametrize("planted", ["unsigned/__init__.py", "unsigned/mod.py"])
+    def test_a_planted_subdirectory_module_fails_the_run(
+        self, installed_tree: Path, planted: str
+    ) -> None:
+        """PIN.  A subpackage, or a namespace directory, holding a module the
+        signature never covered.  The out-of-band digest walked the top level
+        only, so it still equalled the signed digest and this reported PASS
+        (PR #415 review); it now walks every depth, as the signer does.
+        Reverting ``compute_package_digest`` to ``glob("*.py")`` fails this."""
+        assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
+        target = installed_tree / planted
+        target.parent.mkdir()
+        target.write_text("PLANTED = True\n", encoding="utf-8")
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
+        assert result.returncode != 0, f"stdout:\n{result.stdout}"
+        assert "MISMATCH" in result.stdout, result.stdout
+        assert "RESULT: FAIL" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # (e) tamper detection on a copied tree
 # ---------------------------------------------------------------------------
+
+
+def test_the_bytecode_pass_reaches_every_depth(tmp_path: Path) -> None:
+    """PIN.  The pass walked the top-level ``*.py`` only, like the digest; a
+    poisoned cache for a subdirectory module was never compared.  It walks
+    every depth now, as ``_self_test``'s execution-integrity stage does.
+    Reverting ``_verify_all_bytecode_caches`` to ``glob("*.py")`` fails this.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    nested = pkg / "sub" / "mod.py"
+    nested.write_text("VALUE = 1\n", encoding="utf-8")
+    _write_pyc(nested, "VALUE = 2\n")
+    failures, verified, _skipped = oob._verify_all_bytecode_caches(pkg)
+    assert verified == 0
+    assert len(failures) == 1 and "mod.py" in failures[0], failures
 
 
 def _ensure_cache(py_path: Path) -> Path:

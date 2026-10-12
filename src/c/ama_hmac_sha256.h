@@ -7,7 +7,9 @@
  * @date 2026-04-06
  *
  * Provides HMAC-SHA-256 without OpenSSL dependency.
- * Used by SPHINCS+ spx_prf_msg() (FIPS 205 Section 11.1).
+ * Used by HKDF-SHA-256 (ama_hkdf.c), the RFC 6979 deterministic-nonce
+ * derivations in ama_nistp.c and ama_secp256k1.c, and the Python ctypes
+ * binding (pqc_backends.py).
  */
 
 #ifndef AMA_HMAC_SHA256_H

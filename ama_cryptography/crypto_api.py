@@ -30,18 +30,28 @@ import pathlib
 import sys
 import threading
 import time
+import traceback
 import warnings
 from _thread import LockType
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
-from ama_cryptography._module_state import secure_token_bytes
-from ama_cryptography._package_transcript import canonical as _canonical
+from ama_cryptography._module_state import secure_token_bytearray, secure_token_bytes
+from ama_cryptography._package_transcript import (
+    append_canonical_byte_strings as _append_byte_strings,
+)
 from ama_cryptography._package_transcript import transcript as _transcript
+from ama_cryptography._secret_material import (
+    ScrubOnRaise,
+    SecretBytes,
+    SecretMaterial,
+    constant_time_equality,
+    zeroize,
+)
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection.
@@ -174,7 +184,7 @@ if not _AMA_DOCS_IMPORT and (not _HMAC_NATIVE or not _HKDF_NATIVE):
     )
 
 
-def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+def _hmac_sha3_256(key: SecretBytes, msg: bytes) -> bytes:
     """HMAC-SHA3-256 via native C backend (RFC 2104).
 
     INVARIANT-1: This function MUST NOT use ``import hmac`` (the stdlib
@@ -189,11 +199,11 @@ def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
 
 
 def _hkdf_sha3_256(
-    ikm: bytes,
+    ikm: SecretBytes,
     length: int,
     salt: "Optional[bytes]" = None,
     info: bytes = b"",
-) -> bytes:
+) -> bytearray:
     """HKDF-SHA3-256 via native C backend (RFC 5869).
 
     INVARIANT-7 revised: no pure-Python fallback.  The import-time
@@ -282,8 +292,9 @@ class CryptoBackend(Enum):
     PURE_PYTHON = auto()  # Pure Python (fallback)
 
 
+@constant_time_equality()
 @dataclass
-class KeyPair:
+class KeyPair(SecretMaterial):
     """
     Cryptographic key pair container
 
@@ -294,10 +305,15 @@ class KeyPair:
         metadata: Additional key information
     """
 
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("secret_key",)
+
     public_key: bytes
-    secret_key: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # SENSITIVE - excluded from repr
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 @dataclass
@@ -318,8 +334,9 @@ class Signature:
     metadata: Dict[str, Any]
 
 
+@constant_time_equality()
 @dataclass
-class EncapsulatedSecret:
+class EncapsulatedSecret(SecretMaterial):
     """
     KEM encapsulated secret container
 
@@ -330,10 +347,15 @@ class EncapsulatedSecret:
         metadata: Additional information
     """
 
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("shared_secret",)
+
     ciphertext: bytes
-    shared_secret: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
+    shared_secret: Union[bytes, bytearray] = field(repr=False)  # SENSITIVE - excluded from repr
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
 
 class CryptoProvider(ABC):
@@ -369,8 +391,8 @@ class KEMProvider(ABC):
         pass
 
     @abstractmethod
-    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
-        """Decapsulate a shared secret"""
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
+        """Decapsulate a shared secret, returned in a wipeable ``bytearray``."""
         pass
 
 
@@ -410,11 +432,12 @@ class MLDSAProvider(CryptoProvider):
             )
 
         kp = generate_dilithium_keypair()
-        # Copy secret_key to detach from DilithiumKeyPair's bytearray;
-        # DilithiumKeyPair.__del__ wipes its own copy on scope exit.
+        # The keypair's bytearray is handed over, not copied: the dying
+        # container sees the KeyPair holding it and leaves it alone
+        # (INVARIANT-6's last-owner rule), so the only copy is the caller's.
         return KeyPair(
             public_key=kp.public_key,
-            secret_key=bytes(kp.secret_key),
+            secret_key=kp.secret_key,
             algorithm=self.algorithm,
             metadata={
                 "backend": self._backend_name,
@@ -515,19 +538,26 @@ class Ed25519Provider(CryptoProvider):
         """Generate Ed25519 keypair using native C backend."""
         _enforce_invariant7()
         pk_bytes, sk_bytes = native_ed25519_keypair()
-        # Return 32-byte seed as secret_key for API consistency
-        # The full 64-byte key is seed || public_key
-        return KeyPair(
-            public_key=pk_bytes,
-            secret_key=sk_bytes[:32],
-            algorithm=self.algorithm,
-            metadata={"backend": "native_c", "key_size": 32},
-        )
+        # Return 32-byte seed as secret_key for API consistency.  The full
+        # 64-byte form (seed || public_key) is zeroed once the seed is copied
+        # out of it, so the only copy of the seed is the one returned.
+        try:
+            with ScrubOnRaise() as held:
+                seed = held(sk_bytes[:32])
+                keypair = KeyPair(
+                    public_key=pk_bytes,
+                    secret_key=seed,
+                    algorithm=self.algorithm,
+                    metadata={"backend": "native_c", "key_size": 32},
+                )
+            return keypair
+        finally:
+            _kc_secure_memzero(sk_bytes)
 
     def sign(
         self,
         message: bytes,
-        secret_key: Union[bytes, bytearray],
+        secret_key: Union[bytes, bytearray, memoryview],
         precomputed_hash: Optional[bytes] = None,
     ) -> Signature:
         """
@@ -535,7 +565,9 @@ class Ed25519Provider(CryptoProvider):
 
         Args:
             message: Data to sign
-            secret_key: 32-byte Ed25519 seed or 64-byte native key
+            secret_key: 32-byte Ed25519 seed or 64-byte native key; a
+                writable ``memoryview`` of one borrows the caller's buffer
+                instead of copying it
             precomputed_hash: Optional pre-computed SHA3-256 hash of message.
                 When provided, skips redundant hash computation (~2x savings).
 
@@ -543,15 +575,19 @@ class Ed25519Provider(CryptoProvider):
             Signature object with Ed25519 signature
         """
         _enforce_invariant7()
-        # Handle 32-byte seed: expand to 64-byte native format
+        # A 32-byte seed is expanded to the 64-byte native form, which this
+        # call owns and zeroes after signing; a 64-byte key is passed through
+        # as given.  Neither is copied into an immutable ``bytes``.
         if len(secret_key) == 32:
-            _, full_sk = native_ed25519_keypair_from_seed(bytes(secret_key))
+            _, full_sk = native_ed25519_keypair_from_seed(secret_key)
+            try:
+                sig_bytes = native_ed25519_sign(message, full_sk)
+            finally:
+                _kc_secure_memzero(full_sk)
         elif len(secret_key) == 64:
-            full_sk = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
+            sig_bytes = native_ed25519_sign(message, secret_key)
         else:
             raise ValueError(f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}")
-
-        sig_bytes = native_ed25519_sign(message, full_sk)
         message_hash = (
             precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
         )
@@ -653,6 +689,75 @@ def _kc_secure_memzero(buf: bytearray) -> None:
         buf[i] = 0
 
 
+def _borrowed_part(
+    key: SecretBytes, start: int, stop: Optional[int] = None
+) -> Union[bytes, memoryview]:
+    """``key[start:stop]`` without minting a second copy a caller cannot wipe.
+
+    A slice of a ``bytearray`` is an independent ``bytearray`` that nothing
+    zeroes: ``secret_key[:32]`` and ``secret_key[32:]`` left a populated copy
+    of the Ed25519 seed and of the whole 4,032-byte ML-DSA key behind on every
+    hybrid signature.  A ``memoryview`` slice borrows the caller's own storage
+    instead, so wiping the key wipes the part (the same rule
+    ``HybridKEMProvider.decapsulate`` applies).
+
+    ``bytes`` keeps the plain slice: nobody can wipe a ``bytes`` key whichever
+    way it is cut, and the ctypes boundary refuses a read-only view of PART of
+    a buffer rather than copy it (``pqc_backends._borrow``), so a view there
+    would turn a working call into a ``TypeError``.
+
+    Release them with :class:`_Borrowed`, which a ``with`` block needs: a view
+    left to its holder pins the caller's ``bytearray`` against ``clear()`` and
+    ``extend()`` for as long as any frame still names it.
+    """
+    if isinstance(key, bytearray):
+        return memoryview(key)[start:stop]
+    return key[start:stop]
+
+
+class _Borrowed:
+    """``with _Borrowed(key, (0, 32), (32, None)) as (head, tail):`` -- parts of
+    a secret key lent to a callee, and released when the block ends.
+
+    A ``memoryview`` of the caller's ``bytearray`` pins its size: ``clear()``
+    raises ``BufferError`` while any view lives.  The block's own locals are
+    released here.  A callee that raises is the other holder: its traceback
+    keeps the frame, the frame keeps the ctypes array ``_borrow`` made over the
+    view, and the array keeps the view -- so a caller holding the exception
+    (``except ... as exc`` stored, a logger, a test runner) could no longer
+    wipe-and-resize its own key.  The frames the exception passed through are
+    finished, so their locals are cleared (what ``unittest`` does to the
+    tracebacks it keeps); the block's own frame is still running and is left
+    as it is, which is why the parts are released explicitly.
+
+    ``release()`` is not guarded.  It raises ``BufferError`` only for a view
+    something holds a buffer export of; a ctypes array, ``memoryview(view)`` and
+    ``io.BytesIO(view)`` each take their own view of the same storage instead
+    (measured, CPython 3.13), and a Cython callee's export ends with its call.
+    Nothing that this library lends the parts to holds one, so a failure here
+    would be new and should be loud, not swallowed.
+    """
+
+    __slots__ = ("_views",)
+
+    def __init__(self, key: SecretBytes, *spans: Tuple[int, Optional[int]]) -> None:
+        self._views: Tuple[Union[bytes, memoryview], ...] = tuple(
+            _borrowed_part(key, start, stop) for start, stop in spans
+        )
+
+    def __enter__(self) -> Tuple[Union[bytes, memoryview], ...]:
+        return self._views
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        try:
+            if tb is not None:
+                traceback.clear_frames(tb)
+        finally:
+            for view in self._views:
+                if isinstance(view, memoryview):
+                    view.release()
+
+
 class KeypairCache:
     """Thread-safe cache for signing keypairs within a session.
 
@@ -686,12 +791,12 @@ class KeypairCache:
             _kc_secure_memzero(self._sk)
             self._sk = None
 
-    def get_or_generate(self) -> Tuple[bytes, bytes]:
+    def get_or_generate(self) -> Tuple[bytes, bytearray]:
         """Return cached keypair, generating one if needed.
 
-        Returns an immutable ``bytes`` copy of the secret key.  The caller's
-        copy cannot be securely wiped by ``rotate()``/``__del__``; the cache
-        controls the only wipeable ``bytearray`` reference internally.
+        The secret key is returned as a fresh ``bytearray`` the caller owns:
+        wipe it when done, as with any secret.  The cache keeps its own copy,
+        which ``rotate()`` zeroes; the caller's copy is not affected by it.
         """
         _enforce_invariant7()
         with self._lock:
@@ -700,7 +805,7 @@ class KeypairCache:
                 kp = crypto.generate_keypair()
                 self._pk = kp.public_key
                 self._sk = bytearray(kp.secret_key)
-            return (self._pk, bytes(self._sk))
+            return (self._pk, bytearray(self._sk))
 
     def rotate(self) -> None:
         """Securely zero and discard cached keypair."""
@@ -760,11 +865,12 @@ class KyberProvider(KEMProvider):
         _enforce_invariant7()
         keypair = generate_kyber_keypair()
 
-        # Copy secret_key to detach from KyberKeyPair's bytearray;
-        # KyberKeyPair.__del__ wipes its own copy on scope exit.
+        # The keypair's bytearray is handed over, not copied: the dying
+        # container sees the KeyPair holding it and leaves it alone
+        # (INVARIANT-6's last-owner rule), so the only copy is the caller's.
         return KeyPair(
             public_key=keypair.public_key,
-            secret_key=bytes(keypair.secret_key),
+            secret_key=keypair.secret_key,
             algorithm=self.algorithm,
             metadata={
                 "backend": KYBER_BACKEND,
@@ -800,7 +906,7 @@ class KyberProvider(KEMProvider):
             },
         )
 
-    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
         """
         Decapsulate a shared secret using Kyber-1024.
 
@@ -809,7 +915,7 @@ class KyberProvider(KEMProvider):
             secret_key: Kyber-1024 secret key (3168 bytes)
 
         Returns:
-            Shared secret (32 bytes)
+            Shared secret (32 bytes), in a wipeable ``bytearray``
 
         Raises:
             KyberUnavailableError: If Kyber backend is not available
@@ -866,11 +972,12 @@ class SphincsProvider(CryptoProvider):
         _enforce_invariant7()
         keypair = generate_sphincs_keypair()
 
-        # Copy secret_key to detach from SphincsKeyPair's bytearray;
-        # SphincsKeyPair.__del__ wipes its own copy on scope exit.
+        # The keypair's bytearray is handed over, not copied: the dying
+        # container sees the KeyPair holding it and leaves it alone
+        # (INVARIANT-6's last-owner rule), so the only copy is the caller's.
         return KeyPair(
             public_key=keypair.public_key,
-            secret_key=bytes(keypair.secret_key),
+            secret_key=keypair.secret_key,
             algorithm=self.algorithm,
             metadata={
                 "backend": SPHINCS_BACKEND,
@@ -1528,24 +1635,34 @@ class HybridKEMProvider(KEMProvider):
         from ama_cryptography.pqc_backends import native_x25519_keypair
 
         x25519_pk, x25519_sk = native_x25519_keypair()
-        kyber_kp = generate_kyber_keypair()
-
-        combined_pk: bytes = x25519_pk + kyber_kp.public_key
-        # Copy kyber secret_key to bytes to detach from KyberKeyPair's bytearray
-        combined_sk: bytes = (
-            x25519_sk + x25519_pk + bytes(kyber_kp.secret_key) + kyber_kp.public_key
-        )
-
-        return KeyPair(
-            public_key=combined_pk,
-            secret_key=combined_sk,
-            algorithm=self.algorithm,
-            metadata={
-                "backend": "hybrid_kem",
-                "pqc_backend": KYBER_BACKEND,
-                "x25519_key_bytes": self._X25519_KEY_BYTES,
-            },
-        )
+        kyber_kp = None
+        try:
+            # Every secret minted from here on is held until the KeyPair has
+            # adopted the combined key: a failure at any later step zeroes it.
+            with ScrubOnRaise() as held:
+                kyber_kp = held(generate_kyber_keypair())
+                combined_pk: bytes = x25519_pk + kyber_kp.public_key
+                # Assembled in one bytearray; the component secrets are zeroed
+                # once copied in, so the combined key is the only copy left.
+                combined_sk = held(bytearray(x25519_sk))
+                combined_sk += x25519_pk
+                combined_sk += kyber_kp.secret_key
+                combined_sk += kyber_kp.public_key
+                keypair = KeyPair(
+                    public_key=combined_pk,
+                    secret_key=combined_sk,
+                    algorithm=self.algorithm,
+                    metadata={
+                        "backend": "hybrid_kem",
+                        "pqc_backend": KYBER_BACKEND,
+                        "x25519_key_bytes": self._X25519_KEY_BYTES,
+                    },
+                )
+            return keypair
+        finally:
+            _kc_secure_memzero(x25519_sk)
+            if kyber_kp is not None:
+                kyber_kp.wipe()
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
@@ -1559,34 +1676,51 @@ class HybridKEMProvider(KEMProvider):
         x25519_pub: bytes = public_key[: self._X25519_KEY_BYTES]
         kyber_pub: bytes = public_key[self._X25519_KEY_BYTES :]
 
-        # X25519: generate ephemeral keypair + DH
+        # X25519: generate ephemeral keypair + DH.  The ephemeral secret and
+        # the component shared secrets exist only in this frame; every one is
+        # zeroed on every exit, the combined secret included until it is
+        # owned by the result.
         eph_pk, eph_sk = native_x25519_keypair()
-        x25519_ss: bytes = native_x25519_key_exchange(eph_sk, x25519_pub)
+        x25519_ss = None
+        kyber_result = None
+        try:
+            try:
+                x25519_ss = native_x25519_key_exchange(eph_sk, x25519_pub)
+            finally:
+                _kc_secure_memzero(eph_sk)
+            kyber_result = kyber_encapsulate(kyber_pub)
+            with ScrubOnRaise() as held:
+                combined_ss = held(
+                    self._combiner.combine(
+                        classical_ss=x25519_ss,
+                        pqc_ss=kyber_result.shared_secret,
+                        classical_ct=eph_pk,
+                        pqc_ct=kyber_result.ciphertext,
+                        classical_pk=x25519_pub,
+                        pqc_pk=kyber_pub,
+                    )
+                )
+                encapsulated = EncapsulatedSecret(
+                    ciphertext=eph_pk + kyber_result.ciphertext,
+                    shared_secret=combined_ss,
+                    algorithm=self.algorithm,
+                    metadata={"backend": "hybrid_kem"},
+                )
+            return encapsulated
+        finally:
+            if x25519_ss is not None:
+                _kc_secure_memzero(x25519_ss)
+            if kyber_result is not None:
+                kyber_result.wipe()
 
-        # Kyber encapsulation
-        kyber_result = kyber_encapsulate(kyber_pub)
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
+        """Split ciphertext and secret key, recover both shared secrets, combine.
 
-        # Combine via binding HKDF
-        combined_ss: bytes = self._combiner.combine(
-            classical_ss=x25519_ss,
-            pqc_ss=kyber_result.shared_secret,
-            classical_ct=eph_pk,
-            pqc_ct=kyber_result.ciphertext,
-            classical_pk=x25519_pub,
-            pqc_pk=kyber_pub,
-        )
-
-        combined_ct: bytes = eph_pk + kyber_result.ciphertext
-
-        return EncapsulatedSecret(
-            ciphertext=combined_ct,
-            shared_secret=combined_ss,
-            algorithm=self.algorithm,
-            metadata={"backend": "hybrid_kem"},
-        )
-
-    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
-        """Split ciphertext and secret key, recover both shared secrets, combine."""
+        The secret key is split through zero-copy views of the caller's
+        storage, and both component shared secrets are zeroed once combined:
+        the combined secret, returned in a wipeable ``bytearray``, is the only
+        secret this call leaves behind.
+        """
         _enforce_invariant7()
         from ama_cryptography.pqc_backends import native_x25519_key_exchange
 
@@ -1594,31 +1728,35 @@ class HybridKEMProvider(KEMProvider):
         x25519_eph_pub: bytes = ciphertext[: self._X25519_KEY_BYTES]
         kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
 
-        # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub
-        # Convert to bytes once — secret_key may be bytearray (INVARIANT-6)
-        sk_bytes = bytes(secret_key)
-        x25519_sk: bytes = sk_bytes[: self._X25519_KEY_BYTES]
-        x25519_pub: bytes = sk_bytes[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
-        kyber_sk: bytes = sk_bytes[
-            2 * self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
-        ]
-        kyber_pub: bytes = sk_bytes[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
-
-        # Recover shared secrets
-        x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)
-        kyber_ss: bytes = kyber_decapsulate(kyber_ct, kyber_sk)
-
-        # Combine with matching info binding (must match encapsulate)
-        combined_ss: bytes = self._combiner.combine(
-            classical_ss=x25519_ss,
-            pqc_ss=kyber_ss,
-            classical_ct=x25519_eph_pub,
-            pqc_ct=kyber_ct,
-            classical_pk=x25519_pub,
-            pqc_pk=kyber_pub,
-        )
-
-        return combined_ss
+        # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub.
+        # memoryview slices borrow the caller's buffer; ``bytes(secret_key)``
+        # made an immutable copy of the whole key that nothing could wipe.
+        kyber_sk_end = 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
+        # A plain view, not ``with``: if a callee raises, its traceback keeps
+        # the borrowed ctypes array alive, and release() would then raise
+        # BufferError over the real exception.
+        sk_view = memoryview(secret_key)
+        x25519_pub = bytes(sk_view[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES])
+        kyber_pub = bytes(sk_view[kyber_sk_end:])
+        x25519_ss = native_x25519_key_exchange(sk_view[: self._X25519_KEY_BYTES], x25519_eph_pub)
+        try:
+            kyber_ss = kyber_decapsulate(
+                kyber_ct, sk_view[2 * self._X25519_KEY_BYTES : kyber_sk_end]
+            )
+            try:
+                # Combine with matching info binding (must match encapsulate)
+                return self._combiner.combine(
+                    classical_ss=x25519_ss,
+                    pqc_ss=kyber_ss,
+                    classical_ct=x25519_eph_pub,
+                    pqc_ct=kyber_ct,
+                    classical_pk=x25519_pub,
+                    pqc_pk=kyber_pub,
+                )
+            finally:
+                _kc_secure_memzero(kyber_ss)
+        finally:
+            _kc_secure_memzero(x25519_ss)
 
 
 #: Domain-separation label of the hybrid (Ed25519 + ML-DSA-65) signature
@@ -1699,24 +1837,31 @@ class HybridSignatureProvider(CryptoProvider):
                 "&& cmake --build build"
             )
 
-        classical_keys = self.classical_provider.generate_keypair()
-        pqc_keys = self.pqc_provider.generate_keypair()
+        # The component keypairs and the combined secret are held until the
+        # KeyPair has adopted the combined key; a refusal zeroes all of them.
+        with ScrubOnRaise() as held:
+            classical_keys = held(self.classical_provider.generate_keypair())
+            pqc_keys = held(self.pqc_provider.generate_keypair())
 
-        # Combine keys (Ed25519 first, then Dilithium)
-        combined_pk = classical_keys.public_key + pqc_keys.public_key
-        combined_sk = classical_keys.secret_key + pqc_keys.secret_key
+            # Combine keys (Ed25519 first, then Dilithium), as one bytearray
+            combined_pk = classical_keys.public_key + pqc_keys.public_key
+            combined_sk = held(bytearray(classical_keys.secret_key) + pqc_keys.secret_key)
 
-        return KeyPair(
-            public_key=combined_pk,
-            secret_key=combined_sk,
-            algorithm=self.algorithm,
-            metadata={
-                "classical_algorithm": "Ed25519",
-                "pqc_algorithm": "ML-DSA-65",
-                "classical_pk_size": len(classical_keys.public_key),
-                "pqc_pk_size": len(pqc_keys.public_key),
-            },
-        )
+            keypair = KeyPair(
+                public_key=combined_pk,
+                secret_key=combined_sk,
+                algorithm=self.algorithm,
+                metadata={
+                    "classical_algorithm": "Ed25519",
+                    "pqc_algorithm": "ML-DSA-65",
+                    "classical_pk_size": len(classical_keys.public_key),
+                    "pqc_pk_size": len(pqc_keys.public_key),
+                },
+            )
+            # The combined key is the only secret copy left: zero the components.
+            classical_keys.wipe()
+            pqc_keys.wipe()
+        return keypair
 
     # Module-level thread pool for parallel hybrid verification (Item 9).
     # Shared across all HybridSignatureProvider instances to avoid per-call
@@ -1764,9 +1909,6 @@ class HybridSignatureProvider(CryptoProvider):
             if len(secret_key) == self.ED25519_FULL_SK_SIZE + self.DILITHIUM_SK_SIZE
             else self.ED25519_SK_SIZE
         )
-        classical_sk_bytes = secret_key[:classical_size]
-        pqc_sk = secret_key[classical_size:]
-
         # Compute hash once and pass to both providers
         msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
@@ -1774,10 +1916,19 @@ class HybridSignatureProvider(CryptoProvider):
         # Ed25519 over the explicit wrapper, ML-DSA-65 with the label as its
         # FIPS 204 context.  ``message_hash`` stays the hash of the caller's
         # message; it is metadata, not signed input.
-        classical_sig = self.classical_provider.sign(
-            hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
-        )
-        pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
+        #
+        # The key is lent to the two signers, not sliced out of: a slice of a
+        # bytearray is a populated copy of the Ed25519 key and of the 4,032-byte
+        # ML-DSA key that nothing would ever zero.  The loan ends with the block
+        # (see :class:`_Borrowed`), including when a signer raises.
+        with _Borrowed(secret_key, (0, classical_size), (classical_size, None)) as (
+            classical_sk_bytes,
+            pqc_sk,
+        ):
+            classical_sig = self.classical_provider.sign(
+                hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
+            )
+            pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
 
         # Combine signatures (Ed25519 first, then Dilithium)
         combined_sig = classical_sig.signature + pqc_sig_bytes
@@ -1954,8 +2105,8 @@ class AmaCryptography:
             raise TypeError("Current algorithm does not support KEM")
         return self.provider.encapsulate(public_key)
 
-    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
-        """Decapsulate a shared secret (KEM)"""
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytearray:
+        """Decapsulate a shared secret (KEM), returned in a wipeable ``bytearray``."""
         _enforce_invariant7()
         _check_operational()
         if not isinstance(self.provider, KEMProvider):
@@ -2006,7 +2157,7 @@ class AmaCryptography:
             raise ValueError(f"Unsupported hash algorithm: {algorithm}")
 
     @staticmethod
-    def constant_time_compare(a: bytes, b: bytes) -> bool:
+    def constant_time_compare(a: SecretBytes, b: SecretBytes) -> bool:
         """
         Constant-time comparison of byte strings
 
@@ -2104,12 +2255,12 @@ def quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256") -> bytes:
 
 
 def quick_hkdf(
-    ikm: bytes,
+    ikm: SecretBytes,
     length: int,
     salt: "Optional[bytes]" = None,
     info: bytes = b"",
     algorithm: str = "sha256",
-) -> bytes:
+) -> bytearray:
     """
     Quick HKDF (RFC 5869): derive key material in one call via the native
     backend.
@@ -2126,7 +2277,7 @@ def quick_hkdf(
         algorithm: "sha256" (default), "sha384", "sha512", or "sha3-256".
 
     Returns:
-        `length` bytes of derived key material.
+        `length` bytes of derived key material, in a wipeable ``bytearray``.
 
     Raises:
         ValueError: Unsupported algorithm or length out of range.
@@ -2276,8 +2427,42 @@ def get_pqc_capabilities() -> Dict[str, Any]:
     }
 
 
+class _SigningExpansionCache(SecretMaterial):
+    """The cache ``_normalized_signing_secret`` keeps on a package config.
+
+    A plain base class, not part of the dataclass: annotations here are not
+    dataclass fields, so neither attribute is an ``__init__`` argument, a
+    ``repr`` entry or compared by ``==`` (equality must not depend on whether a
+    package has been signed yet).  They have class-level defaults, so an object
+    that never ran this module's constructor -- one unpickled from a release
+    that stored neither, a subclass whose ``__init__`` or ``__post_init__`` does
+    not chain up -- reads ``None`` instead of raising ``AttributeError``; the
+    base release declared the memo as a defaulted dataclass field, which had
+    the same property.
+    """
+
+    # ``(public_key identity, secret_key identity, normalized secret)``.
+    #
+    # Keyed on the identity of the two ELEMENTS, not of the container: the
+    # runtime validator admits a list, whose identity survives element
+    # replacement, and a container-identity memo kept returning the previous
+    # key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
+    # immutable, so element identity implies element value.
+    #
+    # Written by ``_normalized_signing_secret`` on first use of a
+    # ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
+    # keygen pairwise consistency test it drags in) is paid once per identity
+    # instead of once per package (cost: see ``_normalized_signing_secret``).
+    _normalized_signing_memo: Optional[Tuple[bytes, SecretBytes, SecretBytes]] = None
+    # The part of the memo that is a secret the library minted: the expansion,
+    # or ``None`` where the "normalized" secret is the caller's own key (which
+    # this object must never wipe).
+    _signing_expansion: Optional[bytearray] = None
+
+
+@constant_time_equality(secret=("signing_keypair",))
 @dataclass
-class CryptoPackageConfig:
+class CryptoPackageConfig(_SigningExpansionCache):
     """
     Configuration for create_crypto_package() algorithm selection.
 
@@ -2299,7 +2484,28 @@ class CryptoPackageConfig:
         num_derived_keys: Number of HKDF-derived keys to generate (default: 3)
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
         tsa_mode: TSA mode — "online", "mock", or "disabled" (default: "online")
+
+    A config that has signed a package holds a second, expanded copy of the
+    ``signing_keypair`` secret key (see ``_normalized_signing_secret``).  It
+    is the config's own and :meth:`wipe` zeroes it, as does the config's
+    collection; the ``signing_keypair`` the caller supplied is the caller's
+    and is never touched.  The wipe leaves the config usable: the next
+    package re-expands from the caller's key.
+
+    Several threads may create packages from one config: the first use of a
+    key is serialized and the expansion shared.  Replacing ``signing_keypair``
+    while another thread is signing with the config is not supported (the
+    replaced key's expansion is zeroed).  A ``CryptoPackageResult`` owns its
+    own copy of the signing key's secret half; the key passed in stays the
+    caller's through ``result.wipe()``.
     """
+
+    # The cached expansion of ``signing_keypair`` (INVARIANT-6): the one secret
+    # buffer this object owns.  ``==`` compares the key the caller supplied,
+    # ``signing_keypair``, in constant time (named explicitly above: the
+    # default would compare ``_SECRET_ATTRS``, which is a cache and not a
+    # field, and the claim would be vacuous).
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = ("_signing_expansion",)
 
     use_kyber: bool = False
     use_sphincs: bool = False
@@ -2309,7 +2515,7 @@ class CryptoPackageConfig:
     num_derived_keys: int = 3
     tsa_url: Optional[str] = None
     tsa_mode: str = "online"
-    signing_keypair: Optional[Tuple[bytes, bytes]] = None
+    signing_keypair: Optional[Tuple[bytes, SecretBytes]] = field(default=None, repr=False)
     """Pre-generated signing keypair (public_key, secret_key) to reuse.
 
     When provided, ``create_crypto_package()`` skips keypair generation and
@@ -2325,28 +2531,35 @@ class CryptoPackageConfig:
     When ``None`` (default), a fresh keypair is generated per call.
     """
 
-    _normalized_signing_memo: Optional[Tuple[bytes, bytes, bytes]] = field(
-        default=None, init=False, repr=False, compare=False
-    )
-    """``(public_key identity, secret_key identity, normalized secret)`` memo.
+    def _drop_signing_memo(self) -> None:
+        """Forget the memo and zero the expansion it cached."""
+        self._normalized_signing_memo = None
+        expansion, self._signing_expansion = self._signing_expansion, None
+        zeroize(expansion)
 
-    Keyed on the identity of the two ELEMENTS, not of the container: the
-    runtime validator admits a list, whose identity survives element
-    replacement, and a container-identity memo kept returning the previous
-    key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
-    immutable, so element identity implies element value.
+    def wipe(self) -> None:
+        """Zero the cached signing-key expansion and forget it.
 
-    Written by ``_normalized_signing_secret`` on first use of a
-    ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
-    keygen pairwise consistency test it drags in) is paid once per identity
-    instead of once per package.  Lives on this object deliberately: the
-    caller already owns the secret key stored two fields up, so the memo
-    introduces no new key-material retention class.
-    """
+        Explicit, so unconditional.  The caller's ``signing_keypair`` is theirs
+        and is left as it is; a later package re-expands from it.
+
+        ``SecretMaterial.wipe`` is not chained to: the one attribute it would
+        zero is already zeroed and cleared here.  What this adds over the mixin
+        is forgetting the memo, without which a ``bytes`` key -- trusted by
+        identity alone -- would be served the zeroed expansion.
+        """
+        self._drop_signing_memo()
+
+    def __del__(self) -> None:
+        # The memo tuple names the expansion too, which reads as a second
+        # owner; it dies with this object, so release it first.
+        self.__dict__.pop("_normalized_signing_memo", None)
+        super().__del__()
 
 
+@constant_time_equality()
 @dataclass
-class CryptoPackageResult:
+class CryptoPackageResult(SecretMaterial):
     """
     Result from create_crypto_package() containing all cryptographic artifacts.
 
@@ -2408,19 +2621,32 @@ class CryptoPackageResult:
     """
 
     content_hash: str
-    hmac_key: bytes = field(repr=False)
+    hmac_key: Union[bytes, bytearray] = field(repr=False)
     hmac_tag: bytes
     primary_signature: Signature
     sphincs_signature: Optional[Signature]
-    derived_keys: List[bytes]
+    derived_keys: List[Union[bytes, bytearray]]
     hkdf_salt: bytes
-    hkdf_master_secret: bytes = field(repr=False)
+    hkdf_master_secret: Union[bytes, bytearray] = field(repr=False)
     hkdf_info: bytes
     timestamp: Optional[bytes]
     kem_ciphertext: Optional[bytes]
-    kem_shared_secret: Optional[bytes]
+    kem_shared_secret: Optional[Union[bytes, bytearray]]
     keypairs: Dict[str, KeyPair]
     metadata: Dict[str, Any]
+
+    # Held wipeable (INVARIANT-6).  wipe() cascades to every keypair the
+    # result owns; their finalizers stay their own.
+    _SECRET_ATTRS: ClassVar[Tuple[str, ...]] = (
+        "hmac_key",
+        "hkdf_master_secret",
+        "derived_keys",
+        "kem_shared_secret",
+    )
+    _SECRET_CHILDREN: ClassVar[Tuple[str, ...]] = ("keypairs",)
+
+    def __post_init__(self) -> None:
+        self._adopt_secrets()
 
     # Secret fields that must be stripped during serialization.
     #
@@ -2636,24 +2862,169 @@ def _public_key_fingerprint(public_key: bytes) -> bytes:
     return bytes(public_key[:8])
 
 
+def _expansion_still_matches(
+    algorithm: AlgorithmType, secret_key: bytearray, normalized: SecretBytes
+) -> bool:
+    """Whether a memoized expansion still describes ``secret_key``'s value.
+
+    A ``bytearray`` key can change in place -- rotated, or wiped by a caller
+    following INVARIANT-6 -- without changing identity, so for one the memo's
+    identity test is not enough.  The parts the expansion copied (the Ed25519
+    seed, and for the hybrid the ML-DSA half) are compared with the key in
+    constant time over zero-copy views.
+    """
+    from ama_cryptography.secure_memory import constant_time_compare
+
+    if normalized is secret_key:
+        return True
+    seed_len = HybridSignatureProvider.ED25519_SK_SIZE
+    key = memoryview(secret_key)
+    expanded = memoryview(normalized)
+    if algorithm is AlgorithmType.ED25519:
+        return constant_time_compare(key, expanded[:seed_len])
+    # HYBRID_SIG: seed || ML-DSA sk  against  (seed || Ed25519 pk) || ML-DSA sk
+    full = 2 * seed_len
+    return constant_time_compare(key[:seed_len], expanded[:seed_len]) and (
+        constant_time_compare(key[seed_len:], expanded[full:])
+    )
+
+
+#: Serializes the MISS path of :func:`_normalized_signing_secret` (check, build,
+#: store).  Process-wide rather than per config: a lock held in a config's
+#: ``__dict__`` would make the config unpicklable and uncopyable, and a miss
+#: is a once-per-key event.  Re-entrant, so the same thread coming back in
+#: cannot deadlock itself.  A memo HIT never takes it.  Known limits: a child
+#: forked while another thread holds it inherits it locked, and replacing a
+#: config's ``signing_keypair`` while another thread signs with it is unsupported.
+_SIGNING_EXPANSION_LOCK = threading.RLock()
+
+
+def _memoized_signing_secret(
+    config: CryptoPackageConfig, public_key: bytes, secret_key: SecretBytes
+) -> Optional[SecretBytes]:
+    """The normalized secret ``config`` has memoized for exactly this key, or ``None``."""
+    # Memo hit requires ELEMENT identity, not container identity.  The
+    # runtime validator in create_crypto_package deliberately admits a list
+    # container, and a list's identity survives element replacement — so a
+    # container-identity memo returned the OLD normalized secret after a
+    # caller swapped config.signing_keypair[1] in place, silently signing
+    # every subsequent package under the replaced key while attaching the
+    # new public key: unverifiable by construction, detected only
+    # downstream.  The elements themselves are enforced to be bytes
+    # (immutable), so element identity implies element value — two `is`
+    # checks close the hole completely, at no cost, with no behavioural
+    # change for any caller who replaces the tuple (both keyings miss) or
+    # reuses it (both hit).
+    #
+    # A bytearray key (every keygen returns one) is mutable, so identity no
+    # longer implies value: a key rotated or wiped in place would otherwise
+    # keep signing under the expansion of what it used to hold.  For one, a
+    # hit also requires the cached expansion to match the key's current value.
+    cached = config._normalized_signing_memo
+    if (
+        cached is not None
+        and cached[0] is public_key
+        and cached[1] is secret_key
+        and (
+            isinstance(secret_key, bytes)
+            or _expansion_still_matches(config.signature_algorithm, secret_key, cached[2])
+        )
+    ):
+        return cached[2]
+    return None
+
+
+def _expand_signing_secret(
+    algorithm: AlgorithmType, public_key: bytes, secret_key: SecretBytes
+) -> SecretBytes:
+    """Expand ``secret_key`` to the form the native signer takes, checking it against
+    ``public_key``; ``secret_key`` itself where there is nothing to expand.  Records
+    nothing: the caller owns the memo.
+    """
+    from ama_cryptography.secure_memory import constant_time_compare
+
+    normalized = secret_key
+    seed_size = HybridSignatureProvider.ED25519_SK_SIZE
+    if (
+        algorithm is AlgorithmType.HYBRID_SIG
+        and len(secret_key) == seed_size + HybridSignatureProvider.DILITHIUM_SK_SIZE
+    ):
+        # The seed is borrowed, the expanded Ed25519 key is zeroed once its 64
+        # bytes are in place, and the result is assembled once in a buffer sized
+        # for it: slicing the seed out and concatenating
+        # ``full_sk + secret_key[32:]`` left the seed, the 64-byte expansion and a
+        # 4,000-byte copy of the ML-DSA key populated and unowned.
+        with _Borrowed(secret_key, (0, seed_size)) as (seed,):
+            derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
+        try:
+            if not constant_time_compare(
+                derived_pk, public_key[: HybridSignatureProvider.ED25519_PK_SIZE]
+            ):
+                raise ValueError(
+                    "signing_keypair mismatch: the Ed25519 public-key component does "
+                    "not correspond to the supplied Ed25519 seed"
+                )
+            # Nothing here can fail once the buffer exists -- both slices are
+            # sized from the two lengths just read -- so the buffer needs no
+            # scrub-on-raise of its own (an unreachable guard is one no test
+            # can protect).
+            normalized = bytearray(len(full_sk) + len(secret_key) - seed_size)
+            with (
+                memoryview(normalized) as view,
+                memoryview(secret_key) as whole,
+                whole[seed_size:] as tail,
+            ):
+                view[: len(full_sk)] = full_sk
+                view[len(full_sk) :] = tail
+        finally:
+            zeroize(full_sk)
+    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == seed_size:
+        with _Borrowed(secret_key, (0, seed_size)) as (seed,):
+            derived_pk, expanded = native_ed25519_keypair_from_seed(seed)
+        # The expansion is what is memoized, so it is zeroed only if the check
+        # refuses it (a mismatch used to leave it populated).
+        with ScrubOnRaise() as held:
+            normalized = held(expanded)
+            if not constant_time_compare(derived_pk, public_key):
+                raise ValueError(
+                    "signing_keypair mismatch: the Ed25519 public key does not "
+                    "correspond to the supplied seed"
+                )
+    return normalized
+
+
 def _normalized_signing_secret(
-    config: CryptoPackageConfig, public_key: bytes, secret_key: bytes
-) -> bytes:
+    config: CryptoPackageConfig, public_key: bytes, secret_key: SecretBytes
+) -> SecretBytes:
     """Normalize a pre-generated signing secret once per config object.
 
     HYBRID_SIG and ED25519 secret keys embed the Ed25519 secret as its
     32-byte seed.  :meth:`Ed25519Provider.sign` expands a seed to the
     64-byte native form on every call, and that expansion is a key
     *generation* (``native_ed25519_keypair_from_seed``), so it also re-ran
-    the INVARIANT-41 pairwise consistency test per signature — measured at
-    ~0.2 ms per package on the agent flow the ``signing_keypair`` option
-    exists for, a cost with no security payoff after the first call.
+    the INVARIANT-41 pairwise consistency test per signature, a cost with no
+    security payoff after the first call.
+
+    The memo saves 0.85-0.89 M retired instructions per package (miss minus hit),
+    about 60% of a memo-warm Ed25519 package (Cachegrind, Intel Xeon 2.80 GHz,
+    Release -O3 LTO, gcc 13.3.0).
+
+    Thread safety.  A miss -- check, build, store -- runs under one
+    process-wide lock (a hit takes none), and the second thread to ask for a
+    key finds it already expanded.  The expansion a new one supersedes is read
+    BEFORE the build: read after it, it can be a sibling's fresh expansion,
+    which that sibling is signing with.  Replacing ``signing_keypair`` while
+    another thread signs with the same config is not supported -- its old
+    expansion is zeroed.
 
     The expansion is done once here and memoized on the *config object*,
     which the caller already owns and which already holds the secret key —
-    the cached expansion is derivable from what the object stores, so this
-    creates no new key-material retention class (contrast module-level
-    caches, which INVARIANT-41's continuous-RNG fix removed).  The memo is
+    the cached expansion is derivable from what the object stores (contrast
+    module-level caches, which INVARIANT-41's continuous-RNG fix removed).
+    It is nonetheless a second copy of the key that the caller cannot reach
+    to wipe, so the config owns it as INVARIANT-6 secret material:
+    ``config.wipe()`` zeroes it, the config's collection zeroes it, and a
+    superseding memo zeroes the one it replaces.  The memo is
     keyed on the identity of the two bytes ELEMENTS (immutable, so
     identity implies value), so replacing the tuple or swapping an element
     inside an admitted list container (e.g. after ``KeypairCache.rotate()``)
@@ -2668,47 +3039,34 @@ def _normalized_signing_secret(
     from the seed and reads the public-key half from the expanded form,
     which this function guarantees is the seed's own derived key.
     """
-    # Memo hit requires ELEMENT identity, not container identity.  The
-    # runtime validator in create_crypto_package deliberately admits a list
-    # container, and a list's identity survives element replacement — so a
-    # container-identity memo returned the OLD normalized secret after a
-    # caller swapped config.signing_keypair[1] in place, silently signing
-    # every subsequent package under the replaced key while attaching the
-    # new public key: unverifiable by construction, detected only
-    # downstream.  The elements themselves are enforced to be bytes
-    # (immutable), so element identity implies element value — two `is`
-    # checks close the hole completely, at no cost, with no behavioural
-    # change for any caller who replaces the tuple (both keyings miss) or
-    # reuses it (both hit).
-    cached = config._normalized_signing_memo
-    if cached is not None and cached[0] is public_key and cached[1] is secret_key:
-        return cached[2]
-
-    algorithm = config.signature_algorithm
-    normalized = secret_key
-    if (
-        algorithm is AlgorithmType.HYBRID_SIG
-        and len(secret_key)
-        == HybridSignatureProvider.ED25519_SK_SIZE + HybridSignatureProvider.DILITHIUM_SK_SIZE
-    ):
-        seed = secret_key[: HybridSignatureProvider.ED25519_SK_SIZE]
-        derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
-        if derived_pk != public_key[: HybridSignatureProvider.ED25519_PK_SIZE]:
-            raise ValueError(
-                "signing_keypair mismatch: the Ed25519 public-key component does "
-                "not correspond to the supplied Ed25519 seed"
-            )
-        normalized = full_sk + secret_key[HybridSignatureProvider.ED25519_SK_SIZE :]
-    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == 32:
-        derived_pk, full_sk = native_ed25519_keypair_from_seed(secret_key)
-        if derived_pk != public_key:
-            raise ValueError(
-                "signing_keypair mismatch: the Ed25519 public key does not "
-                "correspond to the supplied seed"
-            )
-        normalized = full_sk
-
-    config._normalized_signing_memo = (public_key, secret_key, normalized)
+    served = _memoized_signing_secret(config, public_key, secret_key)
+    if served is not None:
+        return served
+    with _SIGNING_EXPANSION_LOCK:
+        # A thread that waited here found the key it was waiting for already
+        # expanded by the one that held the lock.
+        served = _memoized_signing_secret(config, public_key, secret_key)
+        if served is not None:
+            return served
+        # The expansion this one replaces is read BEFORE the build, so what is
+        # zeroed below is only what this call saw in place.  Read after, it is
+        # whatever a sibling stored in the meantime -- an expansion that sibling
+        # is signing with.  The lock keeps a sibling out; the early read is what
+        # keeps a nested call that does get in (the same thread, through the
+        # re-entrant lock) from having its fresh expansion zeroed under it.
+        superseded = config._signing_expansion
+        normalized = _expand_signing_secret(config.signature_algorithm, public_key, secret_key)
+        # The expansion is a copy of the key that this object owns; the previous one
+        # is a copy of the key it used to hold, and is zeroed rather than left for
+        # the collector.  (It is never the new one: every miss builds a fresh buffer
+        # or records ``None``.)
+        config._normalized_signing_memo = (public_key, secret_key, normalized)
+        config._signing_expansion = (
+            normalized
+            if isinstance(normalized, bytearray) and normalized is not secret_key
+            else None
+        )
+        zeroize(superseded)
     return normalized
 
 
@@ -2821,95 +3179,8 @@ def create_crypto_package(
     # and each provider's .sign() would otherwise recompute it independently.
     _precomputed_hash = bytes.fromhex(content_hash)
 
-    # ========================================================================
-    # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
-    # ========================================================================
-    # INVARIANT-41: key material comes from the health-tested, error-state-gated
-    # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
-    hmac_key = secure_token_bytes(32)  # 256-bit HMAC key
-    hmac_tag = _hmac_sha3_256(hmac_key, content)
-
-    # ========================================================================
-    # LAYER 3: Digital Signature — Hybrid Ed25519 + ML-DSA-65
-    # ========================================================================
-    keypairs: Dict[str, KeyPair] = {}
-    sphincs_signature: Optional[Signature] = None
-    kem_ciphertext: Optional[bytes] = None
-    kem_shared_secret: Optional[bytes] = None
-    kem_commitment: Optional[str] = None
-
-    # Generate primary signature (with 3R timing instrumentation)
-    primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
-    if config.signing_keypair is not None:
-        if (
-            not isinstance(config.signing_keypair, (tuple, list))
-            or len(config.signing_keypair) != 2
-        ):
-            raise TypeError(
-                "signing_keypair must be a (public_key, secret_key) pair of two "
-                "bytes values (tuple, or the equivalent list)"
-            )
-        _pk, _sk = config.signing_keypair
-        if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
-            raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
-        if len(_pk) == 0 or len(_sk) == 0:
-            raise ValueError("signing_keypair keys must be non-empty")
-        from ama_cryptography.secure_memory import constant_time_compare
-
-        if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
-            _sk, b"\x00" * len(_sk)
-        ):
-            raise ValueError("signing_keypair keys must not be all-zero")
-        primary_keypair = KeyPair(
-            public_key=_pk,
-            secret_key=_sk,
-            algorithm=config.signature_algorithm,
-            metadata={"source": "pre-generated"},
-        )
-        _signing_secret = _normalized_signing_secret(config, _pk, _sk)
-    else:
-        primary_keypair = primary_crypto.generate_keypair()
-        _signing_secret = primary_keypair.secret_key
-    keypairs[config.signature_algorithm.name] = primary_keypair
-    # The signature itself is produced at the END of this function, over the
-    # finished package's transcript rather than over `content`.  Signing here
-    # — before the add-ons, the timestamp and the metadata exist — is what
-    # left every one of them outside the signature (2026-09 audit, A-2): an
-    # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
-    # still verified as fully valid.  See `package_transcript`.
-
-    # Optional add-on: SPHINCS+ secondary signature
-    if config.use_sphincs:
-        if not SPHINCS_AVAILABLE:
-            raise SphincsUnavailableError(
-                "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
-                "&& cmake --build build"
-            )
-        sphincs_provider = SphincsProvider()
-        sphincs_keypair = sphincs_provider.generate_keypair()
-        _t0 = time.perf_counter_ns()
-        sphincs_signature = sphincs_provider.sign(
-            content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
-        )
-        _sphincs_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation(
-            "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
-        )
-        _monitor.record_operation_event(
-            "sphincs_sign",
-            key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
-        )
-        keypairs["SPHINCS_256F"] = sphincs_keypair
-
-    # ========================================================================
-    # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
-    # ========================================================================
-    # INVARIANT-41: health-tested, error-state-gated draw (see above).
-    master_secret = secure_token_bytes(32)  # 256-bit master secret
-    hkdf_salt = secure_token_bytes(32)
-    hkdf_info = b"ama_cryptography_crypto_package_v1"
-    derived_keys: List[bytes] = []
+    # Every refusal that depends only on the configuration comes before the
+    # first secret is drawn, so a refused call mints nothing (PR #415 review).
     if config.num_derived_keys < 1:
         # Layer 4 requires at least one derived key: verify_crypto_package
         # fails closed on an empty derived_keys list, so a package built with
@@ -2920,110 +3191,216 @@ def create_crypto_package(
             f"num_derived_keys must be at least 1, got {config.num_derived_keys}: "
             f"Layer 4 (HKDF key derivation) cannot be verified without one."
         )
-    for i in range(config.num_derived_keys):
-        dk = _hkdf_sha3_256(
-            ikm=master_secret,
-            length=32,
-            salt=hkdf_salt,
-            info=hkdf_info + b":" + str(i).encode(),
+    if config.use_sphincs and not SPHINCS_AVAILABLE:
+        raise SphincsUnavailableError(
+            "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
+            "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+            "&& cmake --build build"
         )
-        derived_keys.append(dk)
+    if config.use_kyber and config.include_kem and not KYBER_AVAILABLE:
+        raise KyberUnavailableError(
+            "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
+            "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+            "&& cmake --build build"
+        )
 
-    # ========================================================================
-    # OPTIONAL ADD-ON: Kyber-1024 Key Encapsulation Mechanism
-    # ========================================================================
-    if config.use_kyber and config.include_kem:
-        if not KYBER_AVAILABLE:
-            raise KyberUnavailableError(
-                "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
-                "&& cmake --build build"
+    # Each secret this call mints is registered as it is minted and zeroed if
+    # anything later raises -- a refused signing key, a timestamp failure, the
+    # signature itself.  A caller-supplied signing key is not registered: it
+    # is the caller's (PR #415 review); the copy of it the result's keypair
+    # holds is this call's and is.
+    with ScrubOnRaise() as held:
+        # ========================================================================
+        # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
+        # ========================================================================
+        # INVARIANT-41: key material comes from the health-tested, error-state-gated
+        # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
+        hmac_key = held(secure_token_bytearray(32))  # 256-bit HMAC key
+        hmac_tag = _hmac_sha3_256(hmac_key, content)
+
+        # ========================================================================
+        # LAYER 3: Digital Signature — Hybrid Ed25519 + ML-DSA-65
+        # ========================================================================
+        keypairs: Dict[str, KeyPair] = {}
+        sphincs_signature: Optional[Signature] = None
+        kem_ciphertext: Optional[bytes] = None
+        kem_shared_secret: Optional[SecretBytes] = None
+        kem_commitment: Optional[str] = None
+
+        # Generate primary signature (with 3R timing instrumentation)
+        primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
+        if config.signing_keypair is not None:
+            if (
+                not isinstance(config.signing_keypair, (tuple, list))
+                or len(config.signing_keypair) != 2
+            ):
+                raise TypeError(
+                    "signing_keypair must be a (public_key, secret_key) pair of two "
+                    "bytes values (tuple, or the equivalent list)"
+                )
+            _pk, _sk = config.signing_keypair
+            # The secret half may be a bytearray: every keygen in this library
+            # returns one, so its holder can wipe it (INVARIANT-6).
+            if not isinstance(_pk, bytes) or not isinstance(_sk, (bytes, bytearray)):
+                raise TypeError("signing_keypair must be a tuple of (bytes, bytes or bytearray)")
+            if len(_pk) == 0 or len(_sk) == 0:
+                raise ValueError("signing_keypair keys must be non-empty")
+            from ama_cryptography.secure_memory import constant_time_compare
+
+            if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
+                _sk, b"\x00" * len(_sk)
+            ):
+                raise ValueError("signing_keypair keys must not be all-zero")
+            # The result's keypair holds its OWN copy of the secret half.  Adopting
+            # the caller's buffer made ``result.wipe()`` (and the keypair's
+            # collection) zero the key the caller supplied and still signs with:
+            # the caller keeps ownership of what it passes in, the result owns
+            # what the library puts in it, and this copy is the library's, so a
+            # refusal below zeroes it with the rest of what this call minted.
+            primary_keypair = held(
+                KeyPair(
+                    public_key=_pk,
+                    secret_key=bytearray(_sk),
+                    algorithm=config.signature_algorithm,
+                    metadata={"source": "pre-generated"},
+                )
             )
-        kyber_provider = KyberProvider()
-        kyber_keypair = kyber_provider.generate_keypair()
+            _signing_secret: SecretBytes = _normalized_signing_secret(config, _pk, _sk)
+        else:
+            primary_keypair = held(primary_crypto.generate_keypair())
+            _signing_secret = primary_keypair.secret_key
+        keypairs[config.signature_algorithm.name] = primary_keypair
+        # The signature itself is produced at the END of this function, over the
+        # finished package's transcript rather than over `content`.  Signing here
+        # — before the add-ons, the timestamp and the metadata exist — is what
+        # left every one of them outside the signature (2026-09 audit, A-2): an
+        # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
+        # still verified as fully valid.  See `package_transcript`.
+
+        # Optional add-on: SPHINCS+ secondary signature
+        if config.use_sphincs:
+            sphincs_provider = SphincsProvider()
+            sphincs_keypair = held(sphincs_provider.generate_keypair())
+            _t0 = time.perf_counter_ns()
+            sphincs_signature = sphincs_provider.sign(
+                content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
+            )
+            _sphincs_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation(
+                "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
+            )
+            _monitor.record_operation_event(
+                "sphincs_sign",
+                key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
+            )
+            keypairs["SPHINCS_256F"] = sphincs_keypair
+
+        # ========================================================================
+        # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
+        # ========================================================================
+        # INVARIANT-41: health-tested, error-state-gated draw (see above).
+        master_secret = held(secure_token_bytearray(32))  # 256-bit master secret
+        hkdf_salt = secure_token_bytes(32)
+        hkdf_info = b"ama_cryptography_crypto_package_v1"
+        derived_keys: List[SecretBytes] = held([])
+        for i in range(config.num_derived_keys):
+            dk = _hkdf_sha3_256(
+                ikm=master_secret,
+                length=32,
+                salt=hkdf_salt,
+                info=hkdf_info + b":" + str(i).encode(),
+            )
+            derived_keys.append(dk)
+
+        # ========================================================================
+        # OPTIONAL ADD-ON: Kyber-1024 Key Encapsulation Mechanism
+        # ========================================================================
+        if config.use_kyber and config.include_kem:
+            kyber_provider = KyberProvider()
+            kyber_keypair = held(kyber_provider.generate_keypair())
+            _t0 = time.perf_counter_ns()
+            encapsulated = held(kyber_provider.encapsulate(kyber_keypair.public_key))
+            _encaps_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation(
+                "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+            )
+            _monitor.record_operation_event(
+                "kyber_encaps",
+                key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
+            )
+            kem_ciphertext = encapsulated.ciphertext
+            kem_shared_secret = encapsulated.shared_secret
+            kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
+            keypairs["KYBER_1024"] = kyber_keypair
+
+        # ========================================================================
+        # OPTIONAL ADD-ON: RFC 3161 Timestamp
+        # ========================================================================
+        timestamp_token = _acquire_timestamp(content, config)
+
+        # Build metadata
+        metadata: Dict[str, Any] = {
+            "signature_algorithm": config.signature_algorithm.name,
+            "sphincs_enabled": config.use_sphincs,
+            "kyber_enabled": config.use_kyber and config.include_kem,
+            "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
+            "num_derived_keys": len(derived_keys),
+            "pqc_status": get_pqc_capabilities()["status"],
+            "defense_layers": 4,
+            "multi_layer_defense": True,
+            # Signed stand-in for the KEM shared secret; None without the add-on.
+            "kem_shared_secret_commitment": kem_commitment,
+            # Signed stand-in for the Layer-4 derived keys (and, through them, the
+            # master secret): the keys are secrets the redacted form strips.
+            "derived_keys_commitment": _derived_keys_commitment(derived_keys),
+        }
+
+        # ========================================================================
+        # LAYER 3, completed: sign the finished package's transcript
+        # ========================================================================
+        # The package is assembled first with a placeholder signature, the
+        # transcript is taken from THE SAME function the verifier will call, and
+        # the real signature replaces the placeholder.  `package_transcript` never
+        # reads `primary_signature`, so the placeholder cannot influence what is
+        # signed; `test_crypto_package_transcript.py` pins that independently.
+        #
+        # Assembling the object rather than passing a dozen locals to a parallel
+        # builder is deliberate: a second construction site is a second thing that
+        # can drift out of step with the verifier, and the two agreeing is the
+        # entire property being bought here.
+        package = CryptoPackageResult(
+            content_hash=content_hash,
+            hmac_key=hmac_key,
+            hmac_tag=hmac_tag,
+            primary_signature=_unsigned_placeholder(config.signature_algorithm),
+            sphincs_signature=sphincs_signature,
+            derived_keys=derived_keys,
+            hkdf_salt=hkdf_salt,
+            hkdf_master_secret=master_secret,
+            hkdf_info=hkdf_info,
+            timestamp=timestamp_token,
+            kem_ciphertext=kem_ciphertext,
+            kem_shared_secret=kem_shared_secret,
+            keypairs=keypairs,
+            metadata=metadata,
+        )
+        signed_transcript = package_transcript(package, _precomputed_hash)
         _t0 = time.perf_counter_ns()
-        encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
-        _encaps_ns = time.perf_counter_ns() - _t0
+        package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
+        _sign_ns = time.perf_counter_ns() - _t0
         _monitor.monitor_crypto_operation(
-            "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+            "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
         )
+        # INVARIANT-30 companion signal.  Wired at the sites that are already
+        # instrumented rather than pushed down into the providers, so no new call
+        # path acquires a lock and the hot primitives stay untouched.  The
+        # fingerprint is a slice of the PUBLIC key — it lets the detector tell
+        # ephemeral-identity-per-artifact churn from a hot loop over one key.
         _monitor.record_operation_event(
-            "kyber_encaps",
-            key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
+            f"{config.signature_algorithm.name.lower()}_sign",
+            key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
         )
-        kem_ciphertext = encapsulated.ciphertext
-        kem_shared_secret = encapsulated.shared_secret
-        kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
-        keypairs["KYBER_1024"] = kyber_keypair
-
-    # ========================================================================
-    # OPTIONAL ADD-ON: RFC 3161 Timestamp
-    # ========================================================================
-    timestamp_token = _acquire_timestamp(content, config)
-
-    # Build metadata
-    metadata: Dict[str, Any] = {
-        "signature_algorithm": config.signature_algorithm.name,
-        "sphincs_enabled": config.use_sphincs,
-        "kyber_enabled": config.use_kyber and config.include_kem,
-        "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
-        "num_derived_keys": len(derived_keys),
-        "pqc_status": get_pqc_capabilities()["status"],
-        "defense_layers": 4,
-        "multi_layer_defense": True,
-        # Signed stand-in for the KEM shared secret; None without the add-on.
-        "kem_shared_secret_commitment": kem_commitment,
-        # Signed stand-in for the Layer-4 derived keys (and, through them, the
-        # master secret): the keys are secrets the redacted form strips.
-        "derived_keys_commitment": _derived_keys_commitment(derived_keys),
-    }
-
-    # ========================================================================
-    # LAYER 3, completed: sign the finished package's transcript
-    # ========================================================================
-    # The package is assembled first with a placeholder signature, the
-    # transcript is taken from THE SAME function the verifier will call, and
-    # the real signature replaces the placeholder.  `package_transcript` never
-    # reads `primary_signature`, so the placeholder cannot influence what is
-    # signed; `test_crypto_package_transcript.py` pins that independently.
-    #
-    # Assembling the object rather than passing a dozen locals to a parallel
-    # builder is deliberate: a second construction site is a second thing that
-    # can drift out of step with the verifier, and the two agreeing is the
-    # entire property being bought here.
-    package = CryptoPackageResult(
-        content_hash=content_hash,
-        hmac_key=hmac_key,
-        hmac_tag=hmac_tag,
-        primary_signature=_unsigned_placeholder(config.signature_algorithm),
-        sphincs_signature=sphincs_signature,
-        derived_keys=derived_keys,
-        hkdf_salt=hkdf_salt,
-        hkdf_master_secret=master_secret,
-        hkdf_info=hkdf_info,
-        timestamp=timestamp_token,
-        kem_ciphertext=kem_ciphertext,
-        kem_shared_secret=kem_shared_secret,
-        keypairs=keypairs,
-        metadata=metadata,
-    )
-    signed_transcript = package_transcript(package, _precomputed_hash)
-    _t0 = time.perf_counter_ns()
-    package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
-    _sign_ns = time.perf_counter_ns() - _t0
-    _monitor.monitor_crypto_operation(
-        "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
-    )
-    # INVARIANT-30 companion signal.  Wired at the sites that are already
-    # instrumented rather than pushed down into the providers, so no new call
-    # path acquires a lock and the hot primitives stay untouched.  The
-    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
-    # ephemeral-identity-per-artifact churn from a hot loop over one key.
-    _monitor.record_operation_event(
-        f"{config.signature_algorithm.name.lower()}_sign",
-        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
-    )
-    return package
+        return package
 
 
 def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:
@@ -3047,7 +3424,7 @@ def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:
 _KEM_SS_COMMITMENT_DOMAIN = b"AMA/crypto-package/kem-shared-secret/v1"
 
 
-def _kem_shared_secret_commitment(shared_secret: bytes) -> str:
+def _kem_shared_secret_commitment(shared_secret: SecretBytes) -> str:
     """The public commitment a package signs in place of its KEM shared secret.
 
     The secret itself stays out of the transcript (the redacted form must still
@@ -3055,14 +3432,21 @@ def _kem_shared_secret_commitment(shared_secret: bytes) -> str:
     KEM layer only checked that two unsigned fields agreed with each other: a
     substituted Kyber secret key plus the secret it decapsulates to passed.
     """
-    return native_sha3_256(_KEM_SS_COMMITMENT_DOMAIN + bytes(shared_secret)).hex()
+    # Hashed from a bytearray this function owns and zeroes: ``DOMAIN +
+    # bytes(shared_secret)`` left two immutable copies of the secret behind.
+    preimage = bytearray(_KEM_SS_COMMITMENT_DOMAIN)
+    try:
+        preimage += shared_secret
+        return native_sha3_256(preimage).hex()
+    finally:
+        _kc_secure_memzero(preimage)
 
 
 #: Domain separator for the public commitment to a package's derived keys.
 _DERIVED_KEYS_COMMITMENT_DOMAIN = b"AMA/crypto-package/derived-keys/v1"
 
 
-def _derived_keys_commitment(derived_keys: List[bytes]) -> str:
+def _derived_keys_commitment(derived_keys: Sequence[SecretBytes]) -> str:
     """The public commitment a package signs in place of its derived keys.
 
     The keys are secrets — ``to_dict()`` and a pickle strip them — so, like
@@ -3077,7 +3461,19 @@ def _derived_keys_commitment(derived_keys: List[bytes]) -> str:
     unchanged and Layer 4 is self-consistent, and the keys are the only thing
     that moved.  Layer 4 compares them with this commitment.
     """
-    return native_sha3_256(_DERIVED_KEYS_COMMITMENT_DOMAIN + _canonical(list(derived_keys))).hex()
+    # The preimage is the domain and the transcript's encoding of the key list,
+    # assembled in one buffer this function owns and zeroes.  ``DOMAIN +
+    # canonical(list(derived_keys))`` made a ``bytes`` of each key, joined them
+    # into another, and hashed that: an unwipeable object holding every derived
+    # key, on each package created and each one verified.  The bytes hashed are
+    # identical (pinned by tests/test_signing_path_secrets.py), so packages
+    # signed before this change still verify.
+    preimage = bytearray(_DERIVED_KEYS_COMMITMENT_DOMAIN)
+    try:
+        _append_byte_strings(preimage, derived_keys)
+        return native_sha3_256(preimage).hex()
+    finally:
+        zeroize(preimage)
 
 
 def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:
@@ -3536,22 +3932,28 @@ def verify_crypto_package(
             results["hkdf_keys"] = False
         else:
             hkdf_info = package.hkdf_info
-            recomputed_keys: List[bytes] = []
-            for i in range(len(package.derived_keys)):
-                dk = _hkdf_sha3_256(
-                    ikm=package.hkdf_master_secret,
-                    length=32,
-                    salt=package.hkdf_salt,
-                    info=hkdf_info + b":" + str(i).encode(),
-                )
-                recomputed_keys.append(dk)
+            # Recomputed keys are secrets this verifier minted only to compare;
+            # each is zeroed once the comparison has run.
+            recomputed_keys: List[bytearray] = []
+            try:
+                for i in range(len(package.derived_keys)):
+                    dk = _hkdf_sha3_256(
+                        ikm=package.hkdf_master_secret,
+                        length=32,
+                        salt=package.hkdf_salt,
+                        info=hkdf_info + b":" + str(i).encode(),
+                    )
+                    recomputed_keys.append(dk)
 
-            from ama_cryptography.secure_memory import constant_time_compare as _ct
+                from ama_cryptography.secure_memory import constant_time_compare as _ct
 
-            keys_match = len(recomputed_keys) == len(package.derived_keys)
-            for rk, sk in zip(recomputed_keys, package.derived_keys):
-                if not _ct(rk, sk):
-                    keys_match = False
+                keys_match = len(recomputed_keys) == len(package.derived_keys)
+                for rk, sk in zip(recomputed_keys, package.derived_keys):
+                    if not _ct(rk, sk):
+                        keys_match = False
+            finally:
+                for rk in recomputed_keys:
+                    _kc_secure_memzero(rk)
             # The master secret and the keys are both unsigned, so their
             # agreeing proves nothing on its own: the keys must also be the
             # ones the signed commitment names (see _derived_keys_commitment).

@@ -67,6 +67,7 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_agent_binding", "Agent-instance key/signature binding (INVARIANT-30)"),
     ("ama_argon2", "Argon2id password hashing (RFC 9106)"),
     ("ama_ascon", "Ascon-AEAD128 AEAD and Ascon-Hash256 (NIST SP 800-232)"),
+    ("ama_base64", "Constant-time Base64/Base64url codec for private-key encodings (RFC 4648)"),
     ("ama_chacha20poly1305", "ChaCha20-Poly1305 AEAD (RFC 8439)"),
     ("ama_dilithium", "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)"),
     ("ama_ed25519", "Ed25519 digital signatures (RFC 8032)"),
@@ -76,6 +77,7 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),
     ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
     ("ama_pbkdf2", "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)"),
+    ("ama_platform_rand", "OS CSPRNG draw, zeroed on failure (ama_random_bytes)"),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_sha3", "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)"),
     ("ama_sha512", "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)"),
@@ -95,7 +97,6 @@ INTERNAL_SUPPORT: frozenset[str] = frozenset(
         "ama_cpuid",  # CPU feature detection for dispatch
         "ama_hmac_sha256",  # internal HMAC used by LMS / NIST-P paths
         "ama_hmac_sha384",  # internal HMAC used by RFC 6979 (P-384)
-        "ama_platform_rand",  # OS CSPRNG shim
         "ama_secure_memory",  # zeroization / locked-memory helpers
         "ama_sha256",  # internal SHA-256 backing LMS / NIST-P / HMAC
         "ama_sha256_ni",  # SHA-NI accelerated SHA-256 backend

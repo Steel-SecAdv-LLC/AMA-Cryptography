@@ -211,7 +211,7 @@ def _pkcs8_der_is_an_encoder_output(der: bytes, key: kf.PrivateKey, label: str) 
     for include in (False, True):
         for arm in arms:
             try:
-                forms.append(key.to_pkcs8(include_public_key=include, pq_format=arm))
+                forms.append(bytes(key.to_pkcs8(include_public_key=include, pq_format=arm)))
             except ALLOWED:
                 continue  # e.g. a seed arm asked for on a key with no seed
     if not forms:
@@ -310,7 +310,7 @@ def target_pem_private(data: bytes) -> None:
             "pem_private",
         ) from exc
     _pkcs8_der_is_an_encoder_output(der, key, "load_pkcs8(pem)")
-    if kf.encode_pem(der, label) != normalised:
+    if kf.encode_pem(der, label).decode("ascii") != normalised:
         raise FindingError(
             "load_pkcs8(pem): accepted a non-canonical PEM armor for its own DER",
             data,
@@ -355,11 +355,43 @@ def target_cbor(data: bytes) -> None:
         )
 
 
+def _jwk_verdict(parse: Callable[[Any], Any], document: Any) -> str:
+    """``"ok"`` or the refusal's class: the verdict one JWK is given."""
+    try:
+        parse(document)
+    except ALLOWED as exc:
+        return type(exc).__name__
+    return "ok"
+
+
+def _one_verdict_per_jwk(parse: Callable[[Any], Any], data: bytes, target: str) -> None:
+    """The text and the bytes-like forms of one JWK get one verdict.
+
+    A private JWK is returned by ``PrivateKey.to_jwk()`` as UTF-8 bytes, so the
+    loaders accept that form; it must decode exactly as the ``str`` does.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return
+    expected = _jwk_verdict(parse, text)
+    for form in (data, bytearray(data), memoryview(data)):
+        if _jwk_verdict(parse, form) != expected:
+            raise FindingError(
+                f"{target}: the {type(form).__name__} form of a JWK got a different "
+                "verdict from its text form",
+                data,
+                target,
+            )
+
+
 def target_jwk_public(data: bytes) -> None:
+    _one_verdict_per_jwk(kf.jwk_to_public_key, data, "jwk_public")
     kf.jwk_to_public_key(data.decode("utf-8", "replace"))
 
 
 def target_jwk_private(data: bytes) -> None:
+    _one_verdict_per_jwk(kf.jwk_to_private_key, data, "jwk_private")
     kf.jwk_to_private_key(data.decode("utf-8", "replace"))
 
 
@@ -456,15 +488,15 @@ def _generated_keys() -> list[tuple[str, bytes]]:
         priv = kf.PrivateKey(name, secret, public)
         seeds.append(("spki", pub.to_spki()))
         seeds.append(("pem_public", pub.to_pem().encode()))
-        seeds.append(("pkcs8", priv.to_pkcs8()))
-        seeds.append(("pkcs8", priv.to_pkcs8(include_public_key=True)))
-        seeds.append(("pem_private", priv.to_pem().encode()))
+        seeds.append(("pkcs8", bytes(priv.to_pkcs8())))
+        seeds.append(("pkcs8", bytes(priv.to_pkcs8(include_public_key=True))))
+        seeds.append(("pem_private", bytes(priv.to_pem())))
         if alg.kind != "pq":
             seeds.append(("cose_public", pub.to_cose()))
             seeds.append(("cbor", pub.to_cose()))
-            seeds.append(("cose_private", priv.to_cose()))
+            seeds.append(("cose_private", bytes(priv.to_cose())))
             seeds.append(("jwk_public", json.dumps(pub.to_jwk()).encode()))
-            seeds.append(("jwk_private", json.dumps(priv.to_jwk()).encode()))
+            seeds.append(("jwk_private", bytes(priv.to_jwk())))
             seeds.append(("thumbprint", json.dumps(pub.to_jwk()).encode()))
         else:
             # A seed-arm key, so the RFC 9881 §6 [0] IMPLICIT branch is reached.
@@ -475,7 +507,7 @@ def _generated_keys() -> list[tuple[str, bytes]]:
                 pk2, sk2 = pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
             seeded = kf.PrivateKey(name, sk2, pk2, seed)
             for arm in ("seed", "expandedKey", "both"):
-                seeds.append(("pkcs8", seeded.to_pkcs8(pq_format=arm)))
+                seeds.append(("pkcs8", bytes(seeded.to_pkcs8(pq_format=arm))))
     return seeds
 
 

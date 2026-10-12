@@ -534,7 +534,7 @@ class TestEncapsulateHybridValidation:
             self.pk_c,
             self.pk_p,
         )
-        assert isinstance(result.combined_secret, bytes)
+        assert isinstance(result.combined_secret, bytearray)  # wipeable (INVARIANT-6)
 
     def test_boundary_max_ss_accepted(self) -> None:
         """Shared secret at exactly _MAX_SS_BYTES passes validation
@@ -548,7 +548,7 @@ class TestEncapsulateHybridValidation:
             self.pk_c,
             self.pk_p,
         )
-        assert isinstance(result.combined_secret, bytes)
+        assert isinstance(result.combined_secret, bytearray)  # wipeable (INVARIANT-6)
 
 
 class TestDecapsulateHybridValidation:

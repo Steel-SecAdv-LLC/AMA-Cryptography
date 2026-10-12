@@ -9,6 +9,16 @@
  *   - Pubkey parity byte (0x02 / 0x03) is computed correctly
  *   - NULL / zero-scalar rejection
  *   - ama_secp256k1_point_mul is linear: scalar_mul(k, G) == pubkey(k)
+ *   - ama_secp256k1_seckey_verify / ama_secp256k1_seckey_tweak_add: the BIP32
+ *     test vector 1 master key and hardened child m/0H end to end through
+ *     ama_hmac_sha512, the range and zero-sum refusals at their boundaries,
+ *     output zeroing on refusal, aliasing, and a 20,000-pair differential
+ *     against a plain (variable-time) mod-n reference.  Every guard is PIN
+ *     (AGENTS.md 6.2, measured 2026-10-08, gcc 13.3.0 Release): removed
+ *     alone, the tweak range check fails "refuses a tweak of n", the zero-sum
+ *     check "refuses a zero sum", the key check "refuses a zero key", the
+ *     refusal zeroing "tweak of n: out zeroed", and seckey_verify's upper
+ *     and lower bounds "refuses n" and "refuses 0"
  *
  * Test vectors are the widely-published secp256k1 constants; see
  * https://en.bitcoin.it/wiki/Secp256k1 and SEC 2 §2.4.1.
@@ -139,6 +149,217 @@ static const uint8_t FE_ALL_FF[32] = {
     0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
 };
 static const uint8_t FE_ZERO[32] = { 0 };
+
+/* ---- secret-key arithmetic (BIP32 CKDpriv) ------------------------------- */
+
+/* n, the group order (SEC 2 §2.4.1), big-endian. */
+static const uint8_t ORDER_N[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41
+};
+
+static void hex_to(uint8_t *out, const char *hex, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned v = 0;
+        sscanf(hex + 2 * i, "%2x", &v);
+        out[i] = (uint8_t)v;
+    }
+}
+
+/* A copy of n with `delta` added to its last limb (delta may be negative,
+ * and n's low octet 0x41 never under- or overflows for |delta| < 0x41). */
+static void order_plus(uint8_t out[32], int delta) {
+    memcpy(out, ORDER_N, 32);
+    out[31] = (uint8_t)(out[31] + delta);
+}
+
+/* The reference: (a + b) mod n, variable time, for a, b < n. */
+static void ref_add_mod_n(uint8_t out[32], const uint8_t a[32], const uint8_t b[32]) {
+    uint8_t sum[33];
+    unsigned carry = 0;
+    for (int i = 31; i >= 0; i--) {
+        unsigned t = (unsigned)a[i] + (unsigned)b[i] + carry;
+        sum[i + 1] = (uint8_t)t;
+        carry = t >> 8;
+    }
+    sum[0] = (uint8_t)carry;
+    /* sum >= n ?  (n has no 33rd octet) */
+    int ge = sum[0] != 0;
+    if (!ge) {
+        ge = memcmp(sum + 1, ORDER_N, 32) >= 0;
+    }
+    if (ge) {
+        unsigned borrow = 0;
+        for (int i = 31; i >= 0; i--) {
+            int t = (int)sum[i + 1] - (int)ORDER_N[i] - (int)borrow;
+            borrow = t < 0;
+            sum[i + 1] = (uint8_t)(t + (borrow ? 256 : 0));
+        }
+    }
+    memcpy(out, sum + 1, 32);
+}
+
+static uint64_t xs_state = 0x2545F4914F6CDD1Dull;
+static uint8_t next_byte(void) {
+    xs_state ^= xs_state << 13;
+    xs_state ^= xs_state >> 7;
+    xs_state ^= xs_state << 17;
+    return (uint8_t)(xs_state >> 24);
+}
+
+/* A uniformly random scalar below n (rejection sampling). */
+static void random_below_n(uint8_t out[32]) {
+    do {
+        for (int i = 0; i < 32; i++) {
+            out[i] = next_byte();
+        }
+    } while (memcmp(out, ORDER_N, 32) >= 0);
+}
+
+static int all_zero(const uint8_t *p, size_t n) {
+    uint8_t acc = 0;
+    for (size_t i = 0; i < n; i++) {
+        acc |= p[i];
+    }
+    return acc == 0;
+}
+
+static int test_seckey_arithmetic(void) {
+    uint8_t one[32] = {0}, zero[32] = {0}, k[32], t[32], out[32], want[32];
+    one[31] = 1;
+
+    printf("\n--- secret-key arithmetic (BIP32 CKDpriv) ---\n");
+
+    /* seckey_verify: [1, n-1] accepted, 0 / n / 2^256-1 / NULL refused. */
+    TEST_ASSERT(ama_secp256k1_seckey_verify(one) == AMA_SUCCESS, "seckey_verify(1)");
+    order_plus(k, -1);
+    TEST_ASSERT(ama_secp256k1_seckey_verify(k) == AMA_SUCCESS, "seckey_verify(n-1)");
+    TEST_ASSERT(ama_secp256k1_seckey_verify(zero) == AMA_ERROR_INVALID_PARAM,
+                "seckey_verify refuses 0");
+    TEST_ASSERT(ama_secp256k1_seckey_verify(ORDER_N) == AMA_ERROR_INVALID_PARAM,
+                "seckey_verify refuses n");
+    memset(k, 0xFF, sizeof k);
+    TEST_ASSERT(ama_secp256k1_seckey_verify(k) == AMA_ERROR_INVALID_PARAM,
+                "seckey_verify refuses 2^256 - 1");
+    TEST_ASSERT(ama_secp256k1_seckey_verify(NULL) == AMA_ERROR_INVALID_PARAM,
+                "seckey_verify refuses NULL");
+
+    /* BIP32 test vector 1, end to end: master = HMAC-SHA512("Bitcoin seed",
+     * seed); m/0H = (I_L + k) mod n with I = HMAC-SHA512(c, 0x00||k||i). */
+    {
+        uint8_t seed[16], I[64], data[37], master_k[32], master_c[32];
+        uint8_t child_k[32], child_c[32];
+        static const char bitcoin_seed[] = "Bitcoin seed";
+        hex_to(seed, "000102030405060708090a0b0c0d0e0f", 16);
+        hex_to(master_k, "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35", 32);
+        hex_to(master_c, "873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508", 32);
+        hex_to(child_k, "edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea", 32);
+        hex_to(child_c, "47fdacbd0f1097043b78c63c20c34ef4ed9a111d980047ad16282c7ae6236141", 32);
+
+        TEST_ASSERT(ama_hmac_sha512((const uint8_t *)bitcoin_seed, sizeof bitcoin_seed - 1,
+                                    seed, sizeof seed, I) == AMA_SUCCESS,
+                    "BIP32 TV1: master HMAC");
+        TEST_ASSERT(memcmp(I, master_k, 32) == 0 && memcmp(I + 32, master_c, 32) == 0,
+                    "BIP32 TV1: master key and chain code");
+        TEST_ASSERT(ama_secp256k1_seckey_verify(I) == AMA_SUCCESS, "BIP32 TV1: master key valid");
+
+        data[0] = 0x00;
+        memcpy(data + 1, master_k, 32);
+        data[33] = 0x80; data[34] = 0x00; data[35] = 0x00; data[36] = 0x00;
+        TEST_ASSERT(ama_hmac_sha512(master_c, 32, data, sizeof data, I) == AMA_SUCCESS,
+                    "BIP32 TV1: m/0H HMAC");
+        TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, master_k, I) == AMA_SUCCESS,
+                    "BIP32 TV1: m/0H tweak_add");
+        TEST_ASSERT(memcmp(out, child_k, 32) == 0, "BIP32 TV1: m/0H private key");
+        TEST_ASSERT(memcmp(I + 32, child_c, 32) == 0, "BIP32 TV1: m/0H chain code");
+        ama_secure_memzero(I, sizeof I);
+        ama_secure_memzero(data, sizeof data);
+    }
+
+    /* Boundaries.  1 + (n-1) = n = 0 mod n: refused, out zeroed. */
+    order_plus(t, -1);
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, one, t) == AMA_ERROR_INVALID_PARAM,
+                "tweak_add refuses a zero sum (1 + (n-1))");
+    TEST_ASSERT(all_zero(out, 32), "a refused tweak_add zeroes out");
+    /* A tweak of n is out of range even though (k + n) mod n would be k. */
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, one, ORDER_N) == AMA_ERROR_INVALID_PARAM,
+                "tweak_add refuses a tweak of n");
+    TEST_ASSERT(all_zero(out, 32), "tweak of n: out zeroed");
+    /* The key itself must be valid. */
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, zero, one) == AMA_ERROR_INVALID_PARAM,
+                "tweak_add refuses a zero key");
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, ORDER_N, one) == AMA_ERROR_INVALID_PARAM,
+                "tweak_add refuses a key of n");
+    /* A zero tweak is in range: k + 0 = k. */
+    order_plus(k, -2);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, k, zero) == AMA_SUCCESS &&
+                    memcmp(out, k, 32) == 0,
+                "tweak_add(k, 0) == k");
+    /* The carry out of 2^256: (n-1) + (n-1) = n-2 mod n. */
+    order_plus(k, -1);
+    order_plus(want, -2);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, k, k) == AMA_SUCCESS &&
+                    memcmp(out, want, 32) == 0,
+                "tweak_add((n-1), (n-1)) == n-2 (carry out of 2^256 folded)");
+    /* Aliasing: out == seckey, and out == tweak. */
+    order_plus(k, -1);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(k, k, one) == AMA_ERROR_INVALID_PARAM,
+                "aliased out == seckey: (n-1) + 1 refused");
+    hex_to(k, "0000000000000000000000000000000000000000000000000000000000000005", 32);
+    hex_to(t, "0000000000000000000000000000000000000000000000000000000000000007", 32);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(t, k, t) == AMA_SUCCESS && t[31] == 12 &&
+                    all_zero(t, 31),
+                "aliased out == tweak: 5 + 7 == 12");
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(NULL, one, one) == AMA_ERROR_INVALID_PARAM &&
+                    ama_secp256k1_seckey_tweak_add(out, NULL, one) == AMA_ERROR_INVALID_PARAM &&
+                    ama_secp256k1_seckey_tweak_add(out, one, NULL) == AMA_ERROR_INVALID_PARAM,
+                "tweak_add refuses NULL arguments");
+    /* A NULL input still zeroes a non-NULL out (PR #415 review): out may hold
+     * an earlier key, and the contract is "refused => out zeroed". */
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, NULL, one) == AMA_ERROR_INVALID_PARAM &&
+                    all_zero(out, 32),
+                "NULL seckey: out zeroed");
+    memset(out, 0xA5, sizeof out);
+    TEST_ASSERT(ama_secp256k1_seckey_tweak_add(out, one, NULL) == AMA_ERROR_INVALID_PARAM &&
+                    all_zero(out, 32),
+                "NULL tweak: out zeroed");
+
+    /* Differential: 20,000 uniform pairs below n, and 2,000 pairs straddling
+     * the wrap (k near n, tweak near n), against the plain reference. */
+    for (int i = 0; i < 22000; i++) {
+        random_below_n(k);
+        random_below_n(t);
+        if (i >= 20000) {
+            /* Force both into [n - 2^64, n): every sum then wraps. */
+            memcpy(k, ORDER_N, 24);
+            memcpy(t, ORDER_N, 24);
+            if (memcmp(k, ORDER_N, 32) >= 0 || memcmp(t, ORDER_N, 32) >= 0) {
+                continue;
+            }
+        }
+        if (all_zero(k, 32)) {
+            continue;
+        }
+        ref_add_mod_n(want, k, t);
+        ama_error_t rc = ama_secp256k1_seckey_tweak_add(out, k, t);
+        if (all_zero(want, 32)) {
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "differential: zero sum refused");
+            continue;
+        }
+        if (rc != AMA_SUCCESS || memcmp(out, want, 32) != 0) {
+            fprintf(stderr, "FAIL: tweak_add disagrees with the reference at pair %d\n", i);
+            return 1;
+        }
+    }
+    printf("PASS: tweak_add agrees with the reference on 22,000 pairs\n");
+    ama_secure_memzero(k, sizeof k);
+    ama_secure_memzero(t, sizeof t);
+    ama_secure_memzero(out, sizeof out);
+    return 0;
+}
 
 int main(void) {
     ama_error_t rc;
@@ -654,6 +875,10 @@ int main(void) {
             TEST_ASSERT(memcmp(raw, expect_zero, sizeof raw) == 0,
                         "a NULL-digest rejection zeroizes the output buffer too");
         }
+    }
+
+    if (test_seckey_arithmetic() != 0) {
+        return 1;
     }
 
     printf("\n===========================================\n");

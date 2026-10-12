@@ -83,7 +83,19 @@ jobs:
     # measured job and 49 % over the worst observed run.  A timeout is a
     # resource budget, not a correctness threshold: nothing here is made
     # easier to pass, and a leg that genuinely hangs still fails.
+    #
+    # Correction (2026-10-08): that arithmetic left out the apt budget.  The
+    # job calls apt-install.sh three times, each call then allowed 600 s, and
+    # run 37786915916's Python 3.10 leg spent 734 s in two calls that retried
+    # as designed (186 s and 548 s against a 5-13 s norm), leaving pytest 16
+    # of the 17 minutes it needed.  The job measures 15-22 minutes on this
+    # tree, not 15.  The budget is now one deadline shared by the job's
+    # calls, set to 300 s below, so the composed worst case is ~20 minutes
+    # of work plus 5 of apt inside 30; a mirror stalled longer fails as a
+    # diagnosed step instead of a cancelled job.
     timeout-minutes: 30
+    env:
+      APT_TOTAL_BUDGET: "300"  # measured work <= 20 min + this 5 min + margin fits the 30-minute timeout
     strategy:
       fail-fast: false
       matrix:
@@ -893,6 +905,8 @@ jobs:
     name: Sphinx Docs Build (Python API)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      APT_TOTAL_BUDGET: "150"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
     steps:
     - name: Checkout code
@@ -943,6 +957,8 @@ jobs:
     # semgrep gate's end-to-end assertion (see the build step below).  The
     # scans themselves take ~4 minutes; the build adds ~2.
     timeout-minutes: 15
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
     steps:
     - name: Checkout code
@@ -1741,6 +1757,8 @@ jobs:
             baseline_path: benchmarks/arm-baseline.json
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
     steps:
     - name: Checkout code
@@ -1875,6 +1893,8 @@ jobs:
     name: Constant-Time Verification (Smoke Test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
     steps:
     - name: Checkout code

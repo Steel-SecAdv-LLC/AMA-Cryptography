@@ -126,7 +126,9 @@ def test_python_signature_verifies_in_c(c_ctx: tuple[ctypes.CDLL, int]) -> None:
     # also accepts (see its sign docstring).
     ed_seed = bytes(keys.secret_key[:32])
     _, ed_full = pb.native_ed25519_keypair_from_seed(ed_seed)
-    c_sk = ed_full + bytes(keys.secret_key[32:])
+    # bytes(): the Ed25519 secret comes back as a wipeable bytearray, and the
+    # raw ctypes call below takes c_char_p.
+    c_sk = bytes(ed_full) + bytes(keys.secret_key[32:])
     sig = provider.sign(MESSAGE, keys.secret_key).signature
     assert _c_verify(lib, ctx, MESSAGE, sig, keys.public_key)
     assert not _c_verify(lib, ctx, MESSAGE + b"!", sig, keys.public_key)

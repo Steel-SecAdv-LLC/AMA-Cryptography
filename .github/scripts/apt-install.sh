@@ -93,7 +93,11 @@
 #   APT_ATTEMPT_TIMEOUT   seconds to bound each non-final attempt (default 120)
 #   APT_ATTEMPT_KILL_AFTER  seconds after SIGTERM before SIGKILL (default 30)
 #   APT_ATTEMPTS          total attempts including the final one (default 3)
-#   APT_TOTAL_BUDGET      seconds this script may consume in total (default 600)
+#   APT_TOTAL_BUDGET      seconds every call in one JOB may consume together
+#                         (default 600; see "One budget per job" below)
+#   APT_BUDGET_STATE      file holding the job's shared deadline (default
+#                         $RUNNER_TEMP/ama-apt-install.deadline; empty means
+#                         this call alone, which is what a local run gets)
 
 set -euo pipefail
 
@@ -118,17 +122,40 @@ ATTEMPTS="${APT_ATTEMPTS:-3}"
 # against the text and arithmetic, not by waiting it out.
 BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"
 
-# 600, against the 20-minute job budget the shortest caller has: half the job
-# for its dependencies is already generous, and it leaves the other half for
-# the build and the measurement the job exists to perform.  The jobs that were
-# cancelled had spent the WHOLE 20 minutes here and run none of their steps.
+# Half the job, at most, may go to dependencies; the other half is for the
+# build and the measurement the job exists to perform.  600 fits a 20-minute
+# job.  A shorter job sets APT_TOTAL_BUDGET at job level, and
+# tests/test_apt_retry_gate.py requires every job's budget to fit inside half
+# of its timeout-minutes.
 TOTAL_BUDGET="${APT_TOTAL_BUDGET:-600}"
-SCRIPT_START="$SECONDS"
 
-# Seconds left of TOTAL_BUDGET; never negative.
+# One budget per job.  The budget used to be per CALL, so a job's worst case
+# grew with how many times it called this script: `Test ubuntu-latest /
+# Python 3.10` (run 37786915916) calls it three times, and two calls that
+# retried as designed -- 186 s and 548 s against a 5-13 s norm -- left pytest
+# 16 minutes of a 30-minute job, which it needed 17 of.  Cancelled, `CI Gate`
+# red, every check that ran green.  Thirteen jobs could spend more than half
+# their timeout here.  Every call in a job now draws on one deadline, written
+# by the first call into the job's own $RUNNER_TEMP, so the job's worst case
+# is one TOTAL_BUDGET however many calls it makes.
+BUDGET_STATE="${APT_BUDGET_STATE-${RUNNER_TEMP:+${RUNNER_TEMP}/ama-apt-install.deadline}}"
+if [ -n "$BUDGET_STATE" ]; then
+    if [ ! -s "$BUDGET_STATE" ]; then
+        echo "$(($(date +%s) + TOTAL_BUDGET))" >"$BUDGET_STATE"
+    fi
+    DEADLINE="$(cat "$BUDGET_STATE")"
+    if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]]; then
+        echo "apt-install.sh: the job's budget file $BUDGET_STATE holds" \
+             "'$DEADLINE', not a deadline; refusing to guess one" >&2
+        exit 2
+    fi
+else
+    DEADLINE="$(($(date +%s) + TOTAL_BUDGET))"
+fi
+
+# Seconds left before the job's deadline; never negative.
 budget_left() {
-    local used=$((SECONDS - SCRIPT_START))
-    local left=$((TOTAL_BUDGET - used))
+    local left=$((DEADLINE - $(date +%s)))
     if [ "$left" -lt 0 ]; then left=0; fi
     echo "$left"
 }
@@ -337,14 +364,14 @@ done
 # budget can act on that; a job cancelled at its own timeout cannot.
 left="$(budget_left)"
 if [ "$left" -le 0 ]; then
-    echo "apt-install.sh: exhausted its ${TOTAL_BUDGET}s total budget without" \
-         "installing: $*" >&2
+    echo "apt-install.sh: the job's ${TOTAL_BUDGET}s apt budget (shared by every" \
+         "apt-install.sh call in this job) is exhausted without installing: $*" >&2
     echo "apt-install.sh: this is a FAILED step, not a cancelled job — apt did" \
          "not complete on this runner within the budget." >&2
     exit 1
 fi
 echo "apt-install.sh: final attempt, bounded by the ${left}s left of the" \
-     "${TOTAL_BUDGET}s budget (its failure fails this job): $*"
+     "job's ${TOTAL_BUDGET}s apt budget (its failure fails this job): $*"
 
 # The failure must SAY what happened.  The version that introduced the budget
 # diagnosed only the arm where the budget ran out before the final attempt

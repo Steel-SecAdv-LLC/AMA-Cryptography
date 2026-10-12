@@ -42,20 +42,20 @@ CONTENT = b"normalization pin content"
 
 
 @pytest.fixture(scope="module")
-def hybrid_identity() -> tuple[bytes, bytes]:
+def hybrid_identity() -> tuple[bytes, bytearray]:
     pk, sk = KeypairCache().get_or_generate()
     return pk, sk
 
 
 class TestNormalizedSigning:
-    def test_packages_verify_end_to_end(self, hybrid_identity: tuple[bytes, bytes]) -> None:
+    def test_packages_verify_end_to_end(self, hybrid_identity: tuple[bytes, bytearray]) -> None:
         pk, sk = hybrid_identity
         config = CryptoPackageConfig(signing_keypair=(pk, sk))
         package = create_crypto_package(CONTENT, config)
         result = verify_crypto_package(CONTENT, package, expected_public_key=pk)
         assert result["all_valid"], result
 
-    def test_memo_written_once_and_reused(self, hybrid_identity: tuple[bytes, bytes]) -> None:
+    def test_memo_written_once_and_reused(self, hybrid_identity: tuple[bytes, bytearray]) -> None:
         pk, sk = hybrid_identity
         config = CryptoPackageConfig(signing_keypair=(pk, sk))
         assert config._normalized_signing_memo is None
@@ -74,7 +74,9 @@ class TestNormalizedSigning:
         create_crypto_package(CONTENT, config)
         assert config._normalized_signing_memo is memo, "second call must reuse the memo"
 
-    def test_replacing_the_keypair_renormalizes(self, hybrid_identity: tuple[bytes, bytes]) -> None:
+    def test_replacing_the_keypair_renormalizes(
+        self, hybrid_identity: tuple[bytes, bytearray]
+    ) -> None:
         pk, sk = hybrid_identity
         config = CryptoPackageConfig(signing_keypair=(pk, sk))
         create_crypto_package(CONTENT, config)
@@ -87,7 +89,7 @@ class TestNormalizedSigning:
         assert verify_crypto_package(CONTENT, package, expected_public_key=pk2)["all_valid"]
 
     def test_result_keypair_keeps_the_callers_format(
-        self, hybrid_identity: tuple[bytes, bytes]
+        self, hybrid_identity: tuple[bytes, bytearray]
     ) -> None:
         """The stored KeyPair must expose the key the caller supplied, not the
         normalized internal form — emitting a 4,096-byte secret where the
@@ -114,15 +116,15 @@ class TestListContainerElementSwap:
     """
 
     def test_swapping_elements_in_an_admitted_list_renormalizes(
-        self, hybrid_identity: tuple[bytes, bytes]
+        self, hybrid_identity: tuple[bytes, bytearray]
     ) -> None:
         from typing import cast
 
         pk, sk = hybrid_identity
-        keypair = [pk, sk]
+        keypair: list[bytes | bytearray] = [pk, sk]
         # The annotation says Tuple; the runtime validator deliberately also
         # admits the list form, which is the whole point of this test.
-        config = CryptoPackageConfig(signing_keypair=cast("tuple[bytes, bytes]", keypair))
+        config = CryptoPackageConfig(signing_keypair=cast("tuple[bytes, bytearray]", keypair))
         first = create_crypto_package(CONTENT, config)
         assert verify_crypto_package(CONTENT, first, expected_public_key=pk)["all_valid"]
         first_memo = config._normalized_signing_memo
@@ -131,7 +133,7 @@ class TestListContainerElementSwap:
         pk2, sk2 = KeypairCache().get_or_generate()
         keypair[0] = pk2
         keypair[1] = sk2
-        assert config.signing_keypair is cast("tuple[bytes, bytes]", keypair)
+        assert config.signing_keypair is cast("tuple[bytes, bytearray]", keypair)
 
         second = create_crypto_package(CONTENT, config)
         assert config._normalized_signing_memo is not first_memo, (
@@ -146,7 +148,7 @@ class TestListContainerElementSwap:
 
 class TestMismatchRejection:
     def test_mismatched_hybrid_public_key_raises(
-        self, hybrid_identity: tuple[bytes, bytes]
+        self, hybrid_identity: tuple[bytes, bytearray]
     ) -> None:
         _, sk = hybrid_identity
         other_pk, _ = KeypairCache().get_or_generate()
@@ -170,7 +172,7 @@ class TestMismatchRejection:
 class TestHybridSplitDiscrimination:
     """4,064- and 4,096-byte hybrid secrets must both sign identically."""
 
-    def test_seed_and_expanded_forms_agree(self, hybrid_identity: tuple[bytes, bytes]) -> None:
+    def test_seed_and_expanded_forms_agree(self, hybrid_identity: tuple[bytes, bytearray]) -> None:
         from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
 
         pk, sk = hybrid_identity

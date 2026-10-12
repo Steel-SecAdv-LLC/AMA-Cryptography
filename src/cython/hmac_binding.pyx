@@ -13,10 +13,13 @@ INVARIANT-1 compliant: uses only AMA's own native C implementation.
 RFC 2104 compliant: 136-byte block size (SHA3-256 Keccak rate).
 """
 
+from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_Check
+from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_Check
 from libc.stdint cimport uint8_t
 from libc.stddef cimport size_t
 
 cdef extern from "ama_cryptography.h":
+    void ama_secure_memzero(void* ptr, size_t len)
     int ama_hmac_sha3_256(
         const uint8_t *key, size_t key_len,
         const uint8_t *msg, size_t msg_len,
@@ -32,27 +35,78 @@ cdef extern from "ama_cryptography.h":
 from ama_cryptography._module_state import check_crypto_permitted
 
 
-def cy_hmac_sha3_256(bytes key, bytes msg):
+cdef inline bint _is_octets(object value):
+    return PyBytes_Check(value) or PyByteArray_Check(value)
+
+
+cdef inline const uint8_t *_octets_ptr(object value):
+    """Storage of a ``bytes`` or ``bytearray``; never NULL (an empty one
+    still has a valid, NUL-terminated buffer)."""
+    if PyBytes_Check(value):
+        return <const uint8_t *>PyBytes_AS_STRING(value)
+    return <const uint8_t *>PyByteArray_AS_STRING(value)
+
+
+cdef bytes _mac(const uint8_t *key_p, size_t key_len, const uint8_t *msg_p, size_t msg_len):
+    cdef unsigned char out[32]
+    cdef int ret
+    try:
+        ret = ama_hmac_sha3_256(key_p, key_len, msg_p, msg_len, out)
+        if ret != 0:
+            raise RuntimeError(
+                f"ama_hmac_sha3_256 failed (rc={ret})"
+            )
+        return bytes(out[:32])
+    finally:
+        ama_secure_memzero(out, 32)
+
+
+cdef object _octet_view(object data):
+    """``data`` as a view of unsigned octets, under the rule
+    ``pqc_backends._byte_view`` applies to the ctypes backend.
+
+    A buffer of multi-byte items, more than one dimension or a stride is
+    refused: its ``len()`` counts items, so a caller's length check would
+    pass on the wrong number of octets.  Single-byte items of any format
+    (``'b'``, ``'c'``, ``'B'``) are the same octets, and are cast to ``'B'``
+    for the typed view, which otherwise accepts ``'B'`` alone.
+    """
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1 or not view.c_contiguous:
+        view.release()
+        raise TypeError("buffer must be a one-dimensional, contiguous byte buffer")
+    return view if view.format == "B" else view.cast("B")
+
+
+cdef bytes _mac_views(const unsigned char[::1] key, const unsigned char[::1] msg):
+    # &view[0] is undefined for a zero-length view; an empty key or message
+    # is legal HMAC input, so it gets a valid pointer to nothing.
+    cdef const uint8_t* empty = <const uint8_t*>b""
+    cdef const uint8_t* key_p = &key[0] if key.shape[0] > 0 else empty
+    cdef const uint8_t* msg_p = &msg[0] if msg.shape[0] > 0 else empty
+    return _mac(key_p, <size_t>key.shape[0], msg_p, <size_t>msg.shape[0])
+
+
+def cy_hmac_sha3_256(object key, object msg):
     """
     HMAC-SHA3-256 via native C ama_hmac_sha3_256().
     Cython binding — zero Python marshaling overhead.
     INVARIANT-1 compliant: calls only ama_cryptography native C.
     RFC 2104 compliant: 136-byte block size (SHA3-256 Keccak rate).
 
+    ``key`` and ``msg`` may be ``bytes``, ``bytearray`` or any
+    one-dimensional, contiguous buffer of single-byte items; all are read in
+    place, so a wipeable key is never copied into an immutable one on the way
+    in.  ``bytes`` and ``bytearray`` are read straight from their storage
+    under the GIL: a typed-memoryview acquisition per argument cost 0.35 us
+    of a 4.1 us call (measured 2026-10-08 against 774d050), so views are kept
+    for other buffers only.
+
     Returns 32-byte HMAC digest.
+    Raises TypeError for any other buffer, as the ctypes backend does.
     Raises RuntimeError on native C failure (e.g. AMA_ERROR_MEMORY).
     """
     check_crypto_permitted()
-    cdef unsigned char out[32]
-    cdef int ret
-
-    ret = ama_hmac_sha3_256(
-        <const uint8_t*>key, len(key),
-        <const uint8_t*>msg, len(msg),
-        out
-    )
-    if ret != 0:
-        raise RuntimeError(
-            f"ama_hmac_sha3_256 failed (rc={ret})"
-        )
-    return bytes(out[:32])
+    if _is_octets(key) and _is_octets(msg):
+        return _mac(_octets_ptr(key), <size_t>len(key), _octets_ptr(msg), <size_t>len(msg))
+    return _mac_views(_octet_view(key), _octet_view(msg))

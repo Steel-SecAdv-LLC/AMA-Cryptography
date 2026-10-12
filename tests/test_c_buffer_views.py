@@ -30,7 +30,9 @@ What must never regress, pinned here from both directions:
 from __future__ import annotations
 
 import ctypes
+from array import array
 from contextlib import ExitStack
+from typing import Any, Callable
 
 import pytest
 
@@ -339,3 +341,57 @@ class TestWrappersAcceptEveryBytesLikeInput:
             group_public_key=bytes(gpk),
         )
         assert pb.native_ed25519_verify(signature, b"m", bytes(gpk))
+
+
+def _hmac_buffers() -> dict[str, Any]:
+    """One of each buffer shape the HMAC backends can be handed."""
+    return {
+        "bytes": b"abcd",
+        "bytearray": bytearray(b"abcd"),
+        "writable view": memoryview(bytearray(b"abcd")),
+        "read-only view": memoryview(b"abcd"),
+        "unsigned octets": memoryview(array("B", b"abcd")),
+        "signed octets": memoryview(array("b", b"abcd")),
+        "char octets": memoryview(bytearray(b"abcd")).cast("c"),
+        "empty signed octets": memoryview(array("b")),
+        "wide items": memoryview(array("I", [1, 2, 3, 4])),
+        "strided": memoryview(bytearray(b"abcdefgh"))[::2],
+        "two dimensions": memoryview(bytearray(b"abcd")).cast("B", (2, 2)),
+    }
+
+
+class TestHmacBackendsAgree:
+    """PIN.  ``hmac_sha3_256`` runs on the Cython binding when it is built and
+    on the ctypes wrapper when it is not, so the two must give one verdict
+    for every input: the same digest, or the same ``TypeError``.
+
+    Before the binding applied ``_byte_view``'s rule, a signed-octet buffer
+    hashed on ctypes and raised ``ValueError`` on Cython, and a wide-item or
+    strided one raised ``TypeError`` on ctypes and ``ValueError`` or
+    ``BufferError`` on Cython.  Removing ``_octet_view`` from the binding
+    fails the rows that differ.
+    """
+
+    @staticmethod
+    def _verdict(fn: Callable[[Any, Any], bytes], key: Any, msg: Any) -> object:
+        try:
+            return fn(key, msg)
+        except TypeError:
+            return TypeError
+
+    @pytest.mark.parametrize("name", list(_hmac_buffers()))
+    @pytest.mark.parametrize("as_key", [False, True], ids=["msg", "key"])
+    def test_both_backends_give_one_verdict(self, name: str, as_key: bool) -> None:
+        from ama_cryptography import pqc_backends as pb
+
+        cython = pytest.importorskip("ama_cryptography.hmac_binding")
+        buffers = (_hmac_buffers()[name], b"k") if as_key else (b"k", _hmac_buffers()[name])
+        reference = self._verdict(pb.native_hmac_sha3_256, *buffers)
+        fresh = (_hmac_buffers()[name], b"k") if as_key else (b"k", _hmac_buffers()[name])
+        assert self._verdict(cython.cy_hmac_sha3_256, *fresh) == reference
+
+    def test_octets_hash_alike_whatever_their_item_format(self) -> None:
+        cython = pytest.importorskip("ama_cryptography.hmac_binding")
+        expected = cython.cy_hmac_sha3_256(b"k", b"abcd")
+        for name in ("signed octets", "char octets", "unsigned octets"):
+            assert cython.cy_hmac_sha3_256(b"k", _hmac_buffers()[name]) == expected, name

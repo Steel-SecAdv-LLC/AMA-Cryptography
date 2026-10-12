@@ -103,6 +103,45 @@ rather than folding a structural defect into a cryptographic verdict.
 > (lengths 0-40, equal and unequal, native and forced-fallback paths) agree
 > with `==` and with each other in every case.
 
+### Key serialisation and BIP32 (`src/c/ama_base64.c`, `ama_secp256k1_seckey_*`)
+
+**Base64 / Base64url.** A private key leaves the library as PEM (Base64) or
+JWK (unpadded Base64url). A table-driven codec -- CPython's `binascii` among
+them -- indexes a 64-entry alphabet by each secret 6-bit group when encoding
+and a 256-entry reverse table by each secret character when decoding. The
+native codec has no tables: a group becomes its character through masked
+offset arithmetic, a character is classified against every alphabet range
+with unsigned-borrow masks, and the three refusals of a strict decoder
+(alphabet, padding, RFC 4648 §3.5 pad bits) fold into one mask taken after
+the whole input. Two values decide control flow and are declassified where
+they are computed, each published by the function's own output: the `=`
+count (it fixes the decoded length) and the verdict (the return code).
+`--target base64` measures it: 8,315,743 instructions per class under gcc 13
+and 3,316,282 under clang 18 (Release, LTO off), identical across all eight
+classes on all four metrics, and its taint driver reports nothing. A planted
+branch on the character class fails both lanes; a planted alphabet lookup,
+cache-resident, retires the same count and is caught by taint alone.
+
+The Python side touches the secret characters as little as it can.
+`key_formats` hands the body to the codec as one buffer. Its PEM regex
+matches the body as lines of `[^\n-]`, two literals the regex engine compiles
+to equality tests, instead of `[A-Za-z0-9+/=]`, which it compiles to a
+256-bit bitmap indexed by each character (`tests/test_secret_wipeability.py`
+pins the parsed pattern). CRLF is folded by splitting on `\n`, not by
+`str.replace`, whose fast search branches on a bloom filter of each
+character's low bits. What remains -- the equality tests against `\n`, `-`
+and a trailing `\r` -- branches on line structure, which is the same for
+every accepted key of a given length.
+
+**BIP32 private child step.** `(parse256(I_L) + k_par) mod n` and the master
+key's range check ran as Python integer arithmetic on two secrets.
+`ama_secp256k1_seckey_tweak_add` and `ama_secp256k1_seckey_verify` run them on
+the constant-time mod-n scalar code ECDSA signing uses, every range check on
+every call, only the verdict declassified. `--target secp256k1-seckey`:
+2,327,341 / 2,384,075 instructions (gcc / clang), identical across classes
+whose sums fall on both sides of n; taint clean; a planted branch on the
+tweak fails both lanes.
+
 ## Verification Methodology
 
 ### dudect-Style Timing Analysis

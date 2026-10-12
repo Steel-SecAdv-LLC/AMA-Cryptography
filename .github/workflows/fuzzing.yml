@@ -241,6 +241,8 @@ jobs:
     name: Validate fuzz dictionaries (fail-closed)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

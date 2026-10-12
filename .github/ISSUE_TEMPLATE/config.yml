@@ -4,7 +4,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Security Vulnerability
     url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md
-    about: Please report security vulnerabilities privately via email (DO NOT open public issues)
+    about: Report privately via GitHub Security Advisories (preferred) or email per SECURITY.md — DO NOT open public issues
   - name: Question or Discussion
     url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/discussions
     about: Ask questions or discuss ideas with the community

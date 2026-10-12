@@ -14,12 +14,14 @@ and add it to the toctree below.
 
    adaptive_posture
    agent_binding
+   ascon
    crypto_api
    double_helix_engine
    equations
    exceptions
    hybrid_combiner
    integrity
+   key_formats
    key_management
    legacy_compat
    monitoring

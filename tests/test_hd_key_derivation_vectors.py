@@ -151,5 +151,5 @@ class TestMultipleLevelsOfDerivation:
         for depth in range(1, 6):
             path = "m/" + "/".join(["0'"] * depth)
             k, _ = hd.derive_path(path)
-            keys.add(k)
+            keys.add(bytes(k))  # keys are wipeable bytearrays, not hashable
         assert len(keys) == 5, "All intermediate derivation levels should differ"

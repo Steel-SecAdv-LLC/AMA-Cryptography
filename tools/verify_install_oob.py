@@ -21,6 +21,9 @@ outside:
      running interpreter must be a faithful compile of its on-disk
      source, compared by executed surface exactly as
      ``_self_test._code_matches`` does.
+  6. import shadowing: nothing under the package directory may be a
+     file the import system would load in place of, or outside of,
+     the signed sources (``find_import_shadowing``).
 
 Why this tool exists (the checker-poisoning boundary)
 -----------------------------------------------------
@@ -693,10 +696,18 @@ def compute_package_digest(pkg_dir: Path) -> bytes:
 
     Byte-for-byte the construction of ``_build_sign._compute_package_digest``
     (== ``_self_test._compute_module_digest``): a format prefix, then the count
-    and each of the sorted top-level ``*.py`` files excluding
+    and each of the sorted ``*.py`` files at any depth (``__pycache__``
+    excluded, keyed by package-relative POSIX path) except the top-level
     ``_integrity_signature.py``, then the count and each ``_post_kats/`` file
     sorted by name — every field length-prefixed and every section tagged, with
     CRLF normalised to LF before the length is taken.
+
+    Recursive since PR #415's review: this copy walked the top level only
+    while the signer and the in-process check walk every depth, so a ``.py``
+    planted in a subdirectory -- importable, as a namespace package or under
+    an ``__init__`` -- left this digest equal to the signed one and the tool
+    reported PASS.  On a tree with no subdirectory ``.py`` the two walks
+    absorb the same entries, so every existing signature still verifies.
 
     THE FRAMING IS LOAD-BEARING.  Until 5.0.0 each entry contributed
     ``name || content`` with no length prefix and consecutive entries were
@@ -711,10 +722,15 @@ def compute_package_digest(pkg_dir: Path) -> bytes:
     """
     chunks: list[bytes] = [_PACKAGE_DIGEST_FORMAT]
 
-    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != _ARTEFACT_NAME]
+    artefact = pkg_dir / _ARTEFACT_NAME
+    py_files = [
+        p
+        for p in sorted(pkg_dir.rglob("*.py"))
+        if p != artefact and "__pycache__" not in p.relative_to(pkg_dir).parts
+    ]
     chunks.append(len(py_files).to_bytes(4, "big"))
     for py_file in py_files:
-        _absorb_entry(chunks, b"py", py_file.name, py_file.read_bytes())
+        _absorb_entry(chunks, b"py", py_file.relative_to(pkg_dir).as_posix(), py_file.read_bytes())
 
     kat_dir = pkg_dir / "_post_kats"
     kat_files = (
@@ -1257,25 +1273,175 @@ def _verify_binding_extensions(
     return failures, []
 
 
+def find_import_shadowing(pkg_dir: Path) -> list[str]:
+    """Every file under ``pkg_dir`` the import system would load in place of,
+    or outside of, the signed source set.  Empty for a clean tree.
+
+    The digest covers the ``.py`` files, the binding map covers top-level
+    extensions, and the bytecode pass covers ``__pycache__``; a sourceless
+    ``crypto_api/__init__.pyc`` sits in none of them, yet the import system
+    resolves the package directory ahead of ``crypto_api.py``.  Nor does any
+    of them follow a directory symlink, or look for modules inside
+    ``__pycache__`` -- both import.
+    This is the same file-system rule ``ama_cryptography.__init__.
+    _find_import_shadowing`` enforces in process, re-stated here because the
+    in-process copy lives in the tree an attacker controls.
+    ``tests/test_verify_install_oob.py`` pins the two to identical verdicts.
+    """
+    extension_suffixes = importlib.machinery.EXTENSION_SUFFIXES
+    source_suffixes = importlib.machinery.SOURCE_SUFFIXES
+    bytecode_suffixes = importlib.machinery.BYTECODE_SUFFIXES
+    ordered = [*extension_suffixes, *source_suffixes, *bytecode_suffixes]
+    root = os.path.abspath(pkg_dir)
+    faults: list[str] = []
+
+    def _rel(path: str) -> str:
+        return os.path.relpath(path, root).replace(os.sep, "/")
+
+    def _unlistable(exc: OSError) -> None:
+        where = _rel(exc.filename) if isinstance(exc.filename, str) else "?"
+        faults.append(
+            f"{where}: directory cannot be listed ({exc.strerror}) — "
+            "cannot establish that it holds nothing importable"
+        )
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_unlistable):
+        if "__pycache__" in dirnames:
+            cache = os.path.join(dirpath, "__pycache__")
+            faults.extend(_pycache_faults(cache, root, ordered))
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for filename in sorted(filenames):
+            suffix = next(
+                (s for s in ordered if filename.endswith(s) and len(filename) > len(s)),
+                None,
+            )
+            if suffix is None:
+                continue
+            rel = _rel(os.path.join(dirpath, filename))
+            if suffix in bytecode_suffixes:
+                faults.append(
+                    f"{rel}: sourceless bytecode outside __pycache__ — importable, "
+                    "and covered by no integrity layer"
+                )
+            elif suffix in extension_suffixes and dirpath != root:
+                faults.append(
+                    f"{rel}: extension module below the package's top level — "
+                    "outside the signed binding map"
+                )
+            by_name.setdefault(filename[: -len(suffix)].casefold(), []).append((suffix, rel))
+
+        for entries in by_name.values():
+            sources = [rel for s, rel in entries if s in source_suffixes]
+            extensions = [rel for s, rel in entries if s in extension_suffixes]
+            if sources and extensions:
+                faults.append(
+                    f"{extensions[0]}: extension module shadows {sources[0]} — "
+                    "the import system loads the extension in its place"
+                )
+
+        for dirname in dirnames:
+            full = os.path.join(dirpath, dirname)
+            if os.path.islink(full):
+                # Neither os.walk nor the digest's rglob descends into it,
+                # so nothing below it is examined or signed; and with no
+                # __init__ it still imports, as a namespace package.
+                faults.append(
+                    f"{_rel(full)}/: symlinked directory — neither the "
+                    "signed digest nor this walk follows it, and its modules "
+                    "import"
+                )
+                continue
+            init = next(
+                (
+                    "__init__" + s
+                    for s in ordered
+                    if os.path.isfile(os.path.join(full, "__init__" + s))
+                ),
+                None,
+            )
+            if init is None:
+                continue
+            rel = _rel(full)
+            shadowed = by_name.get(dirname.casefold())
+            if shadowed:
+                faults.append(
+                    f"{rel}/{init}: package directory shadows {shadowed[0][1]} — "
+                    "the import system resolves a package directory first"
+                )
+    return faults
+
+
+def _pycache_faults(cache: str, root: str, ordered: list[str]) -> list[str]:
+    """What in ``cache``, a ``__pycache__`` directory, imports as a module.
+
+    PEP 3147 names a cache ``<module>.<tag>.pyc``, and a dotted stem is not
+    an import name.  Anything else there imports as ``<pkg>.__pycache__.<name>``
+    -- the directory is a namespace portion -- whether a ``.py``, a tagless
+    ``.pyc``, an extension or a subdirectory, and every integrity layer skips
+    ``__pycache__``.  Part of the import-shadowing rule.
+    """
+
+    def _rel(path: str) -> str:
+        return os.path.relpath(path, root).replace(os.sep, "/")
+
+    try:
+        entries = sorted(os.listdir(cache))
+    except OSError as exc:
+        return [
+            f"{_rel(cache)}: directory cannot be listed ({exc.strerror}) — "
+            "cannot establish that it holds nothing importable"
+        ]
+    found: list[str] = []
+    for entry in entries:
+        full = os.path.join(cache, entry)
+        if os.path.isdir(full):
+            found.append(
+                f"{_rel(full)}/: directory inside __pycache__ — importable as a "
+                "namespace package, and covered by no integrity layer"
+            )
+            continue
+        suffix = next(
+            (s for s in ordered if entry.endswith(s) and len(entry) > len(s)),
+            None,
+        )
+        if suffix is not None and entry[: -len(suffix)].isidentifier():
+            found.append(
+                f"{_rel(full)}: importable from __pycache__ as a module — "
+                "covered by no integrity layer"
+            )
+    return found
+
+
+def _verify_import_shadowing(pkg_dir: Path) -> list[str]:
+    faults = find_import_shadowing(pkg_dir)
+    if not faults:
+        print("[shadow] nothing importable outside the signed source set")
+    for fault in faults:
+        print(f"[shadow] FAIL — {fault}")
+    return faults
+
+
 def _verify_all_bytecode_caches(pkg_dir: Path) -> tuple[list[str], int, int]:
-    """Per-file execution-integrity pass over every top-level ``.py``
+    """Per-file execution-integrity pass over every ``.py`` at any depth
     (the same set ``_self_test._check_execution_integrity`` walks, including
     ``_integrity_signature.py``).  Returns ``(failures, verified, skipped)``.
     """
     failures: list[str] = []
     verified = 0
     skipped = 0
-    for py_file in sorted(pkg_dir.glob("*.py")):
+    for py_file in sorted(p for p in pkg_dir.rglob("*.py") if "__pycache__" not in p.parts):
+        name = py_file.relative_to(pkg_dir).as_posix()
         status, error = verify_bytecode_cache(py_file)
         if error is not None:
             failures.append(error)
-            print(f"[pyc] {py_file.name}: FAIL — {error}")
+            print(f"[pyc] {name}: FAIL — {error}")
         elif status == "verified":
             verified += 1
-            print(f"[pyc] {py_file.name}: cache matches source")
+            print(f"[pyc] {name}: cache matches source")
         else:
             skipped += 1
-            print(f"[pyc] {py_file.name}: no cache for this interpreter (nothing to poison)")
+            print(f"[pyc] {name}: no cache for this interpreter (nothing to poison)")
     return failures, verified, skipped
 
 
@@ -1406,6 +1572,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         binding_failures, binding_warnings = _verify_binding_extensions(pkg_dir, binding_digests)
         failures += binding_failures
         warnings += binding_warnings
+
+    failures += _verify_import_shadowing(pkg_dir)
 
     pyc_failures, pyc_verified, pyc_skipped = _verify_all_bytecode_caches(pkg_dir)
     failures += pyc_failures

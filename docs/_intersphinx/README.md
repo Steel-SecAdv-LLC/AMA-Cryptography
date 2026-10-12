@@ -14,4 +14,6 @@ curl -L https://numpy.org/doc/stable/objects.inv -o docs/_intersphinx/numpy.inv
 curl -L https://docs.scipy.org/doc/scipy/objects.inv -o docs/_intersphinx/scipy.inv
 ```
 
-``docs/conf.py`` picks up any ``<name>.inv`` file here automatically.
+``docs/conf.py`` picks up ``python.inv``, ``numpy.inv`` and ``scipy.inv`` here
+automatically — the three projects named in its ``_build_intersphinx_mapping()``
+candidates; other ``.inv`` files are ignored unless a candidate entry is added.

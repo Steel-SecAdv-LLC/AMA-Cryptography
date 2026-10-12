@@ -112,6 +112,25 @@ class TestLyapunovStability(unittest.TestCase):
         V = lyapunov_function(target, target)
         self.assertAlmostEqual(V, 0.0, places=10, msg="V should be 0 at equilibrium")
 
+    def test_a_representable_v_at_the_float_ceiling_is_computed(self) -> None:
+        """1.3e154 squares to 1.69e308, below the largest double: computed,
+        not refused (RANGE: the boundary's representable side)."""
+        self.assertEqual(lyapunov_function([1.3e154], [0.0]), 1.3e154**2)
+
+    def test_an_unrepresentable_v_is_refused_by_name(self) -> None:
+        """V(x) above the largest double has no float value.  Both overflow
+        routes -- a single square past the range, and fsum's partial sums
+        over many in-range squares -- must surface as the documented
+        ValueError, never a raw OverflowError (PIN: removing the refusal in
+        lyapunov_function makes both subtests fail with OverflowError)."""
+        for name, state in (
+            ("square past the range", [1.4e154]),
+            ("sum past the range", [1.0e154] * 211),
+        ):
+            with self.subTest(name):
+                with self.assertRaisesRegex(ValueError, "exceeds the largest finite float"):
+                    lyapunov_function(state, [0.0] * len(state))
+
     def test_lyapunov_derivative_negative(self) -> None:
         """Test V̇(x) ≤ 0 (negative semi-definite)."""
         V = 1.5

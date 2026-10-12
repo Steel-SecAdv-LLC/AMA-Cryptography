@@ -518,22 +518,41 @@ class TestTheFloorsAreReadNotRestated:
             )
         }, "setup.py's preflight and pyproject.toml declare themselves identical"
 
+    @staticmethod
+    def _live_cmake(root: Path) -> tuple[str, str, str]:
+        """(pyproject text, cmake floor, cmake release pin) as the tree has them.
+
+        Read, not restated: these tests used the literal "cmake>=4.4.3", so the
+        routine floor bump to 4.4.4 failed them while the gate itself was right.
+        """
+        text = (root / "pyproject.toml").read_text(encoding="utf-8")
+        floor = re.search(r'"cmake>=([0-9][0-9.]*)"', text)
+        pin = re.search(
+            r"^cmake==([0-9][0-9.]*)",
+            (root / "requirements-release-build.txt").read_text(encoding="utf-8"),
+            re.M,
+        )
+        assert floor is not None and pin is not None
+        assert text.count(f'"cmake>={floor.group(1)}"') == 1
+        return text, floor.group(1), pin.group(1)
+
     def test_raising_a_floor_above_a_pin_fails_the_tree(self, tmp_path: Path) -> None:
         root = _scratch_tree(tmp_path)
-        path = root / "pyproject.toml"
-        text = path.read_text(encoding="utf-8")
-        assert text.count('"cmake>=4.4.3"') == 1
-        path.write_text(text.replace('"cmake>=4.4.3"', '"cmake>=4.5.0"'), encoding="utf-8")
+        text, floor, pin = self._live_cmake(root)
+        major, minor = (int(part) for part in pin.split(".")[:2])
+        raised = f"{major}.{minor + 1}.0"
+        (root / "pyproject.toml").write_text(
+            text.replace(f'"cmake>={floor}"', f'"cmake>={raised}"'), encoding="utf-8"
+        )
         problems = _problems(root)
         assert len(problems) == 1, problems
-        assert "cmake==4.4.3 is below the declared floor cmake>=4.5.0" in problems[0]
+        assert f"cmake=={pin} is below the declared floor cmake>={raised}" in problems[0]
 
     def test_a_floor_that_is_not_greater_or_equal_cannot_be_run(self, tmp_path: Path) -> None:
         root = _scratch_tree(tmp_path)
-        path = root / "pyproject.toml"
-        path.write_text(
-            path.read_text(encoding="utf-8").replace('"cmake>=4.4.3"', '"cmake~=4.4.3"'),
-            encoding="utf-8",
+        text, floor, _pin = self._live_cmake(root)
+        (root / "pyproject.toml").write_text(
+            text.replace(f'"cmake>={floor}"', f'"cmake~={floor}"'), encoding="utf-8"
         )
         _, fatal = pins.run_checks(root)
         assert fatal is not None and "~=" in fatal

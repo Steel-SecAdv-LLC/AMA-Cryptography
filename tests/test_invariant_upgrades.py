@@ -11,6 +11,7 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import re
 import subprocess
@@ -22,6 +23,35 @@ from typing import Any
 from unittest import mock
 
 import pytest
+
+
+@contextlib.contextmanager
+def _wipe_fails_for(obj: Any) -> Generator[None, None, None]:
+    """Make the finalizer wipe raise for ``obj`` alone.
+
+    Patched where every secret-holding class's ``__del__`` looks it up
+    (``finalize_secret`` -> ``_wipe_if_last_owner``), so the failure is one of
+    the real finalizer path.  Targeted at ``obj``'s namespace, because a
+    blanket failure also fires for whatever other secret holders the test's
+    ``gc.collect()`` happens to reap, and the count would measure the heap.
+    """
+    from ama_cryptography import _secret_material
+
+    target = obj.__dict__
+    # Hold the namespace, not the object: a reference from this frame would
+    # keep ``obj`` alive past the test's ``del`` and its __del__ would run
+    # only after the patch is gone.
+    del obj
+    real = _secret_material._wipe_if_last_owner
+
+    def failing(namespace: dict[str, Any], name: str) -> None:
+        if namespace is target:
+            raise RuntimeError("mock")
+        real(namespace, name)
+
+    with mock.patch.object(_secret_material, "_wipe_if_last_owner", failing):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # Upgrade D — INVARIANT-3 Addendum: Finalizer Failures Must Be Observable
@@ -114,8 +144,7 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 4032),
         )
         before = fh.finalizer_error_count()
-        # Patch at class level so the GC-triggered __del__ sees the mock
-        with mock.patch.object(DilithiumKeyPair, "wipe", side_effect=RuntimeError("mock")):
+        with _wipe_fails_for(kp):
             del kp
             gc.collect()
         after = fh.finalizer_error_count()
@@ -134,7 +163,7 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 3168),
         )
         before = fh.finalizer_error_count()
-        with mock.patch.object(KyberKeyPair, "wipe", side_effect=RuntimeError("mock")):
+        with _wipe_fails_for(kp):
             del kp
             gc.collect()
         after = fh.finalizer_error_count()
@@ -153,7 +182,7 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 128),
         )
         before = fh.finalizer_error_count()
-        with mock.patch.object(SphincsKeyPair, "wipe", side_effect=RuntimeError("mock")):
+        with _wipe_fails_for(kp):
             del kp
             gc.collect()
         after = fh.finalizer_error_count()

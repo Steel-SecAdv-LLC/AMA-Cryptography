@@ -58,7 +58,7 @@ class TestCreateCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package
 
         result = create_crypto_package(b"test")
-        assert isinstance(result.hmac_key, bytes)
+        assert isinstance(result.hmac_key, bytearray)  # wipeable (INVARIANT-6)
         assert len(result.hmac_key) == 32
 
     def test_hkdf_master_secret_preserved(self) -> None:
@@ -66,7 +66,7 @@ class TestCreateCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package
 
         result = create_crypto_package(b"test")
-        assert isinstance(result.hkdf_master_secret, bytes)
+        assert isinstance(result.hkdf_master_secret, bytearray)  # wipeable (INVARIANT-6)
         assert len(result.hkdf_master_secret) == 32
 
 
