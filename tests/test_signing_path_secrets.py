@@ -29,27 +29,22 @@ from typing import Any, Callable, Iterator, cast
 import pytest
 
 import ama_cryptography._package_transcript as pt
+
+# One import form per module (CodeQL py/import-and-import-from, alert #778):
+# crypto_api is imported as a module only, and its names are used qualified.
 import ama_cryptography.crypto_api as ca
 import ama_cryptography.pqc_backends as pb
 from ama_cryptography import _module_state as ms
 from ama_cryptography import _secret_material as sm
-from ama_cryptography.crypto_api import (
-    AlgorithmType,
-    AmaCryptography,
-    CryptoPackageConfig,
-    HybridSignatureProvider,
-    create_crypto_package,
-    verify_crypto_package,
-)
 
 pytestmark = pytest.mark.skipif(
     not pb.DILITHIUM_AVAILABLE, reason="hybrid signatures require the native ML-DSA-65 backend"
 )
 
 CONTENT = b"signing path secrets"
-SEED = HybridSignatureProvider.ED25519_SK_SIZE
-FULL = HybridSignatureProvider.ED25519_FULL_SK_SIZE
-MLDSA = HybridSignatureProvider.DILITHIUM_SK_SIZE
+SEED = ca.HybridSignatureProvider.ED25519_SK_SIZE
+FULL = ca.HybridSignatureProvider.ED25519_FULL_SK_SIZE
+MLDSA = ca.HybridSignatureProvider.DILITHIUM_SK_SIZE
 
 
 class _SliceSpy(bytearray):
@@ -65,9 +60,20 @@ class _SliceSpy(bytearray):
             self.sliced.append(index)
         return super().__getitem__(index)
 
+    def __eq__(self, other: object) -> bool:
+        # Deliberate (CodeQL py/missing-equals, alert #779): equality stays
+        # byte equality.  ``sliced`` is instrumentation about how the buffer
+        # was read, not part of its value, so two spies over equal bytes are
+        # equal whatever they recorded.  Subclasses of ``bytearray`` remain
+        # unhashable, so no ``__hash__`` is owed with this override.
+        return super().__eq__(other)
+
+    def __ne__(self, other: object) -> bool:
+        return super().__ne__(other)
+
 
 def _hybrid_keypair() -> tuple[bytes, bytearray]:
-    kp = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG).generate_keypair()
+    kp = ca.AmaCryptography(algorithm=ca.AlgorithmType.HYBRID_SIG).generate_keypair()
     assert isinstance(kp.secret_key, bytearray)
     return kp.public_key, kp.secret_key
 
@@ -92,7 +98,7 @@ def test_hybrid_sign_cuts_no_copy_of_the_callers_key(form: str) -> None:
     slices here and fails.  The signature must still verify under both."""
     public_key, sk = _hybrid_keypair()
     key = _SliceSpy(sk if form == "seed" else _expanded(sk))
-    provider = HybridSignatureProvider()
+    provider = ca.HybridSignatureProvider()
     signature = provider.sign(b"message", key)
     assert key.sliced == [], "the key was sliced into independent copies"
     assert provider.verify(b"message", signature.signature, public_key)
@@ -126,7 +132,7 @@ def test_hybrid_sign_hands_the_inner_signers_views_not_copies(
 
     monkeypatch.setattr("ama_cryptography.crypto_api.dilithium_sign_ctx", ctx)
     monkeypatch.setattr(ca.Ed25519Provider, "sign", ed)
-    HybridSignatureProvider().sign(b"message", sk)
+    ca.HybridSignatureProvider().sign(b"message", sk)
     assert sorted(length for _view, length, _own in handed) == [SEED, MLDSA]
     assert all(view and own for view, _length, own in handed), handed
 
@@ -145,7 +151,7 @@ def test_hybrid_sign_leaves_no_library_copy_in_the_failure_traceback(
 
     monkeypatch.setattr("ama_cryptography.crypto_api.dilithium_sign_ctx", refuse)
     with pytest.raises(RuntimeError, match="signing refused") as caught:
-        HybridSignatureProvider().sign(b"message", sk)
+        ca.HybridSignatureProvider().sign(b"message", sk)
     tb: types.TracebackType | None = caught.value.__traceback__
     held: list[tuple[str, int]] = []
     while tb is not None:
@@ -160,7 +166,7 @@ def test_hybrid_sign_still_accepts_a_bytes_key() -> None:
     """PIN.  The ctypes boundary refuses a read-only view of part of a buffer,
     so a ``bytes`` key must keep being cut as ``bytes``, not viewed."""
     public_key, sk = _hybrid_keypair()
-    provider = HybridSignatureProvider()
+    provider = ca.HybridSignatureProvider()
     signature = provider.sign(b"message", bytes(sk))
     assert provider.verify(b"message", signature.signature, public_key)
 
@@ -194,13 +200,17 @@ def test_a_failed_hybrid_sign_does_not_pin_the_callers_key(
     else:
 
         def refuse(self: Any, message: bytes, secret_key: Any, precomputed_hash: Any = None) -> Any:
-            _array_over_the_loan = pb._borrow(secret_key)
+            array_over_the_loan = pb._borrow(secret_key)
+            # The borrow must span the loaned key, and this local keeps the
+            # ctypes array alive in the raising frame: the traceback holding
+            # it is exactly what the test pins (CodeQL #776).
+            assert len(array_over_the_loan) == len(secret_key)
             raise RuntimeError("signing refused")
 
         monkeypatch.setattr(ca.Ed25519Provider, "sign", refuse)
         expected = RuntimeError
     with pytest.raises(expected) as caught:
-        HybridSignatureProvider().sign(b"message", sk)
+        ca.HybridSignatureProvider().sign(b"message", sk)
     sk.clear()
     assert len(sk) == 0 and caught.value is not None
 
@@ -211,7 +221,7 @@ def test_hybrid_signature_bytes_are_unchanged_by_borrowing() -> None:
     same domain-bound wrapper; a view that fed the signer the wrong span
     would change them."""
     _public_key, sk = _hybrid_keypair()
-    signature = HybridSignatureProvider().sign(b"message", sk).signature
+    signature = ca.HybridSignatureProvider().sign(b"message", sk).signature
     expected = pb.native_ed25519_sign(ca.hybrid_classical_input(b"message"), _expanded(sk)[:FULL])
     assert signature[:64] == expected
 
@@ -246,7 +256,7 @@ def test_normalizing_a_hybrid_key_borrows_the_seed_and_zeroes_the_expansion(
     assertion; deleting the ``zeroize(full_sk)`` fails the second."""
     public_key, sk = _hybrid_keypair()
     seen = _record_expansions(monkeypatch)
-    config = CryptoPackageConfig(signing_keypair=(public_key, sk))
+    config = ca.CryptoPackageConfig(signing_keypair=(public_key, sk))
     normalized = ca._normalized_signing_secret(config, public_key, sk)
     (((seed_type, borrowed), full),) = seen
     assert seed_type is memoryview and borrowed is sk
@@ -261,28 +271,30 @@ def test_normalizing_a_hybrid_key_cuts_no_slice_of_it() -> None:
     expression records a slice here and fails."""
     public_key, sk = _hybrid_keypair()
     key = _SliceSpy(sk)
-    config = CryptoPackageConfig(signing_keypair=(public_key, key))
+    config = ca.CryptoPackageConfig(signing_keypair=(public_key, key))
     normalized = ca._normalized_signing_secret(config, public_key, key)
     assert key.sliced == []
     assert bytes(normalized) == bytes(_expanded(sk))
 
 
-@pytest.mark.parametrize("algorithm", [AlgorithmType.HYBRID_SIG, AlgorithmType.ED25519])
+@pytest.mark.parametrize("algorithm", [ca.AlgorithmType.HYBRID_SIG, ca.AlgorithmType.ED25519])
 def test_a_refused_normalization_leaves_no_populated_expansion(
-    monkeypatch: pytest.MonkeyPatch, algorithm: AlgorithmType
+    monkeypatch: pytest.MonkeyPatch, algorithm: ca.AlgorithmType
 ) -> None:
     """PIN (one guard per row).  A public key that does not match the seed is
     refused after the expansion exists; it must not stay populated, and the
     caller's key must be byte-for-byte unchanged."""
     other_public, _ = pb.native_ed25519_keypair()
-    if algorithm is AlgorithmType.HYBRID_SIG:
+    if algorithm is ca.AlgorithmType.HYBRID_SIG:
         _public, sk = _hybrid_keypair()
     else:
         _public, full = pb.native_ed25519_keypair()
         sk = bytearray(memoryview(full)[:SEED])
     supplied = bytes(sk)
     seen = _record_expansions(monkeypatch)
-    config = CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(other_public, sk))
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=algorithm, signing_keypair=(other_public, sk)
+    )
     with pytest.raises(ValueError, match="signing_keypair mismatch"):
         ca._normalized_signing_secret(config, other_public, sk)
     ((_seed, full_sk),) = seen
@@ -291,27 +303,31 @@ def test_a_refused_normalization_leaves_no_populated_expansion(
     assert bytes(sk) == supplied, "a refused normalization destroyed the key the caller supplied"
 
 
-@pytest.mark.parametrize("algorithm", [AlgorithmType.HYBRID_SIG, AlgorithmType.ED25519])
+@pytest.mark.parametrize("algorithm", [ca.AlgorithmType.HYBRID_SIG, ca.AlgorithmType.ED25519])
 def test_a_failed_normalization_does_not_pin_the_callers_key(
-    monkeypatch: pytest.MonkeyPatch, algorithm: AlgorithmType
+    monkeypatch: pytest.MonkeyPatch, algorithm: ca.AlgorithmType
 ) -> None:
     """PIN.  The seed is lent to the keygen as a view; a keygen that raises
     (its pairwise consistency test, a native failure) is held by its traceback
     with the ctypes array over that view, so a caller keeping the exception
     could not ``clear()`` its key (``BufferError``).  Both arms lend the seed
     through ``_Borrowed``; lending it bare fails the row of that arm."""
-    if algorithm is AlgorithmType.HYBRID_SIG:
+    if algorithm is ca.AlgorithmType.HYBRID_SIG:
         public, sk = _hybrid_keypair()
     else:
         public, full = pb.native_ed25519_keypair()
         sk = bytearray(memoryview(full)[:SEED])
 
     def refuse(seed: Any) -> Any:
-        _array_over_the_loan = pb._borrow(seed)
+        array_over_the_loan = pb._borrow(seed)
+        # The borrow must span the lent seed, and this local keeps the ctypes
+        # array alive in the raising frame: the traceback holding it is
+        # exactly what the test pins (CodeQL #777).
+        assert len(array_over_the_loan) == len(seed)
         raise RuntimeError("keygen refused")
 
     monkeypatch.setattr("ama_cryptography.crypto_api.native_ed25519_keypair_from_seed", refuse)
-    config = CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
+    config = ca.CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
     with pytest.raises(RuntimeError, match="keygen refused") as caught:
         ca._normalized_signing_secret(config, public, sk)
     sk.clear()
@@ -324,8 +340,8 @@ def test_the_ed25519_normalization_keeps_its_expansion_for_the_memo() -> None:
     zeros."""
     public, full = pb.native_ed25519_keypair()
     seed = bytearray(memoryview(full)[:SEED])
-    config = CryptoPackageConfig(
-        signature_algorithm=AlgorithmType.ED25519, signing_keypair=(public, seed)
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=ca.AlgorithmType.ED25519, signing_keypair=(public, seed)
     )
     normalized = ca._normalized_signing_secret(config, public, seed)
     assert len(normalized) == FULL and any(normalized)
@@ -342,22 +358,22 @@ def _ed25519_identity() -> tuple[bytes, bytearray]:
     return public, bytearray(memoryview(full)[:SEED])
 
 
-def _identity(algorithm: AlgorithmType) -> tuple[bytes, bytearray]:
-    return _hybrid_keypair() if algorithm is AlgorithmType.HYBRID_SIG else _ed25519_identity()
+def _identity(algorithm: ca.AlgorithmType) -> tuple[bytes, bytearray]:
+    return _hybrid_keypair() if algorithm is ca.AlgorithmType.HYBRID_SIG else _ed25519_identity()
 
 
-_BOTH_ALGORITHMS = [AlgorithmType.ED25519, AlgorithmType.HYBRID_SIG]
+_BOTH_ALGORITHMS = [ca.AlgorithmType.ED25519, ca.AlgorithmType.HYBRID_SIG]
 
 
 @pytest.mark.parametrize("algorithm", _BOTH_ALGORITHMS)
 def test_a_nested_normalization_is_not_zeroed_by_the_one_it_interrupted(
-    monkeypatch: pytest.MonkeyPatch, algorithm: AlgorithmType
+    monkeypatch: pytest.MonkeyPatch, algorithm: ca.AlgorithmType
 ) -> None:
     """PIN.  A normalization run inside another's keygen stores an expansion the
     interrupted one must not zero: the superseded expansion is read before the
     build, not after."""
     public, sk = _identity(algorithm)
-    config = CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
+    config = ca.CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
     nested: list[sm.SecretBytes] = []
     real = pb.native_ed25519_keypair_from_seed
 
@@ -383,8 +399,8 @@ def test_a_refused_swap_leaves_the_expansion_it_would_have_replaced_intact() -> 
     build serves an all-zero expansion."""
     public, seed = _ed25519_identity()
     sk = bytes(seed)
-    config = CryptoPackageConfig(
-        signature_algorithm=AlgorithmType.ED25519, signing_keypair=(public, sk)
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=ca.AlgorithmType.ED25519, signing_keypair=(public, sk)
     )
     first = ca._normalized_signing_secret(config, public, sk)
     other_public, _full = pb.native_ed25519_keypair()
@@ -396,13 +412,13 @@ def test_a_refused_swap_leaves_the_expansion_it_would_have_replaced_intact() -> 
 
 @pytest.mark.parametrize("algorithm", _BOTH_ALGORITHMS)
 def test_a_second_thread_waits_for_the_first_expansion_instead_of_building_its_own(
-    monkeypatch: pytest.MonkeyPatch, algorithm: AlgorithmType
+    monkeypatch: pytest.MonkeyPatch, algorithm: ca.AlgorithmType
 ) -> None:
     """PIN.  The miss path is locked and re-checked: a second thread asking for a
     key mid-build waits and is served the first's expansion instead of building and
     orphaning its own.  No sleep decides the order."""
     public, sk = _identity(algorithm)
-    config = CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
+    config = ca.CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
     entered, release = threading.Event(), threading.Event()
     calls: list[str] = []
     real = pb.native_ed25519_keypair_from_seed
@@ -433,12 +449,12 @@ def test_a_second_thread_waits_for_the_first_expansion_instead_of_building_its_o
     monkeypatch.setattr("ama_cryptography.crypto_api.native_ed25519_keypair_from_seed", gated)
     monkeypatch.setattr("ama_cryptography.crypto_api._SIGNING_EXPANSION_LOCK", arrivals)
     results: dict[str, sm.SecretBytes] = {}
-    failures: list[BaseException] = []
+    failures: list[Exception] = []
 
     def work(name: str) -> None:
         try:
             results[name] = ca._normalized_signing_secret(config, public, sk)
-        except BaseException as exc:  # reported by the test, not lost in a thread
+        except Exception as exc:  # reported by the test, not lost in a thread
             failures.append(exc)
 
     first = threading.Thread(target=work, args=("first",), name="first")
@@ -487,10 +503,10 @@ def _interleaving_threads() -> Iterator[None]:
 
 
 def _first_use_round(
-    algorithm: AlgorithmType, threads: int
-) -> tuple[CryptoPackageConfig, list[Any]]:
+    algorithm: ca.AlgorithmType, threads: int
+) -> tuple[ca.CryptoPackageConfig, list[Any]]:
     public, sk = _identity(algorithm)
-    config = CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
+    config = ca.CryptoPackageConfig(signature_algorithm=algorithm, signing_keypair=(public, sk))
     got: list[Any] = [None] * threads
 
     def job(slot: int) -> None:
@@ -501,10 +517,10 @@ def _first_use_round(
 
 
 @pytest.mark.parametrize(
-    ("algorithm", "rounds"), [(AlgorithmType.ED25519, 300), (AlgorithmType.HYBRID_SIG, 100)]
+    ("algorithm", "rounds"), [(ca.AlgorithmType.ED25519, 300), (ca.AlgorithmType.HYBRID_SIG, 100)]
 )
 def test_threads_first_using_one_config_all_get_a_live_expansion(
-    algorithm: AlgorithmType, rounds: int
+    algorithm: ca.AlgorithmType, rounds: int
 ) -> None:
     """PIN, statistical.  Six threads released together on a fresh config each get
     the same populated expansion, still populated after all of them return."""
@@ -519,15 +535,15 @@ def test_threads_first_using_one_config_all_get_a_live_expansion(
 
 def _package_round(threads: int) -> tuple[bytes, list[Any]]:
     public, sk = _ed25519_identity()
-    config = CryptoPackageConfig(
-        signature_algorithm=AlgorithmType.ED25519, signing_keypair=(public, sk)
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=ca.AlgorithmType.ED25519, signing_keypair=(public, sk)
     )
     outcomes: list[Any] = [None] * threads
 
     def job(slot: int) -> None:
         try:
-            outcomes[slot] = create_crypto_package(CONTENT, config)
-        except BaseException as exc:  # reported by the test, not lost in a thread
+            outcomes[slot] = ca.create_crypto_package(CONTENT, config)
+        except Exception as exc:  # reported by the test, not lost in a thread
             outcomes[slot] = exc
 
     _released_together(threads, job)
@@ -544,7 +560,7 @@ def test_threads_sharing_a_config_all_create_verifying_packages() -> None:
             for outcome in outcomes:
                 assert not isinstance(outcome, BaseException), repr(outcome)
                 assert outcome is not None, "a thread did not return"
-                verdict = verify_crypto_package(CONTENT, outcome, expected_public_key=public)
+                verdict = ca.verify_crypto_package(CONTENT, outcome, expected_public_key=public)
                 assert verdict["all_valid"]
 
 
@@ -569,10 +585,10 @@ def zeroed_contents(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     return seen
 
 
-def _signed_config() -> tuple[CryptoPackageConfig, bytes, bytearray]:
+def _signed_config() -> tuple[ca.CryptoPackageConfig, bytes, bytearray]:
     public_key, sk = _hybrid_keypair()
-    config = CryptoPackageConfig(signing_keypair=(public_key, sk))
-    create_crypto_package(CONTENT, config)
+    config = ca.CryptoPackageConfig(signing_keypair=(public_key, sk))
+    ca.create_crypto_package(CONTENT, config)
     return config, public_key, sk
 
 
@@ -588,8 +604,8 @@ def test_wipe_zeroes_the_cached_expansion_and_spares_the_callers_key() -> None:
     assert not any(expansion)
     assert config._signing_expansion is None and config._normalized_signing_memo is None
     assert any(sk), "wipe() destroyed the key the caller supplied"
-    package = create_crypto_package(CONTENT, config)
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    package = ca.create_crypto_package(CONTENT, config)
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
 
 
 def test_a_wiped_config_does_not_serve_a_zeroed_expansion_for_a_bytes_key() -> None:
@@ -599,11 +615,11 @@ def test_a_wiped_config_does_not_serve_a_zeroed_expansion_for_a_bytes_key() -> N
     the expansion is what prevents it: removing ``_normalized_signing_memo =
     None`` from ``_drop_signing_memo`` fails this."""
     public_key, sk = _hybrid_keypair()
-    config = CryptoPackageConfig(signing_keypair=(public_key, bytes(sk)))
-    create_crypto_package(CONTENT, config)
+    config = ca.CryptoPackageConfig(signing_keypair=(public_key, bytes(sk)))
+    ca.create_crypto_package(CONTENT, config)
     config.wipe()
-    package = create_crypto_package(CONTENT, config)
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    package = ca.create_crypto_package(CONTENT, config)
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
 
 
 def test_a_dying_config_zeroes_the_expansion_it_alone_holds(
@@ -645,19 +661,21 @@ def test_a_key_the_config_did_not_expand_is_never_wiped_with_it() -> None:
     """PIN.  For an algorithm with nothing to expand the "normalized" secret IS
     the caller's key.  Recording it as the config's own expansion would make
     ``wipe()`` zero the caller's key.  Doing so fails this."""
-    kp = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65).generate_keypair()
-    config = CryptoPackageConfig(
-        signature_algorithm=AlgorithmType.ML_DSA_65,
+    kp = ca.AmaCryptography(algorithm=ca.AlgorithmType.ML_DSA_65).generate_keypair()
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=ca.AlgorithmType.ML_DSA_65,
         signing_keypair=(kp.public_key, kp.secret_key),
     )
-    package = create_crypto_package(CONTENT, config)
+    package = ca.create_crypto_package(CONTENT, config)
     assert config._signing_expansion is None
     config.wipe()
     assert any(kp.secret_key)
     del config
     gc.collect()
     assert any(kp.secret_key)
-    assert verify_crypto_package(CONTENT, package, expected_public_key=kp.public_key)["all_valid"]
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=kp.public_key)[
+        "all_valid"
+    ]
 
 
 @pytest.mark.parametrize("kind", [bytearray, bytes])
@@ -666,16 +684,16 @@ def test_wiping_a_result_never_zeroes_the_key_the_caller_supplied(kind: type) ->
     result never zeroes the key the caller supplied."""
     public_key, sk = _hybrid_keypair()
     supplied = bytes(sk)
-    config = CryptoPackageConfig(signing_keypair=(public_key, kind(sk)))
+    config = ca.CryptoPackageConfig(signing_keypair=(public_key, kind(sk)))
     caller_key = config.signing_keypair[1] if config.signing_keypair else b""
-    result = create_crypto_package(CONTENT, config)
+    result = ca.create_crypto_package(CONTENT, config)
     stored = result.keypairs["HYBRID_SIG"].secret_key
     assert stored is not caller_key and isinstance(stored, bytearray) and bytes(stored) == supplied
     result.wipe()
     assert not any(stored), "result.wipe() left its own copy of the signing key populated"
     assert bytes(caller_key) == supplied, "result.wipe() zeroed the key the caller supplied"
-    package = create_crypto_package(CONTENT, config)
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    package = ca.create_crypto_package(CONTENT, config)
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
     del package, result, stored
     gc.collect()
     assert bytes(caller_key) == supplied, "collecting the result zeroed the caller's key"
@@ -690,11 +708,11 @@ def test_a_refused_package_zeroes_the_copy_of_the_signing_key_it_made() -> None:
     other_public, _ = pb.native_ed25519_keypair()
     _public, sk = _ed25519_identity()
     supplied = bytes(sk)
-    config = CryptoPackageConfig(
-        signature_algorithm=AlgorithmType.ED25519, signing_keypair=(other_public, sk)
+    config = ca.CryptoPackageConfig(
+        signature_algorithm=ca.AlgorithmType.ED25519, signing_keypair=(other_public, sk)
     )
     with pytest.raises(ValueError, match="signing_keypair mismatch") as caught:
-        create_crypto_package(CONTENT, config)
+        ca.create_crypto_package(CONTENT, config)
     frame = None
     step: types.TracebackType | None = caught.tb
     while step is not None:
@@ -717,10 +735,10 @@ def test_a_superseded_expansion_is_zeroed() -> None:
     assert old is not None and any(old)
     new_public, new_sk = _hybrid_keypair()
     config.signing_keypair = (new_public, new_sk)
-    package = create_crypto_package(CONTENT, config)
+    package = ca.create_crypto_package(CONTENT, config)
     assert not any(old)
     assert config._signing_expansion is not old and any(config._signing_expansion or b"")
-    assert verify_crypto_package(CONTENT, package, expected_public_key=new_public)["all_valid"]
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=new_public)["all_valid"]
 
 
 def test_config_equality_does_not_depend_on_whether_it_has_signed() -> None:
@@ -728,9 +746,9 @@ def test_config_equality_does_not_depend_on_whether_it_has_signed() -> None:
     it (the memo was ``compare=False``).  Declaring the expansion as a field
     of the config fails this."""
     public_key, sk = _hybrid_keypair()
-    used = CryptoPackageConfig(signing_keypair=(public_key, sk))
-    fresh = CryptoPackageConfig(signing_keypair=(public_key, sk))
-    create_crypto_package(CONTENT, used)
+    used = ca.CryptoPackageConfig(signing_keypair=(public_key, sk))
+    fresh = ca.CryptoPackageConfig(signing_keypair=(public_key, sk))
+    ca.create_crypto_package(CONTENT, used)
     assert used == fresh
 
 
@@ -741,7 +759,7 @@ def test_the_memo_is_still_a_hit_on_the_second_package() -> None:
     config, _public_key, _sk = _signed_config()
     memo = config._normalized_signing_memo
     assert memo is not None
-    create_crypto_package(CONTENT, config)
+    ca.create_crypto_package(CONTENT, config)
     assert config._normalized_signing_memo is memo
 
 
@@ -763,14 +781,14 @@ _BASE_RELEASE_PICKLE = (
 )
 
 
-def _ed25519_config_state_only() -> tuple[CryptoPackageConfig, bytes]:
+def _ed25519_config_state_only() -> tuple[ca.CryptoPackageConfig, bytes]:
     seed = bytes(range(32))
     public, _full = pb.native_ed25519_keypair_from_seed(seed)
-    config = object.__new__(CryptoPackageConfig)
+    config = object.__new__(ca.CryptoPackageConfig)
     config.__dict__.update(
         use_kyber=False,
         use_sphincs=False,
-        signature_algorithm=AlgorithmType.ED25519,
+        signature_algorithm=ca.AlgorithmType.ED25519,
         include_kem=False,
         include_timestamp=False,
         num_derived_keys=3,
@@ -786,11 +804,11 @@ def test_a_config_pickled_by_the_base_release_signs() -> None:
     restored here it must still sign a package that verifies (class-level
     defaults for the two cache attributes)."""
     blob = base64.b64decode("".join(_BASE_RELEASE_PICKLE.split()))
-    config = pickle.loads(blob)  # noqa: S301 -- self blob, bytes pinned in this file (SPS-001)  # fmt: skip
-    assert isinstance(config, CryptoPackageConfig)
-    package = create_crypto_package(CONTENT, config)
+    config = pickle.loads(blob)  # noqa: S301 -- self blob, bytes pinned here (SPS-001)  # fmt: skip
+    assert isinstance(config, ca.CryptoPackageConfig)
+    package = ca.create_crypto_package(CONTENT, config)
     public_key = config.signing_keypair[0] if config.signing_keypair else b""
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
     config.wipe()
     assert config._signing_expansion is None
 
@@ -802,8 +820,8 @@ def test_a_config_that_never_ran_the_constructor_signs_and_wipes() -> None:
     config, public_key = _ed25519_config_state_only()
     assert "_signing_expansion" not in config.__dict__
     config.wipe()
-    package = create_crypto_package(CONTENT, config)
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    package = ca.create_crypto_package(CONTENT, config)
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
     del config
     gc.collect()
 
@@ -812,7 +830,7 @@ def test_a_configs_repr_does_not_print_the_signing_key() -> None:
     """PIN.  ``repr`` of a config must not print the signing key
     (``repr=False`` on the field)."""
     public_key, sk = _hybrid_keypair()
-    text = repr(CryptoPackageConfig(signing_keypair=(public_key, sk)))
+    text = repr(ca.CryptoPackageConfig(signing_keypair=(public_key, sk)))
     assert "signing_keypair" not in text
     assert repr(bytes(sk[:24])) not in text and sk[:24].hex() not in text
 
@@ -839,19 +857,19 @@ def test_config_equality_compares_the_signing_key_in_constant_time(
     public_a, sk_a = _hybrid_keypair()
     public_b, sk_b = _hybrid_keypair()
     calls = _comparator_calls(monkeypatch)
-    same = CryptoPackageConfig(signing_keypair=(public_a, bytearray(sk_a)))
-    held = CryptoPackageConfig(signing_keypair=(public_a, sk_a))
-    other = CryptoPackageConfig(signing_keypair=(public_b, sk_b))
+    same = ca.CryptoPackageConfig(signing_keypair=(public_a, bytearray(sk_a)))
+    held = ca.CryptoPackageConfig(signing_keypair=(public_a, sk_a))
+    other = ca.CryptoPackageConfig(signing_keypair=(public_b, sk_b))
     assert held == same
     assert (bytes(sk_a), bytes(sk_a)) in calls
     calls.clear()
     assert held != other
     # Both elements were compared although the first already differs.
     assert (public_a, public_b) in calls and (bytes(sk_a), bytes(sk_b)) in calls
-    assert held != CryptoPackageConfig()
-    assert CryptoPackageConfig() == CryptoPackageConfig()
-    listed = CryptoPackageConfig(signing_keypair=cast(Any, [public_a, sk_a]))
-    assert listed != held and listed == CryptoPackageConfig(
+    assert held != ca.CryptoPackageConfig()
+    assert ca.CryptoPackageConfig() == ca.CryptoPackageConfig()
+    listed = ca.CryptoPackageConfig(signing_keypair=cast(Any, [public_a, sk_a]))
+    assert listed != held and listed == ca.CryptoPackageConfig(
         signing_keypair=cast(Any, [public_a, sk_a])
     )
 
@@ -1139,10 +1157,10 @@ def test_the_derived_keys_commitment_calls_nothing_that_copies_a_key() -> None:
 def test_a_package_round_trips_with_the_new_commitment() -> None:
     """SMOKE.  Create and verify both compute the commitment; they agree."""
     public_key, sk = _hybrid_keypair()
-    package = create_crypto_package(
-        CONTENT, CryptoPackageConfig(signing_keypair=(public_key, sk), num_derived_keys=8)
+    package = ca.create_crypto_package(
+        CONTENT, ca.CryptoPackageConfig(signing_keypair=(public_key, sk), num_derived_keys=8)
     )
     assert package.metadata["derived_keys_commitment"] == ca._derived_keys_commitment(
         package.derived_keys
     )
-    assert verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
+    assert ca.verify_crypto_package(CONTENT, package, expected_public_key=public_key)["all_valid"]
