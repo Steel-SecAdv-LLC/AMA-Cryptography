@@ -10,7 +10,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | **Not externally audited** |
 | Version | 5.0.0 |
-| Last Updated | 2026-10-08 |
+| Last Updated | 2026-10-12 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit, and the project does not commission one: the composition protocol is self-attested, not independently audited, and a downstream user who needs third-party assurance commissions their own review. Recommended for production use:
