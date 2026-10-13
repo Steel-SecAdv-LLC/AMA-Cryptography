@@ -20,7 +20,7 @@ hypothesis>=6.168.5
 
 # Code Quality
 black>=26.10.0,<27
-ruff>=0.16.10,<0.17
+ruff>=0.17.0,<0.18
 # Capped below 2.5 with pyproject.toml's [dev] extra; see the note there.
 mypy>=2.4.0,<2.5
 # PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
