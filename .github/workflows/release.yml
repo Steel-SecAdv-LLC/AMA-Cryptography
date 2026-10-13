@@ -531,7 +531,7 @@ jobs:
         # neither the v3.2.0 tag object nor its commit — so every wheel job
         # aborted with "Unable to resolve action … unable to find version".
         # That is why no release before then produced artifacts.
-        uses: pypa/cibuildwheel@e090b81e30c4d855ea63bf4b6e59204c09a101ae  # v4.2.1
+        uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299  # v4.3.1
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
@@ -812,7 +812,7 @@ jobs:
           CIBW_TEST_COMMAND: "python {project}/tools/wheel_smoke_test.py"
 
       - name: Upload wheel artefacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
@@ -880,7 +880,7 @@ jobs:
           ( cd /tmp && /tmp/sdist-venv/bin/python "$GITHUB_WORKSPACE/tools/wheel_smoke_test.py" )
 
       - name: Upload sdist artefact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -934,7 +934,7 @@ jobs:
           python-version: "3.11"
 
       - name: Download the wheels this release actually built
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: wheels-ubuntu-latest
           path: shipped
@@ -960,7 +960,7 @@ jobs:
         # runs after a wheel is built and cannot change its contents, so
         # skipping it here halves the wall clock without weakening the
         # comparison.  `build-wheels` still runs it on the wheels that ship.
-        uses: pypa/cibuildwheel@e090b81e30c4d855ea63bf4b6e59204c09a101ae  # v4.2.1
+        uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299  # v4.3.1
         env:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
@@ -987,7 +987,7 @@ jobs:
 
       - name: Upload the rebuild for comparison if it did not match
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: reproducibility-rebuild
           path: wheelhouse/*.whl
@@ -1019,14 +1019,14 @@ jobs:
       subjects: ${{ steps.hash.outputs.subjects }}
     steps:
       - name: Download wheel artefacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: dist
           pattern: wheels-*
           merge-multiple: true
 
       - name: Download sdist artefact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: sdist
           path: dist
@@ -1113,14 +1113,14 @@ jobs:
       contents: read
     steps:
       - name: Download wheel artefacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: dist
           pattern: wheels-*
           merge-multiple: true
 
       - name: Download sdist artefact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: sdist
           path: dist
@@ -1133,7 +1133,7 @@ jobs:
           release-signing-artifacts: false
 
       - name: Upload signed bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: signed-distribution
           path: |
@@ -1203,7 +1203,7 @@ jobs:
       id-token: write       # required for trusted publishing OIDC
     steps:
       - name: Download signed distribution
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: signed-distribution
           path: dist
@@ -1307,7 +1307,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Download all artefacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: artefacts
 
