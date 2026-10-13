@@ -1037,7 +1037,7 @@ jobs:
       run: python3 tools/check_bandit_severity.py bandit-report.json
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       if: always()
       with:
         name: bandit-security-report
@@ -1153,7 +1153,7 @@ jobs:
       run: python -m pytest tests/test_semgrep_severity_gate.py -q
 
     - name: Upload Semgrep report
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       # always(), not success(): the report is the evidence for a FAILED gate,
       # so publishing it only when the gate passed withheld it exactly when a
       # reviewer needs it.  Same reasoning as the Bandit upload above.
@@ -1878,7 +1878,7 @@ jobs:
         PY
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       # always(), not success(): a success()-gated upload withholds the
       # evidence exactly when the gate fails and somebody needs it — the
       # same defect the Bandit report upload above documents and fixes.
@@ -1955,7 +1955,7 @@ jobs:
         taskset -c 0 $NICE_PREFIX ./dudect_crypto 50000
 
     - name: Upload timing analysis results
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       # always(), not success(): the timing artefacts matter most on the run
       # where a dudect stage failed — same rationale as the Bandit upload.
       if: always()
