@@ -208,8 +208,8 @@ dev = [
     # DEFAULT behaviour -- the surface that moves between releases (black
     # revises its stable style on calendar majors; ruff's default rule set
     # moves on minors).  Capped so one CI run measures one black and one ruff.
-    "black>=26.10.0,<27",
-    "ruff>=0.16.10,<0.17",
+    "black>=26.10.1,<27",
+    "ruff>=0.17.1,<0.18",
     # Floor and lock moved to 2.4.0 together with the lint-lane and
     # pre-commit pins (test_lint_job_environment.py holds them in lockstep).
     # The 2.3→2.4 boundary changed one measured behaviour: 2.4.0 stopped
