@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload cppcheck report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: cppcheck-report
           path: cppcheck-report.txt
@@ -176,7 +176,7 @@ jobs:
 
       - name: Upload scan-build report
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: scan-build-report
           path: /tmp/scan-build-*
@@ -196,7 +196,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
         with:
           languages: c-cpp, python
           queries: security-and-quality
@@ -232,7 +232,7 @@ jobs:
         # rename this job's required status context (a matrix) and re-file
         # main's Python alerts under a new configuration, so it is a change
         # to make on main together with the ruleset, not inside this PR.
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
         with:
           category: "/language:c-cpp"
           # Also write the SARIF locally so the severity gate below can read
@@ -959,7 +959,7 @@ jobs:
 
       - name: Upload clang-tidy findings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: clang-tidy-findings
           path: clang-tidy-findings.txt
@@ -1495,7 +1495,7 @@ jobs:
 
       - name: Upload both wheels for offline diff
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: reproducible-build-wheels
           path: |
