@@ -19,7 +19,7 @@ pytest-cov>=4.0.0
 hypothesis>=6.168.5
 
 # Code Quality
-black>=26.10.0,<27
+black>=26.10.1,<27
 ruff>=0.16.10,<0.17
 # Capped below 2.5 with pyproject.toml's [dev] extra; see the note there.
 mypy>=2.4.0,<2.5
