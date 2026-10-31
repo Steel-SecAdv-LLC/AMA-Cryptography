@@ -43,6 +43,6 @@ bandit>=1.9.4,<1.10
 # psutil>=5.9.0
 
 # Build and packaging
-setuptools>=84.0.0
+setuptools>=84.1.0
 wheel>=0.48.0
 build>=1.6.1
