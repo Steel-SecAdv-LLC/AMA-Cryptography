@@ -866,8 +866,14 @@ def test_a_retry_after_a_stall_moves_to_the_other_mirrors(tmp_path: Path) -> Non
     assert "Suites: resolute resolute-updates resolute-backports resolute-security" in sources
     assert "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" in sources
     assert (alt / "sources.list").read_text(encoding="utf-8").startswith("# Ubuntu sources")
-    # The host's files are untouched.
-    assert "azure.archive.ubuntu.com" in (etc / "apt-mirrors.txt").read_text(encoding="utf-8")
+    # The host's files are untouched: the list still carries all three
+    # entries, in the image's order, with the stalled host first.
+    host_list = (etc / "apt-mirrors.txt").read_text(encoding="utf-8").splitlines()
+    assert [ln.split("\t")[0] for ln in host_list] == [
+        "http://azure.archive.ubuntu.com/ubuntu/",
+        "https://archive.ubuntu.com/ubuntu/",
+        "https://security.ubuntu.com/ubuntu/",
+    ], host_list
     assert f"mirror+file:{etc / 'apt-mirrors.txt'}" in (
         etc / "sources.list.d" / "ubuntu.sources"
     ).read_text(encoding="utf-8")
