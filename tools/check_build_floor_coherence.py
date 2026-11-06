@@ -115,6 +115,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Optional
 
+import yaml
+
 # Direct invocation (`python tools/check_build_floor_coherence.py`) puts
 # tools/ on sys.path, not the repository root, so the `tools` package the
 # readers live in is not importable without this.  ruff permits the import
@@ -129,12 +131,6 @@ from tools.check_release_pins import (
     release_tuple,
     setup_floors,
 )
-
-try:
-    import yaml
-except ImportError:  # pragma: no cover - PyYAML is in the [dev] extra
-    print("FATAL: PyYAML is required (pip install -e '.[dev]')", file=sys.stderr)
-    raise
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
