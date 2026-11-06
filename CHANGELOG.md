@@ -114,6 +114,14 @@ under sudo refused the group form — elevated only when the survivors are
 root's. Nothing else in the call shape changed, so every existing fake and
 textual pin holds: 74/74 in that module as root and as an unprivileged user.
 
+**ARM (QEMU) lanes: `qemu-user-static` has no installation candidate.** On
+26.04 it is a virtual package provided by `qemu-user-binfmt` and
+`qemu-user-binfmt-hwe`, and apt will not choose a provider. The four lanes
+now name `qemu-user-binfmt`, a real package on 24.04 (depending on
+`qemu-user-static`) and the provider on 26.04. These lanes are gated by a
+change filter and did not run on `main`'s dispatch; this branch's C changes
+ran them.
+
 **Not changed, stated:** the C-consumer job's `valgrind` install stalled on
 a 15.7 MB fetch from the Azure mirror twice at the same byte, in two jobs, at
 the same minute, under a script that already carries `Acquire::*::Timeout`

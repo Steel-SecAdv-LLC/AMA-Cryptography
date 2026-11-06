@@ -74,6 +74,12 @@ jobs:
             tools/pr_touches_watched_paths.py
         run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
 
+# qemu-user-binfmt, not qemu-user-static: on Ubuntu 26.04 (ubuntu-latest from
+# 2026-11) `qemu-user-static` is a virtual package provided by qemu-user-binfmt
+# and qemu-user-binfmt-hwe, and apt refuses to choose a provider ("has no
+# installation candidate"; measured 2026-11-06, every lane).  On 24.04
+# qemu-user-binfmt is a real package that depends on qemu-user-static, so the
+# concrete name installs the same static emulators on both images.
   arm-qemu-ctest:
     name: AArch64 cross-compile + QEMU ctest
     needs: [changes]
@@ -86,7 +92,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-binfmt
 
       - name: Configure (aarch64 toolchain)
         run: |
@@ -158,7 +164,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-binfmt
 
       - name: Configure (aarch64, Crypto Extensions forced off)
         run: |
@@ -261,7 +267,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-binfmt
 
       - name: Configure (aarch64 toolchain, SVE2 kernels enabled)
         run: |
@@ -364,7 +370,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-binfmt
 
       - name: Configure (aarch64, UBSan, NEON + SVE2 instrumented)
         run: |
