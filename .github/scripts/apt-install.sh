@@ -208,10 +208,51 @@ APT_NET_OPTS=(
 # under a 0700 directory is refused, under a 0755 one it is read.  mktemp's
 # directory is 0700, so it is opened to 0755 and the files to 0644; they
 # hold nothing but the host's own public sources.
+#
+# ONE MIRROR CHOICE PER JOB, LIKE ONE BUDGET PER JOB.  The first version
+# made the move per call, so every later call in the job started on the
+# stalled mirror again and paid its full bound before moving.  Measured on
+# run 42256380216 (2026-11-06, `Test ubuntu-latest / Python 3.10`): the
+# first call stalled on azure.archive.ubuntu.com, moved, and fetched 30.1 MB
+# in 5 s from archive.ubuntu.com; the second call went back to Azure,
+# stalled 120 s on the same mirror, moved, succeeded; the third call
+# (softhsm2) then found the job's 300 s budget spent and failed before it
+# began.  So the call that moves records the copy's location in the job's
+# own $RUNNER_TEMP, beside the budget deadline, and every later call in the
+# job adopts it before its first attempt -- the image-lists fast path
+# included, whose lists the moving call's refresh already wrote for exactly
+# these sources.  A recorded location that no longer holds a complete copy
+# is ignored, with a message, and the call starts on the image's sources.
 APT_ETC="${APT_ETC_DIR:-/etc/apt}"
 APT_ALT_DIR="${APT_ALT_SOURCES_DIR:-}"
 APT_ALT_OPTS=()
 STALLED_HOST_PATTERN='azure\.archive\.ubuntu\.com'
+MIRROR_STATE="${APT_MIRROR_STATE-${RUNNER_TEMP:+${RUNNER_TEMP}/ama-apt-install.mirror}}"
+
+use_alt_sources() {
+    APT_ALT_DIR="$1"
+    APT_ALT_OPTS=(
+        -o "Dir::Etc::SourceList=$APT_ALT_DIR/sources.list"
+        -o "Dir::Etc::SourceParts=$APT_ALT_DIR/sources.list.d"
+    )
+}
+
+adopt_job_mirror_choice() {
+    local dir
+    if [ -z "$MIRROR_STATE" ] || [ ! -s "$MIRROR_STATE" ]; then return 0; fi
+    dir="$(cat "$MIRROR_STATE")"
+    if [ -s "$dir/apt-mirrors.txt" ] && [ -f "$dir/sources.list" ] &&
+       [ -d "$dir/sources.list.d" ]; then
+        use_alt_sources "$dir"
+        echo "apt-install.sh: an earlier call in this job moved off the" \
+             "stalled mirror; this call starts on the same mirrors" \
+             "(sources at $dir):" \
+             "$(awk '{print $1}' "$dir/apt-mirrors.txt" | tr '\n' ' ')"
+    else
+        echo "apt-install.sh: $MIRROR_STATE names '$dir', which no longer" \
+             "holds a complete copy of the sources; starting on the image's"
+    fi
+}
 
 prefer_other_mirrors() {
     local list="$APT_ETC/apt-mirrors.txt"
@@ -246,10 +287,10 @@ prefer_other_mirrors() {
         : >"$APT_ALT_DIR/sources.list"
     fi
     find "$APT_ALT_DIR" -type f -exec chmod 0644 {} +
-    APT_ALT_OPTS=(
-        -o "Dir::Etc::SourceList=$APT_ALT_DIR/sources.list"
-        -o "Dir::Etc::SourceParts=$APT_ALT_DIR/sources.list.d"
-    )
+    use_alt_sources "$APT_ALT_DIR"
+    if [ -n "$MIRROR_STATE" ]; then
+        echo "$APT_ALT_DIR" >"$MIRROR_STATE"
+    fi
     echo "apt-install.sh: the stalled attempt fetched through $list; the" \
          "retries use the other mirrors on it" \
          "(sources copied to $APT_ALT_DIR):" \
@@ -453,6 +494,8 @@ install_only() {
 # build tools on an ephemeral runner — cmake, clang, ninja, the aarch64
 # cross-toolchain — not anything shipped, and the refresh arm still runs
 # whenever the pinned lists fall short.
+adopt_job_mirror_choice
+
 left="$(budget_left)"
 bound="$ATTEMPT_TIMEOUT"
 if [ "$bound" -gt "$left" ]; then bound="$left"; fi

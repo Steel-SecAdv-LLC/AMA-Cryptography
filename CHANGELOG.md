@@ -173,7 +173,15 @@ now goes to a `mktemp` directory under `/tmp` opened to 0755 with 0644
 files, and a third test, run with a 0700 `$RUNNER_TEMP` and no explicit
 location, requires the chosen path to lie outside it with every
 component searchable and every file readable by others; it fails against
-the first version (PIN). 78/78 in the module.
+the first version (PIN). **Corrected again (section 6.6):** the move was
+per call, so every later call in a job started on the stalled mirror and
+paid its full bound again; on run 42256380216 the first call moved and
+fetched 30.1 MB in 5 s, the second stalled 120 s on Azure before moving,
+and the third found the job's 300 s budget spent. The moving call now
+records the copy's location in the job's `$RUNNER_TEMP`, beside the
+budget deadline, and every later call adopts it before its first
+attempt; a record whose copy is gone is ignored. Two tests pin both, and
+both fail against the previous script (PIN). 80/80 in the module.
 
 **MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
 `libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs

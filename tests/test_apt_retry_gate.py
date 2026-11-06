@@ -934,6 +934,72 @@ def test_the_copied_sources_are_readable_by_apt_s_unprivileged_methods(tmp_path:
 
 
 @_LINUX_ONLY
+def test_a_later_call_in_the_job_starts_on_the_mirror_an_earlier_call_moved_to(
+    tmp_path: Path,
+) -> None:
+    """One mirror choice per job, as there is one budget per job.
+
+    Run 42256380216 (2026-11-06): the first call stalled on Azure, moved and
+    succeeded; the second call started on Azure again, stalled its full 120 s
+    bound, moved; the third found the job's 300 s budget spent and failed
+    before it began.  The moving call now records the copy's location in the
+    job's state, and the next call adopts it before its first attempt, so its
+    very first `apt-get install` -- the fast path -- already reads the copy.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    state = tmp_path / "ama-apt-install.mirror"
+    alt = tmp_path / "alt"
+    first = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(tmp_path / "first.log"),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8").strip() == str(alt)
+
+    second_log = tmp_path / "second.log"
+    second = _run_helper(
+        tmp_path,
+        ["softhsm2"],
+        FAKE_APT_LOG=str(second_log),
+        APT_ETC_DIR=str(etc),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert second.returncode == 0, second.stderr
+    assert "an earlier call in this job moved off the stalled mirror" in second.stdout
+    apt_calls = [
+        v for v in second_log.read_text(encoding="utf-8").split("\n") if v.startswith("apt-get")
+    ]
+    assert apt_calls == ["apt-get install"], apt_calls
+    options = (tmp_path / "second.log.options").read_text(encoding="utf-8").splitlines()
+    assert f"apt-get Dir::Etc::SourceParts={alt / 'sources.list.d'}" in options, options
+
+
+@_LINUX_ONLY
+def test_a_recorded_mirror_choice_that_is_gone_is_ignored(tmp_path: Path) -> None:
+    """A stale record never points apt at sources that are not there."""
+    etc = _apt_etc_fixture(tmp_path)
+    state = tmp_path / "ama-apt-install.mirror"
+    state.write_text(str(tmp_path / "vanished") + "\n", encoding="utf-8")
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        APT_ETC_DIR=str(etc),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "no longer holds a complete copy" in r.stdout, r.stdout
+    options_file = tmp_path / "apt.log.options"
+    assert "Dir::Etc::SourceParts" not in options_file.read_text(encoding="utf-8")
+
+
+@_LINUX_ONLY
 def test_a_stall_with_no_other_mirror_retries_the_same_one_and_says_so(tmp_path: Path) -> None:
     """Moving mirrors is a change of destination, never a dropped attempt."""
     etc = _apt_etc_fixture(tmp_path)
