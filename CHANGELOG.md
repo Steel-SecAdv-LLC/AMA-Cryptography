@@ -29,6 +29,18 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### CodeQL note in the build-floor gate — 2026-11-06
+
+CodeQL flagged a module-level `print` in `tools/check_build_floor_coherence.py`
+("print statement may execute during import"), in a `try`/`except
+ImportError` guard around `import yaml` that #429 added and merged without
+the note being resolved. The guard was also dead: the module imports
+`tools.check_release_pins` first, which imports PyYAML unconditionally, so a
+missing PyYAML fails there before the guard is reached. The import is now
+the plain top-level `import yaml` every other gate in `tools/` uses; with
+PyYAML absent the module still raises `ImportError` (measured). The gate
+passes and its 25 tests pass.
+
 ### main made green again on the 26.04 runner image — 2026-11-06
 
 `main` at `702e253` — the signed `v5.0.0` commit — stopped passing its own
