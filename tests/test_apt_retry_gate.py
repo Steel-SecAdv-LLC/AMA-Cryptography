@@ -284,6 +284,14 @@ def _fake_sudo(tmp_path: Path) -> Path:
                           exit 100
                       fi
                   fi
+                  # Stands in for a first attempt the bound ended -- the
+                  # exit status `timeout` gives a command it had to end --
+                  # with the lists able to satisfy the request all along.
+                  if [ "${FAKE_APT_FIRST_INSTALL_STALLS:-0}" = "1" ] &&
+                     [ ! -e "${FAKE_APT_LOG:-/nonexistent}.stalled" ]; then
+                      touch "${FAKE_APT_LOG}.stalled"
+                      exit 124
+                  fi
                   # Stands in for lists that cannot resolve the request until
                   # they are refreshed.
                   if [ "${FAKE_APT_NEEDS_UPDATE:-0}" = "1" ] &&
@@ -752,6 +760,37 @@ def test_stale_lists_still_fall_through_to_a_refresh(tmp_path: Path) -> None:
     verbs = log.read_text(encoding="utf-8").split("\n")
     assert "apt-get update" in verbs, "the refresh arm never ran"
     assert "did not satisfy" in r.stdout
+    assert "libclang-rt-dev" in r.stdout
+
+
+@_LINUX_ONLY
+def test_a_bounded_first_attempt_is_reported_as_a_stall_not_stale_lists(
+    tmp_path: Path,
+) -> None:
+    """The fast path must name what ended it.
+
+    Runs 42242159577 and 42242159624 (2026-11-06): the first attempt against
+    the image's lists fetched a 27.5 MB / 14.1 MB archive at a few hundred
+    kB/s, its bound fired, and the script announced that the lists "did not
+    satisfy" the request and refreshed them.  The lists were fine; the mirror
+    was not.  Exit 124 and 137 are the bound's own statuses, so the message
+    distinguishes them from a resolution failure -- and the refresh arm still
+    runs, because the refreshed install is also the retry.
+    """
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["libclang-rt-dev"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+    )
+    assert r.returncode == 0, r.stderr
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2, verbs
+    assert "apt-get update" in verbs, "the refresh arm never ran"
+    assert "exceeded its" in r.stdout and "exit 124" in r.stdout, r.stdout
+    assert "stalled or slow mirror, not stale lists" in r.stdout, r.stdout
+    assert "did not satisfy" not in r.stdout, r.stdout
     assert "libclang-rt-dev" in r.stdout
 
 

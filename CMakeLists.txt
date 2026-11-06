@@ -136,6 +136,49 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
 
+    # x86-64 ISA baseline, pinned -- not inherited from the compiler.
+    #
+    # Every ISA extension this build uses is enabled PER FILE (the kernels
+    # under src/c/avx2, src/c/avx512, src/c/x86 and src/c/internal/*_mulx.c,
+    # see the scoping comment before the SIMD section below) and entered
+    # only through the CPUID-gated dispatch; everything else is the portable
+    # path a host WITHOUT the extension executes.  That held only while the
+    # compiler's own default target was baseline x86-64, and that default is
+    # the distribution's to change: Ubuntu 26.04's amd64v3 build of GCC 15
+    # defaults to x86-64-v3, and measured on ubuntu-latest (dudect.yml run
+    # 42242159624, 2026-11-06) the default Release build then carried AVX2,
+    # VEX-encoded and BMI1/BMI2 instructions in 449 non-kernel symbols --
+    # x25519_scalarmult, the bitsliced AES, the generic Keccak-f[1600]
+    # permutation -- #UD on any pre-AVX2 host in exactly the code the
+    # dispatcher selects BECAUSE the host lacks AVX2.
+    # tools/check_avx_scoping.py failed the build, as it exists to.
+    #
+    # So the baseline is stated here.  -march=x86-64 is SSE2 and what every
+    # portable translation unit is written for; -mtune=generic is what GCC
+    # and Clang substitute for a bare -march=x86-64, spelled out so that on a
+    # baseline-default toolchain the pin is a no-op (measured: byte-identical
+    # libama_cryptography.so with and without it, gcc 13.3 Release).  Per-file
+    # -m flags follow CMAKE_C_FLAGS on the command line and still enable
+    # their extension for their own translation unit; -march=native
+    # (AMA_ENABLE_NATIVE_ARCH, benchmark builds only) is appended to the
+    # Release flags after this and overrides it, as documented there.  The
+    # probe records what the compiler would have done on its own, so a CI log
+    # shows which case the runner was.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        include(CheckCSourceCompiles)
+        check_c_source_compiles("
+            #if defined(__AVX__) || defined(__AVX2__) || defined(__BMI__) || defined(__BMI2__) || defined(__SSSE3__) || defined(__SSE4_1__)
+            #error default target is above baseline x86-64
+            #endif
+            int main(void) { return 0; }" AMA_COMPILER_DEFAULT_IS_BASELINE_X86_64)
+        if(AMA_COMPILER_DEFAULT_IS_BASELINE_X86_64)
+            message(STATUS "x86-64 baseline: compiler default is baseline; pinned -march=x86-64 -mtune=generic (no-op)")
+        else()
+            message(STATUS "x86-64 baseline: compiler default is ABOVE baseline; pinned -march=x86-64 -mtune=generic (overrides it)")
+        endif()
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=x86-64 -mtune=generic")
+    endif()
+
     # ELF link-time hardening.
     #
     # The MSVC branch above has carried /guard:cf /DYNAMICBASE /NXCOMPAT since

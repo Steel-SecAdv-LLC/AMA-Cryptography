@@ -127,9 +127,10 @@ ALLOWED: dict[str, tuple[int, str]] = {
         #   ama_argon2.c:577  x6  abs_index = (start + z) % lane_length
         # The newer gcc inlines `argon2_index_alpha` into more loop versions, so
         # the SAME three expressions are emitted more times; no divide on any
-        # new operand appeared, and line 574's `% lane_length` is folded on
-        # every compiler.  A count above 10, or a divide outside these three
-        # lines, is a new finding and must be attributed the same way.
+        # new operand appeared, and the `relative_position % lane_length`
+        # expression that precedes `abs_index` is folded on every compiler.
+        # A count above 10, or a divide outside these three expressions, is
+        # a new finding and must be attributed the same way.
         10,
         "ama_argon2.c `argon2_index_alpha` (inlined into ama_argon2id_core): "
         "`ref_lane = J2 % lanes`. On Argon2id's data-INdependent phase J2 "
@@ -141,10 +142,12 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "a far stronger channel than divide latency, on the same secret. "
         "Removing the divide would deviate from RFC 9106 without changing "
         "the property. Recorded rather than silently dropped. The other two "
-        "divisors, `lanes * ARGON2_SYNC_POINTS` (line 684) and `lane_length` "
-        "(line 577), are the public memory geometry; line 577's dividend "
-        "`start + z` is derived from J1 in the same two phases as J2 and "
-        "carries the same justification.",
+        "divisors, `lanes * ARGON2_SYNC_POINTS` (the `segment_length` "
+        "quotient in `ama_argon2id_core`) and `lane_length` (the "
+        "`abs_index` modulus in `argon2_index_alpha`), are the public "
+        "memory geometry; the `abs_index` dividend `start + z` is derived "
+        "from J1 in the same two phases as J2 and carries the same "
+        "justification.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
         14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)

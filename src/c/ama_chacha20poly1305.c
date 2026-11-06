@@ -527,30 +527,48 @@ static void poly1305_update(poly1305_ctx *ctx, const uint8_t *data,
  * Constant-time final reduction and tag computation.
  */
 static void poly1305_final(poly1305_ctx *ctx, uint8_t tag[16]) {
-    /* Process any remaining partial block.
+    /* Absorb the buffered partial block, if any.
      *
      * poly1305_update never leaves a full block buffered -- it absorbs at 16
-     * -- so on every reachable path 0 < buf_len < 16 here.  That bound lives
-     * in another function, though, and this one used to index `block` with
-     * buf_len on nothing stronger than `buf_len > 0`: correct by invariant,
-     * one byte out of bounds the day a caller breaks the invariant, and the
-     * reason clang 21's security.ArrayBound reported this line.  The two
-     * cases are now spelled out and each is the RFC 8439 Section 2.5.1 MAC
+     * -- so on every reachable path 0 < buf_len < 16 here.  The two cases
+     * are nevertheless spelled out, each as the RFC 8439 Section 2.5.1 MAC
      * input for that case: a full buffered block is a full block (high bit
      * set, as the update path would have absorbed it) and a partial block
-     * is padded with 0x01 and absorbed with the high bit clear.  No branch
-     * indexes past `block` or `ctx->buf`, and nothing is silently dropped or
-     * clamped.  buf_len is message length, public. */
+     * is padded with 0x01 and absorbed with the high bit clear.  Nothing is
+     * silently dropped or clamped.
+     *
+     * The padded block is built positionally rather than by
+     * `memcpy(block, ctx->buf, buf_len); block[buf_len] = 0x01`.  clang 21's
+     * security.ArrayBound reported that store as out of bounds, and kept
+     * reporting it behind the `>= sizeof` check above.  Measured (clang 19
+     * `--analyze` with the alpha checker and a state dump at the store;
+     * clang-tidy 21.1.6 reports the same line): the path it follows inlines
+     * poly1305_update twice from chacha20poly1305_compute_tag -- the AAD,
+     * then the padding that completes its block -- and takes the second
+     * call's "less than a block remains" branch, which the real padding
+     * length (exactly the remainder) never takes.  On that path the
+     * analyzer's value for buf_len is an unsigned sum, `D + 16`, with `D`
+     * constrained to the top fifteen values of size_t: in 1..15 only by
+     * wraparound, and its range arithmetic on that form does not carry the
+     * `>= sizeof` check through to the index.  A local copy of buf_len,
+     * padding before the copy, and padding ctx->buf in place by index all
+     * report the same.  Here every index into `block` and `ctx->buf` is the
+     * loop counter, bounded by sizeof(block) in this function -- the
+     * stronger property for a reader too: the bound no longer lives in
+     * another function.  buf_len is message length, public; it selects
+     * which of three public values each byte takes and nothing else.
+     * `block` is fully written, so no pre-zero is needed, and it is
+     * scrubbed on exit (INVARIANT-6). */
     if (ctx->buf_len >= sizeof(ctx->buf)) {
         poly1305_block(ctx, ctx->buf, 1);
     } else if (ctx->buf_len > 0) {
         uint8_t block[16];
-        /* Pre-zero with the secure scrub primitive — `block` will hold the
-         * tail of the last absorbed message and is in the same scrub
-         * class as the matching scrub at function exit (INVARIANT-6). */
-        ama_secure_memzero(block, sizeof(block));
-        memcpy(block, ctx->buf, ctx->buf_len);
-        block[ctx->buf_len] = 0x01; /* Padding byte */
+        size_t i;
+        for (i = 0; i < sizeof(block); i++) {
+            block[i] = (i < ctx->buf_len)    ? ctx->buf[i]
+                       : (i == ctx->buf_len) ? (uint8_t)0x01
+                                             : (uint8_t)0x00;
+        }
         poly1305_block(ctx, block, 0); /* hibit = 0 for partial block */
         ama_secure_memzero(block, sizeof(block));
     }

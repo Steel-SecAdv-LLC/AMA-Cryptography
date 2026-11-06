@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1160,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4243,
+      "Other": 4249,
       "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 291,
-    "total_tests": 7261,
+    "n_files": 292,
+    "total_tests": 7267,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -206,6 +206,7 @@
       "test_wycheproof_vector_embedding.py",
       "test_x25519_canonical_u.py",
       "test_x25519_dispatch_policy.py",
+      "test_x86_baseline_pin.py",
       "test_zeroizing_bytearray.py"
     ]
   },

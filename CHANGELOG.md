@@ -57,20 +57,72 @@ allowlist on all of them.
 
 **clang-tidy: one finding, in Poly1305.** clang 21 promoted
 `alpha.security.ArrayBoundV2` to `security.ArrayBound` and reported
-`src/c/ama_chacha20poly1305.c:538`, `block[ctx->buf_len] = 0x01` on
-`uint8_t block[16]` guarded only by `buf_len > 0`. By construction
-`poly1305_update` never leaves a full block buffered — it absorbs at 16 — so
-`buf_len` is 1..15 here on every reachable path and the write is in bounds;
-but that bound lived in another function, and a caller that ever broke it
-would get a one-byte stack overrun inside the MAC. `poly1305_final` now
-states both cases: a full buffered block is absorbed as a full block with the
-high bit set (what `update` would have done), a partial one is padded with
-`0x01` and absorbed with it clear — RFC 8439 Section 2.5.1 in each branch,
-nothing dropped or clamped, and the index provably below 16. Treated at the
-higher classification until measured, per section 7; it is a latent defect,
-not a reachable one. Neither clang-tidy 19's alpha checker nor cppcheck
-reproduces the finding; ctest 157/157 and every ChaCha20-Poly1305 KAT sweep
-and the Wycheproof runner are green after the change.
+`poly1305_final`'s `block[ctx->buf_len] = 0x01` on `uint8_t block[16]`.
+By construction `poly1305_update` never leaves a full block buffered — it
+absorbs at 16 — so `buf_len` is 1..15 there on every reachable path and the
+store is in bounds; the finding is a false positive, not a reachable
+overrun. The first fix on this branch read it as the analyzer missing an
+upper bound and spelled out both cases (`>= sizeof` absorbs a full block
+with the high bit set; otherwise pad with `0x01`). That is still the code —
+each branch is RFC 8439 Section 2.5.1 for its case — but it did not close
+the finding, and the claim that it did is withdrawn (section 6.6): the
+runner reported the same store at the new line. Measured with a state dump
+(clang 19 `--analyze`, alpha checker; clang-tidy 21.1.6 reports the same
+line, so the earlier statement that clang 19 does not reproduce it is
+withdrawn too): the analyzer inlines `poly1305_update` twice from
+`chacha20poly1305_compute_tag` — the AAD, then the padding that completes
+its block — takes the second call's "less than a block remains" branch,
+which the real padding length never takes, and on that path holds `buf_len`
+as an unsigned sum `D + 16` with `D` in the top fifteen values of `size_t`:
+in range only by wraparound, which its range arithmetic does not carry
+through the `>= sizeof` check to the index. A local copy of `buf_len`,
+padding before the copy, and padding `ctx->buf` in place all report the
+same. The padded block is now built positionally — byte *i* is the message
+byte below `buf_len`, `0x01` at it, zero above — so every index into
+`block` and `ctx->buf` is the loop counter bounded by `sizeof(block)` in
+this function, which is also the stronger property for a reader. `buf_len`
+is message length, public; it selects which of three public values each
+byte takes. Zero findings from clang-tidy 21.1.6 on the file; ctest, every
+ChaCha20-Poly1305 KAT sweep and the Wycheproof runner green after the
+change.
+
+**x86-64 baseline: pinned in CMake, not inherited from the compiler.**
+Classified Critical until measured, per section 7, and measured: on
+ubuntu-latest (`dudect.yml` run 42242159624) the default Release build
+carried AVX2, VEX-encoded and BMI1/BMI2 instructions in 449 non-kernel
+symbols — `x25519_scalarmult`, the bitsliced AES, the generic
+Keccak-f[1600] permutation, the scalar GHASH — because Ubuntu 26.04's
+amd64v3 build of GCC 15 defaults to `-march=x86-64-v3`. The per-file ISA
+scoping that keeps extensions inside their CPUID-gated kernels held only
+while the compiler's own default was baseline, and that default is the
+distribution's to change. `tools/check_avx_scoping.py` failed the lane, as
+it exists to; the release wheels build inside manylinux containers rather
+than on the runner's own toolchain, but a source build on such a host
+would have SIGILLed on any pre-AVX2 CPU in exactly the fallback code the
+dispatcher selects because the CPU lacks AVX2. `CMakeLists.txt` now sets
+`-march=x86-64 -mtune=generic` on every x86-64 GCC/Clang build, after a
+probe that records in the configure log whether the compiler would have
+been baseline on its own. Measured: on gcc 13.3 (baseline default) the pin
+leaves `libama_cryptography.so` disassembly-identical, sha256-equal; with
+`CFLAGS=-march=x86-64-v3` the scoping gate fails without the pin and passes
+with it (PIN). `tests/test_x86_baseline_pin.py` holds the CMake text.
+
+**`apt-install.sh`: a bounded first attempt is reported as what it is.**
+On that same run, the MemorySanitizer KAT lane and the dudect legacy lane
+each had their first `install` — against the image's own lists — fetch a
+27.5 MB / 14.1 MB archive from the Azure mirror at a few hundred kB/s, hit
+its 120 s bound, and the script then announced that the lists "did not
+satisfy" the request and refreshed them; a sibling lane in the same run
+installed the identical set at 31.9 MB/s. The lists were fine, the mirror
+was not, and the diagnosis could only be disproved by timing the lines.
+Exit 124 and 137 are the bound's own statuses, so the fast path now
+distinguishes a bounded stall from a resolution failure in its message; the
+refresh arm still runs either way, because the refreshed install is also
+the retry. The fake grew a knob for it and the new test fails against the
+old script (PIN). The stall itself is the mirror: a service this branch
+does not touch, reproduced identically in two lanes while a third succeeded
+on the same commit, which is the section 8 standard for an infrastructure
+conclusion.
 
 **MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
 `libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs

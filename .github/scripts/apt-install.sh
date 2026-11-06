@@ -370,13 +370,37 @@ install_only() {
 left="$(budget_left)"
 bound="$ATTEMPT_TIMEOUT"
 if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-if [ "$bound" -gt 0 ] && install_only "$bound" "$@"; then
-    echo "apt-install.sh: installed from the image's own package lists," \
-         "without apt-get update: $*"
-    exit 0
+fast_rc=0
+if [ "$bound" -gt 0 ]; then
+    install_only "$bound" "$@" && {
+        echo "apt-install.sh: installed from the image's own package lists," \
+             "without apt-get update: $*"
+        exit 0
+    }
+    fast_rc=$?
 fi
-echo "apt-install.sh: the image's package lists did not satisfy: $*" \
-     "— refreshing them"
+# Say which of two different things just happened.  This arm used to report
+# every failure as "the image's package lists did not satisfy", including the
+# one where the lists were fine and the mirror was not: on run 42242159577
+# (`MemorySanitizer (fast KAT lane)`) and 42242159624 (`dudect - Legacy
+# Harnesses`) the first attempt fetched its 27.5 MB / 14.1 MB archive at a few
+# hundred kB/s, was ended by its bound, and the log then said the lists were
+# stale and refreshed them -- a diagnosis the reader could only disprove by
+# timing the lines.  124 and 137 are the bound's own exit statuses, and a
+# bound that fired is a stall, not a resolution failure; the refresh still
+# runs either way, because the refreshed install is also the retry.
+case "$fast_rc" in
+    124|137)
+        echo "apt-install.sh: the first attempt, against the image's own" \
+             "package lists, exceeded its ${bound}s bound (exit ${fast_rc}:" \
+             "a stalled or slow mirror, not stale lists) — refreshing them" \
+             "and retrying: $*"
+        ;;
+    *)
+        echo "apt-install.sh: the image's package lists did not satisfy: $*" \
+             "— refreshing them"
+        ;;
+esac
 
 # Every attempt but the last is recoverable; all of them, including the last,
 # are bounded by whichever is smaller — the per-attempt bound or what is left
