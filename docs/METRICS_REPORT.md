@@ -97,14 +97,14 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,472 |
 | Tests (`tests/**/*.py`) | 297 | 145,614 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,984 |
-| **Whole project** (source + docs + config) | 819 | **500,737** |
+| **Whole project** (source + docs + config) | 819 | **500,993** |
 
 **Library total (the figure that most closely tracks "library size"):
 101,109 lines** across 122 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`500,737` lines across Python, C, headers,
+**Whole-project total** (`500,993` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -167,13 +167,13 @@ the whole-project figure overstates hand-written code.
 | Tests | 145,614 | 29.1% | `tests/**/*.py` |
 | Top-level Python | 1,472 | 0.3% | `*.py` at repo root |
 | Cython | 1,984 | 0.4% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 250,558 | 50.0% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **500,737** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 250,814 | 50.1% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **500,993** | **100%** | sum of the scopes above |
 
 Test code (29.1%) is roughly 1.4x the size of the library (20.2%) — i.e. the test-to-library ratio is roughly **1.44**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (50.0%) is dominated by the
-vendored NIST ACVP and Wycheproof JSON corpora (72,858 lines of `*.json` alone) and by this repository's Markdown, not by config.
+in the remainder row. The remainder (50.1%) is dominated by the
+vendored NIST ACVP and Wycheproof JSON corpora (73,089 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
 

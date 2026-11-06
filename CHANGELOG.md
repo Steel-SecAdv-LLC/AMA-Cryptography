@@ -107,6 +107,31 @@ leaves `libama_cryptography.so` disassembly-identical, sha256-equal; with
 `CFLAGS=-march=x86-64-v3` the scoping gate fails without the pin and passes
 with it (PIN). `tests/test_x86_baseline_pin.py` holds the CMake text.
 
+**The instruction-count gate, re-measured on the 26.04 toolchain.** The A/B
+lane builds the merge-base and the head on the runner, so it moved with the
+runner's compiler, but its acknowledgement file holds absolute counts, and
+all fourteen entries had been measured on gcc 13.3: on gcc 15 each described
+neither side of the comparison and the lane failed. The gate's rule for an
+entry whose operation has moved is to re-measure or remove it; removal would
+have discarded the most explicit record of the ML-DSA signing break, so every
+number was re-measured. A resolute chroot carries the runner's exact gcc
+15.2.0-16ubuntu1 and cmake 4.2.3-2ubuntu2, with `-march=x86-64-v3` standing in
+for the runner's amd64v3 default on trees without the pin. It was calibrated
+first: `702e253` measured there reproduced the runner's own A/B measurement
+of `702e253` exactly on 17 of 18 operations and `ed25519_sign` within 4 Ir,
+twice. Then `2dcef5c6` and `2db626de`, the pair the 5.0.0 entries describe,
+and this head were measured there. The pin moves 13 operations by 2.1% to
+24.2% against the v3-compiled `702e253`: its non-kernel code now retires the
+baseline instructions a pre-AVX2 host can execute, and those moves are
+acknowledged as this branch's with their measured values. Where such an entry
+replaces a 5.0.0 entry, the 5.0.0 entry is kept in full beside it, its
+gcc-15 re-measurement included. The four Keccak-driven 5.0.0 entries, which
+the pin leaves within 0.5%, stay as landed history at their re-measured
+values. `benchmarks/instruction-baseline.json` is re-recorded at this head on
+the same toolchain. The gate passes this pull request's comparison and the
+next one's (head against itself) with the new file, and fails this one with
+the old file.
+
 **`apt-install.sh`: a bounded first attempt is reported as what it is.**
 On that same run, the MemorySanitizer KAT lane and the dudect legacy lane
 each had their first `install` — against the image's own lists — fetch a
