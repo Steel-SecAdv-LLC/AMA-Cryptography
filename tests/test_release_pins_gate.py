@@ -134,6 +134,25 @@ def _problems(root: Path) -> list[str]:
     return report.problems
 
 
+def _live_pin(root: Path, manifest: str, name: str) -> str:
+    """The version ``manifest`` pins for ``name``, as the tree has it.
+
+    Read, not restated, for the same reason :meth:`_live_cmake` is: the literals
+    ``setuptools==84.0.0`` and ``pip==26.2.1`` were spelled out in three tests
+    below, so the routine Dependabot bump of either failed them while the gate
+    itself was right.  `_live_cmake` had already fixed that for cmake and the
+    note it carries recorded the lesson; these three sites were missed.  One
+    reader now serves them all, so the next bump moves nothing here.
+    """
+    match = re.search(
+        rf"^{re.escape(name)}==([0-9][0-9A-Za-z.]*)",
+        (root / manifest).read_text(encoding="utf-8"),
+        re.M,
+    )
+    assert match is not None, f"{manifest} no longer pins {name}"
+    return match.group(1)
+
+
 class TestManifestNegativeControls:
     """Each plants one defect in an otherwise canonical manifest."""
 
@@ -237,18 +256,19 @@ class TestTheCanonicalFormIsEnforcedOnTheTree:
         root = _scratch_tree(tmp_path)
         path = root / TOOLS
         text = path.read_text(encoding="utf-8")
+        version = _live_pin(root, TOOLS, "pip")
         block = re.search(
-            r"pip==26\.2\.1 \\\n"
+            rf"pip=={re.escape(version)} \\\n"
             r"    --hash=sha256:([0-9a-f]{64}) \\\n"
             r"    --hash=sha256:([0-9a-f]{64})\n",
             text,
         )
-        assert block is not None, "pip==26.2.1 publishes exactly two files (sdist + wheel)"
+        assert block is not None, f"pip=={version} publishes exactly two files (sdist + wheel)"
         first, second = block.groups()
         assert first < second, "the committed order is sorted"
         swapped = (
             text[: block.start()]
-            + f"pip==26.2.1 \\\n    --hash=sha256:{second} \\\n    --hash=sha256:{first}\n"
+            + f"pip=={version} \\\n    --hash=sha256:{second} \\\n    --hash=sha256:{first}\n"
             + text[block.end() :]
         )
         path.write_text(swapped, encoding="utf-8", newline="")
@@ -429,16 +449,18 @@ class TestTheRealTree:
         root = _scratch_tree(tmp_path)
         path = root / BUILD
         text = path.read_text(encoding="utf-8")
+        version = _live_pin(root, BUILD, "setuptools")
         mutated, count = re.subn(
-            r"setuptools==84\.0\.0 \\\n(?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+",
-            "setuptools==84.0.0\n",
+            rf"setuptools=={re.escape(version)} \\\n"
+            r"(?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+",
+            f"setuptools=={version}\n",
             text,
         )
         assert count == 1
         path.write_text(mutated, encoding="utf-8", newline="")
         problems = _problems(root)
         assert len(problems) == 1, problems
-        assert "setuptools==84.0.0` carries no --hash" in problems[0]
+        assert f"setuptools=={version}` carries no --hash" in problems[0]
 
     def test_restoring_a_floating_install_fails_the_tree(self, tmp_path: Path) -> None:
         """The second mutation: the pre-manifest CIBW_BEFORE_BUILD_MACOS line."""
@@ -646,7 +668,7 @@ class TestRefresh:
         text = first.decode("utf-8")
         assert f"# Hash set as published by PyPI on: {AS_OF}\n" in text
         assert (
-            "pip==26.2.1 \\\n    --hash=sha256:"
+            f"pip=={_live_pin(root, TOOLS, 'pip')} \\\n    --hash=sha256:"
             + "00" * 32
             + " \\\n    --hash=sha256:"
             + "ff" * 32

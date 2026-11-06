@@ -169,7 +169,7 @@ static int agree(const char *s, size_t n, int url) {
     size_t want_len = 0;
     size_t got_len = 99;
     int ref_ok = ref_decode(want, &want_len, s, n, url);
-    char *exact = (char *)malloc(n == 0u ? 1u : n);
+    char *exact = (char *)calloc(n == 0u ? 1u : n, 1u);
     if (exact == NULL) {
         return 0;
     }

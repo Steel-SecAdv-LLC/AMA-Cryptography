@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-12 |
+| Last Updated | 2026-11-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,380 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+> Work on `main` after the signed `v5.0.0` tag, which was applied on
+> 2026-10-13 at `702e253` and whose GitHub Release published the same day.
+> Entries below are **not** in the 5.0.0 artifacts. They were first written
+> under the `[5.0.0]` heading and moved here (section 6.6): every entry that
+> heading carries, including the 2026-10-11 and 2026-10-12 ones, predates the
+> tag and so is genuinely in the release; these two do not, and attributing
+> them to 5.0.0 was a claim that does not resolve against the published
+> artifact. `pyproject.toml` still declares 5.0.0; the next version number
+> is the maintainer's decision, not this entry's.
+
+### main made green again on the 26.04 runner image — 2026-11-06
+
+`main` at `702e253` — the signed `v5.0.0` commit — stopped passing its own
+CI when `ubuntu-latest` moved to Ubuntu 26.04.1 (gcc 15.2.0, clang 21.1.8,
+and `timeout` from uutils coreutils 0.10.0 in place of GNU). Measured by
+dispatching `static-analysis.yml` and `ci.yml` on unmodified `main` the same
+day: four workflows red, every failure below reproduced there, none caused
+by any open pull request. Each is fixed at source. No exemption, no skip, no
+widened allowlist.
+
+**Compiler warnings (gcc, clang, AArch64 cross) — five sites, all test code
+but one.** `tests/c/test_argon2id.c` initialised `uint8_t[16]` and `[8]`
+from string literals of exactly that length — legal C (C11 6.7.9p14 drops
+the NUL) that gcc 15 `-Wextra` and clang 21 now flag; the bytes are now
+`memcpy`'d, `sizeof` unchanged. `tests/c/test_ascon.c` applied `~` to a
+`uint8_t`, promoting to a negative `int` before `& 1u`; the operand is
+promoted to `unsigned` explicitly. `tests/c/test_base64.c` `malloc`'d one
+byte for the empty input and left it undefined, which gcc 15 Release tracked
+into the decode call; `calloc`. The one library site, `src/c/ama_kyber.c`
+`poly_basemul`, negated an `int16_t` zeta into `int` and narrowed back
+implicitly; the cast is explicit — zetas are public NTT constants and the
+object code is unchanged. Re-measured with the CI flags on gcc 13.3, gcc
+14.2, clang 18.1 and clang 19.1 locally (eight builds, None and Release+LTO)
+and on the runner's gcc 15.2 / clang 21.1: zero warnings outside the frozen
+allowlist on all of them.
+
+**clang-tidy: one finding, in Poly1305.** clang 21 promoted
+`alpha.security.ArrayBoundV2` to `security.ArrayBound` and reported
+`poly1305_final`'s `block[ctx->buf_len] = 0x01` on `uint8_t block[16]`.
+By construction `poly1305_update` never leaves a full block buffered — it
+absorbs at 16 — so `buf_len` is 1..15 there on every reachable path and the
+store is in bounds; the finding is a false positive, not a reachable
+overrun. The first fix on this branch read it as the analyzer missing an
+upper bound and spelled out both cases (`>= sizeof` absorbs a full block
+with the high bit set; otherwise pad with `0x01`). That is still the code —
+each branch is RFC 8439 Section 2.5.1 for its case — but it did not close
+the finding, and the claim that it did is withdrawn (section 6.6): the
+runner reported the same store at the new line. Measured with a state dump
+(clang 19 `--analyze`, alpha checker; clang-tidy 21.1.6 reports the same
+line, so the earlier statement that clang 19 does not reproduce it is
+withdrawn too): the analyzer inlines `poly1305_update` twice from
+`chacha20poly1305_compute_tag` — the AAD, then the padding that completes
+its block — takes the second call's "less than a block remains" branch,
+which the real padding length never takes, and on that path holds `buf_len`
+as an unsigned sum `D + 16` with `D` in the top fifteen values of `size_t`:
+in range only by wraparound, which its range arithmetic does not carry
+through the `>= sizeof` check to the index. A local copy of `buf_len`,
+padding before the copy, and padding `ctx->buf` in place all report the
+same. The padded block is now built positionally — byte *i* is the message
+byte below `buf_len`, `0x01` at it, zero above — so every index into
+`block` and `ctx->buf` is the loop counter bounded by `sizeof(block)` in
+this function, which is also the stronger property for a reader. `buf_len`
+is message length, public; it selects which of three public values each
+byte takes. Zero findings from clang-tidy 21.1.6 on the file; ctest, every
+ChaCha20-Poly1305 KAT sweep and the Wycheproof runner green after the
+change.
+
+**x86-64 baseline: pinned in CMake, not inherited from the compiler.**
+Classified Critical until measured, per section 7, and measured: on
+ubuntu-latest (`dudect.yml` run 42242159624) the default Release build
+carried AVX2, VEX-encoded and BMI1/BMI2 instructions in 449 non-kernel
+symbols — `x25519_scalarmult`, the bitsliced AES, the generic
+Keccak-f[1600] permutation, the scalar GHASH — because Ubuntu 26.04's
+amd64v3 build of GCC 15 defaults to `-march=x86-64-v3`. The per-file ISA
+scoping that keeps extensions inside their CPUID-gated kernels held only
+while the compiler's own default was baseline, and that default is the
+distribution's to change. `tools/check_avx_scoping.py` failed the lane, as
+it exists to; the release wheels build inside manylinux containers rather
+than on the runner's own toolchain, but a source build on such a host
+would have SIGILLed on any pre-AVX2 CPU in exactly the fallback code the
+dispatcher selects because the CPU lacks AVX2. `CMakeLists.txt` now sets
+`-march=x86-64 -mtune=generic` on every x86-64 GCC/Clang build, after a
+probe that records in the configure log whether the compiler would have
+been baseline on its own. Measured: on gcc 13.3 (baseline default) the pin
+leaves `libama_cryptography.so` disassembly-identical, sha256-equal; with
+`CFLAGS=-march=x86-64-v3` the scoping gate fails without the pin and passes
+with it (PIN). `tests/test_x86_baseline_pin.py` holds the CMake text.
+
+**The instruction-count gate, re-measured on the 26.04 toolchain.** The A/B
+lane builds the merge-base and the head on the runner, so it moved with the
+runner's compiler, but its acknowledgement file holds absolute counts, and
+all fourteen entries had been measured on gcc 13.3: on gcc 15 each described
+neither side of the comparison and the lane failed. The gate's rule for an
+entry whose operation has moved is to re-measure or remove it; removal would
+have discarded the most explicit record of the ML-DSA signing break, so every
+number was re-measured. A resolute chroot carries the runner's exact gcc
+15.2.0-16ubuntu1 and cmake 4.2.3-2ubuntu2, with `-march=x86-64-v3` standing in
+for the runner's amd64v3 default on trees without the pin. It was calibrated
+first: `702e253` measured there reproduced the runner's own A/B measurement
+of `702e253` exactly on 17 of 18 operations and `ed25519_sign` within 4 Ir,
+twice. Then `2dcef5c6` and `2db626de`, the pair the 5.0.0 entries describe,
+and this head were measured there. The pin moves 13 operations by 2.1% to
+24.2% against the v3-compiled `702e253`: its non-kernel code now retires the
+baseline instructions a pre-AVX2 host can execute, and those moves are
+acknowledged as this branch's with their measured values. Where such an entry
+replaces a 5.0.0 entry, the 5.0.0 entry is kept in full beside it, its
+gcc-15 re-measurement included. The four Keccak-driven 5.0.0 entries, which
+the pin leaves within 0.5%, stay as landed history at their re-measured
+values. `benchmarks/instruction-baseline.json` is re-recorded at this head on
+the same toolchain. The gate passes this pull request's comparison and the
+next one's (head against itself) with the new file, and fails this one with
+the old file.
+
+**`apt-install.sh`: a bounded first attempt is reported as what it is.**
+On that same run, the MemorySanitizer KAT lane and the dudect legacy lane
+each had their first `install` — against the image's own lists — fetch a
+27.5 MB / 14.1 MB archive from the Azure mirror at a few hundred kB/s, hit
+its 120 s bound, and the script then announced that the lists "did not
+satisfy" the request and refreshed them; a sibling lane in the same run
+installed the identical set at 31.9 MB/s. The lists were fine, the mirror
+was not, and the diagnosis could only be disproved by timing the lines.
+Exit 124 and 137 are the bound's own statuses, so the fast path now
+distinguishes a bounded stall from a resolution failure in its message; the
+refresh arm still runs either way, because the refreshed install is also
+the retry. The fake grew a knob for it and the new test fails against the
+old script (PIN). The stall itself is the mirror: a service this branch
+does not touch, reproduced identically in two lanes while a third succeeded
+on the same commit, which is the section 8 standard for an infrastructure
+conclusion.
+
+**`apt-install.sh`: a retry after a stall moves to the other mirrors.**
+Every stall this script has recorded was a transfer that trickled or hung
+on the runner's in-datacentre mirror, and every retry was the same request
+to the same host. The image lists `azure.archive.ubuntu.com` first and the
+public archive and security hosts after it, but apt's mirror method moves
+down the list only on an error, and a slow transfer is not one. Once a
+bounded attempt has ended in the bound's own status, the attempts after it
+read a copy of the image's sources whose mirror list omits that host,
+written under the job's temp directory and handed to apt by option;
+`/etc/apt` is never edited, and suites, components and keyring are the
+host's. Where no list exists or nothing but the stalled host is on it, the
+retry says so and goes to the same mirror. This changes where a retry
+fetches from, never whether it is bounded or whether its failure fails the
+job. Two tests drive it through the runner image's exact apt layout and
+fail against the previous script (PIN). **Corrected the same day (section
+6.6):** the first version wrote the copy under `$RUNNER_TEMP`, which apt's
+unprivileged `_apt` acquire user cannot traverse, and on run 42250760162
+every retry failed with `(13: Permission denied)` on the mirror list — a
+stall turned into a certain failure. Reproduced locally (the same list
+under a 0700 directory is refused, under a 0755 one it is read); the copy
+now goes to a `mktemp` directory under `/tmp` opened to 0755 with 0644
+files, and a third test, run with a 0700 `$RUNNER_TEMP` and no explicit
+location, requires the chosen path to lie outside it with every
+component searchable and every file readable by others; it fails against
+the first version (PIN). **Corrected again (section 6.6):** the move was
+per call, so every later call in a job started on the stalled mirror and
+paid its full bound again; on run 42256380216 the first call moved and
+fetched 30.1 MB in 5 s, the second stalled 120 s on Azure before moving,
+and the third found the job's 300 s budget spent. The moving call now
+records the copy's location in the job's `$RUNNER_TEMP`, beside the
+budget deadline, and every later call adopts it before its first
+attempt; a record whose copy is gone is ignored. Two tests pin both, and
+both fail against the previous script (PIN). 80/80 in the module.
+
+**MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
+`libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs
+`libunwind-18-dev`; added to both lanes' install lines. Verified on the
+runner: configure, build and the KAT run under MSan green.
+
+**`tools/check_secret_division.py`: `ama_argon2id_core` 10 divides against
+6 recorded.** The 6 was measured on gcc-13. gcc-14 reproduces the runner's
+10 exactly, and `objdump -d -l` on a `-g` Release build attributes every one:
+`ama_argon2.c:684` ×1 (`m_cost / (lanes * 4)`), `:536` ×3 (`J2 % lanes`),
+`:577` ×6 (`(start + z) % lane_length`). The newer gcc inlines
+`argon2_index_alpha` into more loop versions, so the same three public-
+operand expressions are emitted more times; no divide on any new operand.
+Recorded as 10 with that per-line inventory and both compiler versions, so
+the next move is diffable by line. Mutation-proven: one added divide on a
+runtime operand → 11 → the gate fails.
+
+**Two history-dependent tests, and the commits they need.** The 2026-08-14
+calibration commits (`7766faa`, `e7f378d`, `1c0cd29`, `5fe7edb`, `26df305`)
+and the 2026-10-08 snapshot commit (`1d8dab6a`) were recorded on pull-request
+branches and squash-merged; once those branches were deleted, `fetch-depth:
+0` — which fetches branches and tags, not `refs/pull/*` — no longer brought
+the objects, and the guards that passed on 2026-10-12 failed on an unmodified
+`main`. Each commit is now pinned by an annotated tag
+(`calibration/2026-08-14/p1`..`p5`, `benchmark-snapshot/2026-10-08`); a clone
+with tags has all six objects, `--no-tags` has none. Two new tests require
+every recorded measurement commit to be reachable from a tag or `main` — not
+merely present — and fail while the branch still exists, which is the moment
+it can still be fixed; deleting a tag fails them (PIN).
+
+**`apt-install.sh`: a bound that did not reach the process tree.** The two
+behavioural tests in `tests/test_apt_retry_gate.py` failed on every pytest
+leg: the script exited inside its budget and pytest then waited on an orphan
+until `TimeoutExpired`. Measured on the runner: uutils `timeout` signals its
+direct child only, where GNU signalled the process group, so a TERM-ignoring
+`apt-get` stand-in was SIGKILLed on schedule and its child survived — exactly
+how a wedged apt's http method would outlive its bound in production. Every
+bounded call now runs in its own session (`setsid`), and the session's
+process group is swept afterwards with a shell builtin — the external `kill`
+under sudo refused the group form — elevated only when the survivors are
+root's. Nothing else in the call shape changed, so every existing fake and
+textual pin holds: 74/74 in that module as root and as an unprivileged user.
+
+**ARM (QEMU) lanes: `qemu-user-static` has no installation candidate.** On
+26.04 it is a virtual package provided by `qemu-user-binfmt` and
+`qemu-user-binfmt-hwe`, and apt will not choose a provider. The four lanes
+now name `qemu-user-binfmt`, a real package on 24.04 (depending on
+`qemu-user-static`) and the provider on 26.04. These lanes are gated by a
+change filter and did not run on `main`'s dispatch; this branch's C changes
+ran them. The one place a lane spelled the emulator's name out — the no-crypto lane's dispatcher check, `qemu-aarch64-static` — then failed on 26.04 with "command not found" (run 42248921079) while the three ctest lanes beside it passed through the toolchain file's `find_program` fallback to `qemu-aarch64`: 24.04's `qemu-user-static` ships the `-static` name, 26.04's `qemu-user` ships `qemu-aarch64` and no package carries the other. The step now makes the same lookup.
+
+**Not changed, stated:** the C-consumer job's `valgrind` install stalled on
+a 15.7 MB fetch from the Azure mirror twice at the same byte, in two jobs, at
+the same minute, under a script that already carries `Acquire::*::Timeout`
+and bounded it correctly. That is the mirror, with evidence; the next run
+decides it.
+### Three advisories closed at source, and the gate that could not see them — 2026-11-06
+
+Unifies Dependabot PRs #423, #425, #426 and #427 onto one branch and closes
+the three open alerts. #425 (black 26.10.1) and #426 (setuptools 84.1.0) are
+strict subsets of #427 and carry nothing #427 does not; they are superseded,
+not merged twice.
+
+**GHSA-cg8m-r9f2-5wm2 / CVE-2026-114134 (black, High, CVSS 8.8).** The flaw is
+in black's *GitHub Action*: with `use_pyproject: true` it installs
+`tool.black.required-version` from `pyproject.toml` without validating it, so
+a pull request editing that key can run untrusted code. Measured: this
+repository uses no `psf/black` action anywhere in `.github/workflows/**` and
+declares no `required-version` key, so the exploit path is **not present
+here** — the honest statement (INVARIANT-16) is that the alert is closed by
+moving the floor to 26.10.1, not that an exposure was fixed. Black runs as a
+pinned `pip install` in two lint lanes and as a pre-commit rev.
+
+**GHSA-xmj3-9gf7-h52w (setuptools, CWE-22).** Windows path escape via a
+wheel's `.dist-info/namespace_packages.txt` during legacy wheel installation;
+every release from 38.2.2 is affected and 84.1.0 carries the fix. Two alerts
+(#10, #11) because setuptools is declared in more than one manifest — which is
+also why moving the lock alone does not close them. Taken to 84.2.1, the
+version #427 proposed.
+
+**What Dependabot left undone, and why no gate noticed.** #427 raised
+setuptools in `requirements-dev.txt`, `requirements-lock.txt` and
+`requirements-release-build.txt`, and rewrote the first line of the
+`[build-system]` comment to read 84.2.1. It left 84.0.0 — the affected
+version — in six other places: that same comment's own sentence naming the
+pinned value, `[build-system].requires` itself (the line an isolated PEP 517
+build resolves), the `[dev]` extra's build/packaging mirror, `setup.py`'s
+`_BUILD_REQS` preflight floor, `setup.py`'s `_REMEDY` string, and
+`static-analysis.yml`'s reproducible-wheel build install. Every gate passed.
+`tools/check_release_pins.py` reads both floor tables, but only to hold the
+release *manifest pins* at or above them; it never compares the two tables
+with each other, so a floor left behind is invisible to it and a manifest
+moving past a stale floor reads as compliance. All six are corrected here.
+
+**Two drifts already in the tree, same shape, neither new.** The sweep that
+found the above found `cmake>=4.4.3` installed beneath a declared floor of
+4.4.4 in `static-analysis.yml` and `integrity-anchor-check.yml`, and
+`Cython>=3.0.0` beneath a declared 3.3.0 in `ci.yml` (twice) and
+`ci-build-test.yml`. Classified Medium, not High: `setup.py`'s preflight still
+runs in each of those lanes, so a resolve below the floor aborts the next step
+with its FATAL rather than compiling — a latent outage and a false claim, not
+a bypass. `setup.py` carries a comment recording a third instance from before
+either ("bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched"), so
+this is a recurring defect class. All five lines corrected.
+
+**The mechanism (AGENTS.md section 5, section 10).**
+`tools/check_build_floor_coherence.py` reads the floors from
+`[build-system].requires` through `check_release_pins`'s own readers — never a
+second copy of the list — and compares every other declaration against them:
+equality for the four sites that claim in prose to state the *same* value
+(`_BUILD_REQS`, `_REMEDY`, and the two comment blocks), at-or-above for the
+sites that state a minimum (the extras, `requirements-dev.txt`, and every
+`pip install` in `.github/workflows/**`). Workflow text is parsed as YAML,
+shell comments are stripped quote-aware and arguments read with `shlex`, so
+`release.yml`'s deliberately historical commented install is not read as live.
+No exemption list: a site either names a version for one of the five build
+packages or it does not, and a bare `pip install setuptools` resolves the
+latest and declares no floor. Non-vacuity floors pin the live counts (5
+packages, 9 prose restatements, 5 remedy tokens, 11 manifest/extra floors, 15
+workflow floors across 15 workflows).
+
+Two corrections the mutation pass forced on the gate itself, recorded per
+section 6.6 because the first draft of it passed while reading less than it
+claimed. (1) It matched the bare word `pip`, so
+`/opt/python/cp311-cp311/bin/pip install` in `static-analysis.yml` — the one
+lane whose setuptools floor had actually drifted — was the one lane it could
+not see; it now matches a pip or python executable behind any path, and
+`<python> -m pip install` as well. (2) A floor restated in prose as a bare
+number ("the floor is pinned at 84.0.0") is unreadable to any checker, which
+is exactly the half of Dependabot's comment edit that would have slipped
+through. Both comment blocks now restate the floor as `<name> >= <version>`,
+the form the gate reads, and the convention is stated where it is relied on: a
+version named on its own is a historical fact about an upstream release, not a
+claim about this tree's floor. `tests/test_build_floor_coherence_gate.py`
+restores each of the nine measured drifts and asserts the gate reports it —
+PIN by mutation, all 25 cases — plus RANGE cases for what it deliberately does
+not claim, and a non-vacuity case that an emptied workflow directory fails.
+
+**Dependabot's PyKCS11 bump in #427 is rejected, not completed.** It raised
+the `[hsm]` floor from `>=1.5.18,!=1.5.19` to `!=1.5.19,>=1.5.20`, which
+removes 1.5.18 — the only Windows version with recorded green evidence in this
+repository — from the resolvable set, and leaves a `!=1.5.19` clause that is
+redundant beneath a 1.5.20 floor.
+`tests/test_hsm_integration.py::test_pykcs11_broken_windows_wheels_stay_excluded`
+exists to refuse exactly that ("the exclusion took the known-good 1.5.18 with
+it; Windows has nothing left to install") and fails on the bump. No advisory
+motivates it, and there is no measurement here that 1.5.20's Windows wheels
+work, so the specifier is kept as measured. The gate was right and the bot was
+wrong; the test is not relaxed.
+
+**Three restated pins in `tests/test_release_pins_gate.py`, the same defect
+class as the floors, in a file that had already recorded it.** Its
+`_live_cmake` helper carries the note *"Read, not restated: these tests used
+the literal `cmake>=4.4.3`, so the routine floor bump to 4.4.4 failed them
+while the gate itself was right"* — and three other tests in the same file
+still spelled out `setuptools==84.0.0` and `pip==26.2.1`, so this bump failed
+all three for exactly that reason (measured: 3 failed / 69 passed before, 72
+passed after). One `_live_pin(root, manifest, name)` reader now serves all
+three, so the next bump moves nothing there. Each site keeps the assertion
+that its mutation applied (`block is not None`, `count == 1`), so reading
+rather than restating does not make any of them vacuous.
+
+**Toolchain moved as one set,** because `test_lint_job_environment.py` holds
+the lock, the two workflow lint lanes, the pre-commit revs and the capped
+`[dev]` ranges in lockstep: black 26.10.0 → 26.10.1, ruff 0.16.10 → 0.17.3,
+mypy 2.4.0 → 2.4.1, pytest 9.1.1 → 9.2.0, types-PyYAML → 6.0.12.20261030,
+plus `ast_serialize` 0.13.1, `pluggy` 1.7.0 and `pip` 26.2.2 in the pinned
+sets. One behaviour moved with ruff: 0.17 stopped counting a trailing pragma
+comment toward E501, so three `# noqa: E501` directives became dead and are
+removed at source rather than kept (`docs/conf.py` ×2,
+`fuzz/python/fuzz_key_formats.py`) — ruff 0.17 also permits an import below a
+`sys.path` edit, which is why the new gate needs no E402 marker. Measured on
+the pinned set: black clean on 437 files, ruff clean, `mypy --strict` with
+CI's exact invocation clean on 437 files, `requirements-lock.txt` resolves.
+
+**AGENTS.md section 9's verification procedure could not produce a green
+suite, and now says so** (corrected per section 6.6, measured 2026-11-06 on a
+fresh clone). Its baseline was `cmake --build build`, `ctest`, `pytest
+tests/ -q`. A bare cmake build builds the native library *only*: it does not
+generate `ama_cryptography/_integrity_signature.py`, which is per-build,
+ephemeral and untracked (section 8 item 4). Without it fifteen tests across
+six modules fail — ten with `cannot import name '_integrity_signature'` and
+seventeen child processes with `No module named 'ama_cryptography'` — on an
+unmodified tree. Measured both ways: 15 failed / 11,084 passed / 189 skipped
+before `pip install -e . --no-build-isolation`, and the same six modules
+201/201 green after it. The install is now in the documented procedure with
+that measurement beside it, because an agent following the three old lines
+verbatim reaches fifteen red tests that are not defects and the usual next
+move is to investigate a product that is fine, or to call the suite flaky.
+The install also exercised the raised floors end to end: it resolved and
+built against setuptools 84.2.1, cmake 4.4.4, Cython 3.3.0 and numpy 2.4.4 —
+`setup.py`'s preflight accepting exactly the values this change declares.
+
+Known and left open, stated where it is measured: `types-setuptools` stays at
+84.0.0.20261006 while setuptools moves to 84.2.1. The stubs are not a
+`[build-system]` requirement, so this gate does not cover them, and
+`test_every_gate_tool_is_pinned_coherently` derives their cap from the lock
+rather than from setuptools; raising them is a separate change with its own
+`mypy --strict` re-measurement.
+
+### GitHub Actions group bump: 9 pins — 2026-11-06
+
+`actions/setup-python` v7.0.0 → v7.1.0, `actions/upload-artifact` v7.0.1 →
+v7.0.2, `actions/download-artifact` v8.0.1 → v8.0.2, `github/codeql-action/*`
+v4.39.0 → v4.39.1, `docker/login-action` v4.6.0 → v4.7.0, `pypa/cibuildwheel`
+v4.3.3 → v4.3.4, `pypa/gh-action-pypi-publish` v1.14.2 → v1.14.3,
+`trufflesecurity/trufflehog` v3.99.6 → v3.99.7 (Dependabot #423). Each is a
+40-hex SHA with its version comment re-derived; `tools/check_action_pins.py`
+(INVARIANT-24) resolves every SHA upstream and checks the comment names the
+tag that SHA belongs to.
 
 ## [5.0.0] - 2026-10-08
 

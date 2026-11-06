@@ -92,13 +92,13 @@ static uint8_t sbox_bitsliced_reference(uint8_t x) {
     uint8_t t0, t1, t2, t3, t4;
 
     x0 ^= x4; x4 ^= x3; x2 ^= x1;
-    t0 = (uint8_t)(~x0 & 1u & x1);
-    t1 = (uint8_t)(~x1 & 1u & x2);
-    t2 = (uint8_t)(~x2 & 1u & x3);
-    t3 = (uint8_t)(~x3 & 1u & x4);
-    t4 = (uint8_t)(~x4 & 1u & x0);
+    t0 = (uint8_t)(~(unsigned)x0 & 1u & x1);
+    t1 = (uint8_t)(~(unsigned)x1 & 1u & x2);
+    t2 = (uint8_t)(~(unsigned)x2 & 1u & x3);
+    t3 = (uint8_t)(~(unsigned)x3 & 1u & x4);
+    t4 = (uint8_t)(~(unsigned)x4 & 1u & x0);
     x0 ^= t1; x1 ^= t2; x2 ^= t3; x3 ^= t4; x4 ^= t0;
-    x1 ^= x0; x0 ^= x4; x3 ^= x2; x2 = (uint8_t)(~x2 & 1u);
+    x1 ^= x0; x0 ^= x4; x3 ^= x2; x2 = (uint8_t)(~(unsigned)x2 & 1u);
 
     return (uint8_t)((x0 << 4) | (x1 << 3) | (x2 << 2) | (x3 << 1) | x4);
 }

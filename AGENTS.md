@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 97 C test suites, 290 Python test modules |
+| `tests/c/`, `tests/` | 97 C test suites, 292 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -277,8 +277,31 @@ Establish the baseline before modifying it:
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON
 cmake --build build && ctest --test-dir build --output-on-failure
+pip install -e . --no-build-isolation      # see below; pytest needs this
 python -m pytest tests/ -q
 ```
+
+**The editable install is not optional, and this procedure used to omit it**
+(corrected per section 6.6, measured 2026-11-06 on a fresh clone at `702e253`).
+A bare `cmake --build build` builds the native library *only*. It does not
+generate `ama_cryptography/_integrity_signature.py`, which is per-build,
+ephemeral and untracked (section 8 item 4), and without it fifteen tests across
+six modules fail: `test_binding_integrity.py`,
+`test_post_failclosed.py`, `test_preload_native_digest.py`,
+`test_secret_residue.py`, `test_self_test_coverage.py` and
+`test_trust_anchor_pinning.py` — ten with `cannot import name
+'_integrity_signature'`, and seventeen child processes with `No module named
+'ama_cryptography'` because the package is not on their path. After the
+install the same six modules are 201/201 green. An agent following the old
+three lines verbatim therefore reached fifteen red tests that are not defects,
+on an unmodified tree; the next step from there is usually to "investigate" a
+product that is fine, or to read the suite as flaky. Both are worse than a
+missing line in this file, so the line is here. The build-time floors the
+install resolves are the ones `pyproject.toml` `[build-system].requires` and
+`setup.py`'s `_BUILD_REQS` declare, held identical by
+`tools/check_build_floor_coherence.py`; `--no-build-isolation` uses the
+toolchain already installed from `requirements-lock.txt` rather than resolving
+a second one from the index.
 
 Required before pushing:
 
@@ -287,7 +310,7 @@ black --check . && ruff check . && mypy --strict <scope>
 python tools/check_headers.py
 python tools/refresh_derived_docs.py      # must reach its fixpoint
 ctest --test-dir build --output-on-failure
-python -m pytest tests/ -q
+python -m pytest tests/ -q                # after `pip install -e .`, above
 ```
 
 Any modified C compiles clean under strict warnings on both toolchains:

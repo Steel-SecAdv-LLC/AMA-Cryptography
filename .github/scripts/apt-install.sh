@@ -170,6 +170,133 @@ APT_NET_OPTS=(
     -o Acquire::Retries=1
 )
 
+# WHY A RETRY MAY CHANGE MIRROR
+# -----------------------------
+# Every stall this script has recorded was a transfer that trickled or hung
+# on the runner's in-datacentre mirror, and every retry so far was the same
+# request to the same mirror -- the diagnosis the `update`-skipping arm
+# above was written from, and still true of the arm it added.  Measured on
+# 2026-11-06 (runs 42242159577, 42242159624, 42244243340, 42244243120): six
+# lanes drew a runner whose fetch from azure.archive.ubuntu.com ran at a few
+# hundred kB/s, each bounded attempt ended on the same multi-megabyte
+# archive, and every retry re-fetched it from the same host while a sibling
+# lane on the same commit installed the identical set at 31.9 MB/s.  The
+# image lists that mirror first and the public archive and security hosts
+# after it (actions/runner-images configure-apt-sources.sh), but apt's
+# mirror method only moves down the list on an error, and a slow transfer
+# is not an error.
+#
+# So once a bounded attempt has ended in a stall (exit 124 or 137), the
+# attempts after it read a copy of the image's sources that lists every
+# mirror BUT the one that stalled, written under the job's temp directory
+# and handed to apt by option -- /etc/apt itself is never edited.  The copy
+# is made from whatever the host has (deb822 `.sources`, one-line `.list`,
+# the top-level sources.list), with only the mirror-list reference changed,
+# so suites, components and signing keys are exactly the host's.  Where no
+# mirror list exists, or nothing but the stalled host is on it, the retry
+# says so and goes to the same mirror as before: this changes WHERE a
+# retry fetches from, never whether it is bounded or whether its failure
+# fails the job.
+#
+# The copy lives under /tmp, NOT under $RUNNER_TEMP.  apt runs its acquire
+# methods as the unprivileged `_apt` user, and the runner's temp directory
+# is not traversable by it: the first version of this fallback wrote there,
+# and on run 42250760162 every retry failed with `File not found -
+# .../ama-apt-alt-sources/apt-mirrors.txt (13: Permission denied)` -- a
+# stall turned into a certain failure, worse than the retry it replaced
+# (corrected per AGENTS.md section 6.6).  Reproduced locally: the same list
+# under a 0700 directory is refused, under a 0755 one it is read.  mktemp's
+# directory is 0700, so it is opened to 0755 and the files to 0644; they
+# hold nothing but the host's own public sources.
+#
+# ONE MIRROR CHOICE PER JOB, LIKE ONE BUDGET PER JOB.  The first version
+# made the move per call, so every later call in the job started on the
+# stalled mirror again and paid its full bound before moving.  Measured on
+# run 42256380216 (2026-11-06, `Test ubuntu-latest / Python 3.10`): the
+# first call stalled on azure.archive.ubuntu.com, moved, and fetched 30.1 MB
+# in 5 s from archive.ubuntu.com; the second call went back to Azure,
+# stalled 120 s on the same mirror, moved, succeeded; the third call
+# (softhsm2) then found the job's 300 s budget spent and failed before it
+# began.  So the call that moves records the copy's location in the job's
+# own $RUNNER_TEMP, beside the budget deadline, and every later call in the
+# job adopts it before its first attempt -- the image-lists fast path
+# included, whose lists the moving call's refresh already wrote for exactly
+# these sources.  A recorded location that no longer holds a complete copy
+# is ignored, with a message, and the call starts on the image's sources.
+APT_ETC="${APT_ETC_DIR:-/etc/apt}"
+APT_ALT_DIR="${APT_ALT_SOURCES_DIR:-}"
+APT_ALT_OPTS=()
+STALLED_HOST_PATTERN='azure\.archive\.ubuntu\.com'
+MIRROR_STATE="${APT_MIRROR_STATE-${RUNNER_TEMP:+${RUNNER_TEMP}/ama-apt-install.mirror}}"
+
+use_alt_sources() {
+    APT_ALT_DIR="$1"
+    APT_ALT_OPTS=(
+        -o "Dir::Etc::SourceList=$APT_ALT_DIR/sources.list"
+        -o "Dir::Etc::SourceParts=$APT_ALT_DIR/sources.list.d"
+    )
+}
+
+adopt_job_mirror_choice() {
+    local dir
+    if [ -z "$MIRROR_STATE" ] || [ ! -s "$MIRROR_STATE" ]; then return 0; fi
+    dir="$(cat "$MIRROR_STATE")"
+    if [ -s "$dir/apt-mirrors.txt" ] && [ -f "$dir/sources.list" ] &&
+       [ -d "$dir/sources.list.d" ]; then
+        use_alt_sources "$dir"
+        echo "apt-install.sh: an earlier call in this job moved off the" \
+             "stalled mirror; this call starts on the same mirrors" \
+             "(sources at $dir):" \
+             "$(awk '{print $1}' "$dir/apt-mirrors.txt" | tr '\n' ' ')"
+    else
+        echo "apt-install.sh: $MIRROR_STATE names '$dir', which no longer" \
+             "holds a complete copy of the sources; starting on the image's"
+    fi
+}
+
+prefer_other_mirrors() {
+    local list="$APT_ETC/apt-mirrors.txt"
+    local f
+    if [ "${#APT_ALT_OPTS[@]}" -ne 0 ]; then return 0; fi
+    if [ ! -s "$list" ]; then
+        echo "apt-install.sh: no mirror list at $list to move down; the" \
+             "retry fetches from the same mirror"
+        return 0
+    fi
+    if [ -z "$APT_ALT_DIR" ]; then
+        APT_ALT_DIR="$(mktemp -d /tmp/ama-apt-alt-sources.XXXXXX)"
+    fi
+    mkdir -p "$APT_ALT_DIR/sources.list.d"
+    chmod 0755 "$APT_ALT_DIR" "$APT_ALT_DIR/sources.list.d"
+    grep -v "$STALLED_HOST_PATTERN" "$list" >"$APT_ALT_DIR/apt-mirrors.txt" || true
+    chmod 0644 "$APT_ALT_DIR/apt-mirrors.txt"
+    if [ ! -s "$APT_ALT_DIR/apt-mirrors.txt" ]; then
+        echo "apt-install.sh: $list names only the mirror that stalled; the" \
+             "retry fetches from it again"
+        return 0
+    fi
+    for f in "$APT_ETC"/sources.list.d/*.sources "$APT_ETC"/sources.list.d/*.list; do
+        [ -f "$f" ] || continue
+        sed "s#mirror+file:$list#mirror+file:$APT_ALT_DIR/apt-mirrors.txt#g" "$f" \
+            >"$APT_ALT_DIR/sources.list.d/$(basename "$f")"
+    done
+    if [ -f "$APT_ETC/sources.list" ]; then
+        sed "s#mirror+file:$list#mirror+file:$APT_ALT_DIR/apt-mirrors.txt#g" \
+            "$APT_ETC/sources.list" >"$APT_ALT_DIR/sources.list"
+    else
+        : >"$APT_ALT_DIR/sources.list"
+    fi
+    find "$APT_ALT_DIR" -type f -exec chmod 0644 {} +
+    use_alt_sources "$APT_ALT_DIR"
+    if [ -n "$MIRROR_STATE" ]; then
+        echo "$APT_ALT_DIR" >"$MIRROR_STATE"
+    fi
+    echo "apt-install.sh: the stalled attempt fetched through $list; the" \
+         "retries use the other mirrors on it" \
+         "(sources copied to $APT_ALT_DIR):" \
+         "$(awk '{print $1}' "$APT_ALT_DIR/apt-mirrors.txt" | tr '\n' ' ')"
+}
+
 if [ "$ATTEMPTS" -lt 1 ]; then
     echo "apt-install.sh: APT_ATTEMPTS must be at least 1 (got $ATTEMPTS)" >&2
     exit 2
@@ -238,11 +365,54 @@ sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* \
 # On a clean dpkg database both are no-ops.  Neither failure is fatal here:
 # the apt-get that follows reports what it makes of the database, and that
 # failure is the attempt's.
+# A wall-clock bound that reaches the whole process tree, not just the child.
+#
+# GNU timeout signals the process group it runs the command in.  The uutils
+# coreutils `timeout` that ubuntu-latest ships from 26.04 (0.10.0) signals the
+# direct child only.  Measured 2026-11-06 on that image, in the shape every
+# call below has (elevated, bounded, a script as the command): a TERM-ignoring
+# apt-get stand-in was SIGKILLed on schedule and its `sleep` child survived,
+# holding the step's pipes open -- which is how a wedged apt's http method
+# would outlive its bound and run the job into its own timeout, the stall
+# this script exists to prevent.  tests/test_apt_retry_gate.py's two
+# behavioural tests measured exactly that: the script exited inside its
+# budget and pytest waited on the orphan until TimeoutExpired.
+#
+# So the bounded command is started in its own session (setsid: new session
+# and process group, pgid = that pid; elevation keeps its children in it,
+# measured on the same image), the bound is applied exactly as before, and
+# whatever that group still holds afterwards is swept with SIGKILL.  The sweep
+# is a shell BUILTIN run elevated, because the external kill, elevated,
+# refused the group form (measured: `kill -KILL -- -<pgid>` exit 1 with
+# the orphan alive; the builtin, exit 0 and none), and it needs the privilege
+# the processes have.  The exit status is timeout's own: 124 on the bound,
+# 137 after the SIGKILL escalation, the command's otherwise.
+timeout_group() {
+    local bound="$1"
+    shift
+    local pid rc
+    setsid -w sudo timeout --kill-after="$KILL_AFTER" "$bound" "$@" &
+    pid=$!
+    wait "$pid"
+    rc=$?
+    # Sweep whatever the bound left in the session's process group.  The
+    # group is gone in the common case (the command finished or died with
+    # its children) and the look costs nothing.  Survivors we own die to the
+    # builtin; survivors the elevation made root's refuse it with EPERM, and
+    # only then is the elevated builtin asked -- so no elevated call happens
+    # unless there is something only it can kill.
+    if pgrep -g "$pid" >/dev/null 2>&1; then
+        kill -KILL -- "-$pid" 2>/dev/null ||
+            sudo bash -c 'kill -KILL -- "-$1"' _ "$pid" 2>/dev/null || true
+    fi
+    return "$rc"
+}
+
 recover_dpkg() {
     local bound="$1"
     local left
     local -a broken=()
-    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" dpkg --configure -a; then
+    if ! timeout_group "$bound" dpkg --configure -a; then
         echo "apt-install.sh: dpkg --configure -a did not complete; the" \
              "apt-get below reports the state it leaves" >&2
     fi
@@ -256,8 +426,8 @@ recover_dpkg() {
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
     echo "apt-install.sh: reinstalling what an interrupted attempt left" \
          "half-installed: ${broken[*]}"
-    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-            apt-get "${APT_NET_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
+    if ! timeout_group "$bound" \
+            apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
         echo "apt-install.sh: the reinstall did not complete; the apt-get" \
              "below reports the state it leaves" >&2
     fi
@@ -273,8 +443,8 @@ attempt_install() {
     left="$(budget_left)"
     if [ "$left" -le 0 ]; then return 124; fi
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-        apt-get "${APT_NET_OPTS[@]}" update
+    timeout_group "$bound" \
+        apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" update
     rc=$?
     # Propagate update's own status (124/137 mean a stalled mirror, and the
     # final-attempt diagnosis below reads them), never collapse it to 1.
@@ -294,8 +464,8 @@ attempt_install() {
 install_only() {
     local bound="$1"
     shift
-    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-        apt-get "${APT_NET_OPTS[@]}" install -y "$@"
+    timeout_group "$bound" \
+        apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" install -y "$@"
 }
 
 # FIRST, WITHOUT `update`: every stall on record has been in `apt-get update`.
@@ -324,16 +494,43 @@ install_only() {
 # build tools on an ephemeral runner — cmake, clang, ninja, the aarch64
 # cross-toolchain — not anything shipped, and the refresh arm still runs
 # whenever the pinned lists fall short.
+adopt_job_mirror_choice
+
 left="$(budget_left)"
 bound="$ATTEMPT_TIMEOUT"
 if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-if [ "$bound" -gt 0 ] && install_only "$bound" "$@"; then
-    echo "apt-install.sh: installed from the image's own package lists," \
-         "without apt-get update: $*"
-    exit 0
+fast_rc=0
+if [ "$bound" -gt 0 ]; then
+    install_only "$bound" "$@" && {
+        echo "apt-install.sh: installed from the image's own package lists," \
+             "without apt-get update: $*"
+        exit 0
+    }
+    fast_rc=$?
 fi
-echo "apt-install.sh: the image's package lists did not satisfy: $*" \
-     "— refreshing them"
+# Say which of two different things just happened.  This arm used to report
+# every failure as "the image's package lists did not satisfy", including the
+# one where the lists were fine and the mirror was not: on run 42242159577
+# (`MemorySanitizer (fast KAT lane)`) and 42242159624 (`dudect - Legacy
+# Harnesses`) the first attempt fetched its 27.5 MB / 14.1 MB archive at a few
+# hundred kB/s, was ended by its bound, and the log then said the lists were
+# stale and refreshed them -- a diagnosis the reader could only disprove by
+# timing the lines.  124 and 137 are the bound's own exit statuses, and a
+# bound that fired is a stall, not a resolution failure; the refresh still
+# runs either way, because the refreshed install is also the retry.
+case "$fast_rc" in
+    124|137)
+        echo "apt-install.sh: the first attempt, against the image's own" \
+             "package lists, exceeded its ${bound}s bound (exit ${fast_rc}:" \
+             "a stalled or slow mirror, not stale lists) — refreshing them" \
+             "and retrying: $*"
+        prefer_other_mirrors
+        ;;
+    *)
+        echo "apt-install.sh: the image's package lists did not satisfy: $*" \
+             "— refreshing them"
+        ;;
+esac
 
 # Every attempt but the last is recoverable; all of them, including the last,
 # are bounded by whichever is smaller — the per-attempt bound or what is left
@@ -346,10 +543,13 @@ for attempt in $(seq 1 "$final"); do
     fi
     bound="$ATTEMPT_TIMEOUT"
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-    if attempt_install "$bound" "$@"; then
+    attempt_rc=0
+    attempt_install "$bound" "$@" || attempt_rc=$?
+    if [ "$attempt_rc" -eq 0 ]; then
         echo "apt-install.sh: installed on attempt ${attempt}: $*"
         exit 0
     fi
+    case "$attempt_rc" in 124|137) prefer_other_mirrors ;; esac
     delay=$((attempt * BACKOFF_UNIT))
     left="$(budget_left)"
     if [ "$delay" -gt "$left" ]; then delay="$left"; fi

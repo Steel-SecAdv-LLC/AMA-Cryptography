@@ -241,7 +241,11 @@ def _fake_sudo(tmp_path: Path) -> Path:
             verb="$1"; shift
             args=()
             while [ "$#" -gt 0 ]; do
-              case "$1" in -o) shift 2 ;; *) args+=("$1"); shift ;; esac
+              case "$1" in
+                -o) [ -n "${FAKE_APT_LOG:-}" ] && echo "$verb $2" >> "${FAKE_APT_LOG}.options"
+                    shift 2 ;;
+                *) args+=("$1"); shift ;;
+              esac
             done
             set -- "$verb" "${args[@]}"
             [ -n "${FAKE_APT_LOG:-}" ] && echo "$1 $2" >> "$FAKE_APT_LOG"
@@ -283,6 +287,14 @@ def _fake_sudo(tmp_path: Path) -> Path:
                                "configuration of cmake" >&2
                           exit 100
                       fi
+                  fi
+                  # Stands in for a first attempt the bound ended -- the
+                  # exit status `timeout` gives a command it had to end --
+                  # with the lists able to satisfy the request all along.
+                  if [ "${FAKE_APT_FIRST_INSTALL_STALLS:-0}" = "1" ] &&
+                     [ ! -e "${FAKE_APT_LOG:-/nonexistent}.stalled" ]; then
+                      touch "${FAKE_APT_LOG}.stalled"
+                      exit 124
                   fi
                   # Stands in for lists that cannot resolve the request until
                   # they are refreshed.
@@ -753,6 +765,266 @@ def test_stale_lists_still_fall_through_to_a_refresh(tmp_path: Path) -> None:
     assert "apt-get update" in verbs, "the refresh arm never ran"
     assert "did not satisfy" in r.stdout
     assert "libclang-rt-dev" in r.stdout
+
+
+@_LINUX_ONLY
+def test_a_bounded_first_attempt_is_reported_as_a_stall_not_stale_lists(
+    tmp_path: Path,
+) -> None:
+    """The fast path must name what ended it.
+
+    Runs 42242159577 and 42242159624 (2026-11-06): the first attempt against
+    the image's lists fetched a 27.5 MB / 14.1 MB archive at a few hundred
+    kB/s, its bound fired, and the script announced that the lists "did not
+    satisfy" the request and refreshed them.  The lists were fine; the mirror
+    was not.  Exit 124 and 137 are the bound's own statuses, so the message
+    distinguishes them from a resolution failure -- and the refresh arm still
+    runs, because the refreshed install is also the retry.
+    """
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["libclang-rt-dev"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+    )
+    assert r.returncode == 0, r.stderr
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2, verbs
+    assert "apt-get update" in verbs, "the refresh arm never ran"
+    assert "exceeded its" in r.stdout and "exit 124" in r.stdout, r.stdout
+    assert "stalled or slow mirror, not stale lists" in r.stdout, r.stdout
+    assert "did not satisfy" not in r.stdout, r.stdout
+    assert "libclang-rt-dev" in r.stdout
+
+
+def _apt_etc_fixture(tmp_path: Path) -> Path:
+    """The runner image's apt layout: a mirror list, and sources that use it.
+
+    actions/runner-images configure-apt-sources.sh writes exactly this
+    shape: azure.archive.ubuntu.com at priority 1, the public archive and
+    security hosts after it, and the deb822 `ubuntu.sources` pointing at the
+    list through `mirror+file:`.
+    """
+    etc = tmp_path / "etc-apt"
+    (etc / "sources.list.d").mkdir(parents=True)
+    mirrors = etc / "apt-mirrors.txt"
+    mirrors.write_text(
+        "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n"
+        "https://archive.ubuntu.com/ubuntu/\tpriority:2\n"
+        "https://security.ubuntu.com/ubuntu/\tpriority:3\n",
+        encoding="utf-8",
+    )
+    (etc / "sources.list.d" / "ubuntu.sources").write_text(
+        "Types: deb\n"
+        f"URIs: mirror+file:{mirrors}\n"
+        "Suites: resolute resolute-updates resolute-backports resolute-security\n"
+        "Components: main universe restricted multiverse\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n",
+        encoding="utf-8",
+    )
+    (etc / "sources.list").write_text(
+        "# Ubuntu sources have moved to ubuntu.sources\n", encoding="utf-8"
+    )
+    return etc
+
+
+@_LINUX_ONLY
+def test_a_retry_after_a_stall_moves_to_the_other_mirrors(tmp_path: Path) -> None:
+    """A retry is not the same request to the same mirror.
+
+    Six lanes on 2026-11-06 drew a runner whose azure.archive.ubuntu.com
+    fetch ran at a few hundred kB/s; every bounded attempt ended on the same
+    archive and every retry re-fetched it from the same host.  Once an
+    attempt has ended in the bound's own status, the attempts after it read
+    a copy of the image's sources whose mirror list omits that host, handed
+    to apt by option -- /etc/apt is never edited.  Suites, components and
+    keyring are copied through unchanged.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    alt = tmp_path / "alt"
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "the retries use the other mirrors on it" in r.stdout, r.stdout
+    # The copied list drops only the stalled host and keeps the order.
+    copied = (alt / "apt-mirrors.txt").read_text(encoding="utf-8").splitlines()
+    assert [ln.split("\t")[0] for ln in copied] == [
+        "https://archive.ubuntu.com/ubuntu/",
+        "https://security.ubuntu.com/ubuntu/",
+    ], copied
+    # The copied sources are the host's, pointed at the copied list.
+    sources = (alt / "sources.list.d" / "ubuntu.sources").read_text(encoding="utf-8")
+    assert f"URIs: mirror+file:{alt / 'apt-mirrors.txt'}" in sources
+    assert "Suites: resolute resolute-updates resolute-backports resolute-security" in sources
+    assert "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" in sources
+    assert (alt / "sources.list").read_text(encoding="utf-8").startswith("# Ubuntu sources")
+    # The host's files are untouched: the list still carries all three
+    # entries, in the image's order, with the stalled host first.
+    host_list = (etc / "apt-mirrors.txt").read_text(encoding="utf-8").splitlines()
+    assert [ln.split("\t")[0] for ln in host_list] == [
+        "http://azure.archive.ubuntu.com/ubuntu/",
+        "https://archive.ubuntu.com/ubuntu/",
+        "https://security.ubuntu.com/ubuntu/",
+    ], host_list
+    assert f"mirror+file:{etc / 'apt-mirrors.txt'}" in (
+        etc / "sources.list.d" / "ubuntu.sources"
+    ).read_text(encoding="utf-8")
+    # Every apt-get after the stall -- the refresh and the retried install --
+    # read the copy; the stalled first attempt did not.
+    options = (
+        (log / "..").resolve().joinpath("apt.log.options").read_text(encoding="utf-8").splitlines()
+    )
+    parts = f"Dir::Etc::SourceParts={alt / 'sources.list.d'}"
+    assert [o for o in options if parts in o] == [f"apt-get {parts}"] * 2, options
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2 and "apt-get update" in verbs, verbs
+
+
+@_LINUX_ONLY
+def test_the_copied_sources_are_readable_by_apt_s_unprivileged_methods(tmp_path: Path) -> None:
+    """The copy must live where the `_apt` user can reach it.
+
+    apt runs its acquire methods as `_apt`, and the runner's temp directory
+    is not traversable by it: the first version of the fallback wrote the
+    copy under $RUNNER_TEMP, and on run 42250760162 every retry failed with
+    `File not found - .../apt-mirrors.txt (13: Permission denied)` -- a stall
+    turned into a certain failure.  So, with no explicit location and a
+    0700 $RUNNER_TEMP (the runner's shape), the directory the script chooses
+    must not be under $RUNNER_TEMP, every component of its path must be
+    searchable by others, and the files must be readable by others.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir(mode=0o700)
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        RUNNER_TEMP=str(runner_temp),
+    )
+    assert r.returncode == 0, r.stderr
+    match = re.search(r"\(sources copied to (\S+)\)", r.stdout)
+    assert match, r.stdout
+    alt = Path(match.group(1))
+    try:
+        assert alt.is_dir()
+        assert runner_temp.resolve() not in alt.resolve().parents, alt
+        for component in [alt, *alt.parents]:
+            assert component.stat().st_mode & 0o001, f"{component} is not searchable by others"
+        for f in (
+            alt / "apt-mirrors.txt",
+            alt / "sources.list",
+            alt / "sources.list.d" / "ubuntu.sources",
+        ):
+            assert f.stat().st_mode & 0o004, f"{f} is not readable by others"
+        assert (alt / "sources.list.d").stat().st_mode & 0o001
+    finally:
+        shutil.rmtree(alt, ignore_errors=True)
+
+
+@_LINUX_ONLY
+def test_a_later_call_in_the_job_starts_on_the_mirror_an_earlier_call_moved_to(
+    tmp_path: Path,
+) -> None:
+    """One mirror choice per job, as there is one budget per job.
+
+    Run 42256380216 (2026-11-06): the first call stalled on Azure, moved and
+    succeeded; the second call started on Azure again, stalled its full 120 s
+    bound, moved; the third found the job's 300 s budget spent and failed
+    before it began.  The moving call now records the copy's location in the
+    job's state, and the next call adopts it before its first attempt, so its
+    very first `apt-get install` -- the fast path -- already reads the copy.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    state = tmp_path / "ama-apt-install.mirror"
+    alt = tmp_path / "alt"
+    first = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(tmp_path / "first.log"),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8").strip() == str(alt)
+
+    second_log = tmp_path / "second.log"
+    second = _run_helper(
+        tmp_path,
+        ["softhsm2"],
+        FAKE_APT_LOG=str(second_log),
+        APT_ETC_DIR=str(etc),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert second.returncode == 0, second.stderr
+    assert "an earlier call in this job moved off the stalled mirror" in second.stdout
+    apt_calls = [
+        v for v in second_log.read_text(encoding="utf-8").split("\n") if v.startswith("apt-get")
+    ]
+    assert apt_calls == ["apt-get install"], apt_calls
+    options = (tmp_path / "second.log.options").read_text(encoding="utf-8").splitlines()
+    assert f"apt-get Dir::Etc::SourceParts={alt / 'sources.list.d'}" in options, options
+
+
+@_LINUX_ONLY
+def test_a_recorded_mirror_choice_that_is_gone_is_ignored(tmp_path: Path) -> None:
+    """A stale record never points apt at sources that are not there."""
+    etc = _apt_etc_fixture(tmp_path)
+    state = tmp_path / "ama-apt-install.mirror"
+    state.write_text(str(tmp_path / "vanished") + "\n", encoding="utf-8")
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        APT_ETC_DIR=str(etc),
+        APT_MIRROR_STATE=str(state),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "no longer holds a complete copy" in r.stdout, r.stdout
+    options_file = tmp_path / "apt.log.options"
+    assert "Dir::Etc::SourceParts" not in options_file.read_text(encoding="utf-8")
+
+
+@_LINUX_ONLY
+def test_a_stall_with_no_other_mirror_retries_the_same_one_and_says_so(tmp_path: Path) -> None:
+    """Moving mirrors is a change of destination, never a dropped attempt."""
+    etc = _apt_etc_fixture(tmp_path)
+    (etc / "apt-mirrors.txt").write_text(
+        "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n", encoding="utf-8"
+    )
+    alt = tmp_path / "alt"
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "names only the mirror that stalled" in r.stdout, r.stdout
+    assert not (alt / "sources.list.d").exists() or not any((alt / "sources.list.d").iterdir())
+    options_file = tmp_path / "apt.log.options"
+    assert "Dir::Etc::SourceParts" not in (
+        options_file.read_text(encoding="utf-8") if options_file.exists() else ""
+    )
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2 and "apt-get update" in verbs, verbs
 
 
 @_LINUX_ONLY

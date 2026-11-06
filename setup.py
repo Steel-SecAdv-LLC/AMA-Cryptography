@@ -40,10 +40,12 @@ from typing import Any, Callable, Optional
 # PEP 517 build installs — the comment "enforced by setup.py's preflight check"
 # is factually accurate (Copilot review #5 / D-9-extended).
 #
-#   * setuptools >= 84.0.0:  Debian's patched setuptools 68.x raises
+#   * setuptools >= 84.2.1:  Debian's patched setuptools 68.x raises
 #     AttributeError(install_layout) deep inside pip's bdist_wheel subprocess.
-#     70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
-#     floor is pinned at 84.0.0 to match pyproject.toml's [build-system].
+#     70.0.0 closes GHSA-cx63-2mw6-8hw5, 78.1.1 closes PYSEC-2025-49, and
+#     84.1.0 closes GHSA-xmj3-9gf7-h52w (Windows path escape via
+#     `.dist-info/namespace_packages.txt`, CWE-22); the floor is pinned at
+#     `setuptools >= 84.2.1` to match pyproject.toml's [build-system].
 #   * wheel >= 0.48.0:        0.47.0 closes GHSA-8rrh-rw8j-w5fx and 0.48.0
 #     closes GHSA-vgq5-9859-3mmw.
 #   * cmake >= 4.4.4:         supply-chain floor (matches pyproject.toml's
@@ -65,7 +67,10 @@ from typing import Any, Callable, Optional
 # (very old build environments), we pad the digit-only tuple to length 3
 # so 70.0+ still satisfies (70, 0, 0).
 _BUILD_REQS = {
-    "setuptools": ((84, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
+    "setuptools": (
+        (84, 2, 1),
+        "AttributeError(install_layout) on bdist_wheel; GHSA-xmj3-9gf7-h52w",
+    ),
     "wheel": ((0, 48, 0), "GHSA-8rrh-rw8j-w5fx, GHSA-vgq5-9859-3mmw"),
     "cmake": (
         (4, 4, 4),
@@ -112,7 +117,7 @@ def _parse_version(raw: str) -> tuple[int, int, int]:
 
 _REMEDY = (
     "  python3 -m pip install --upgrade "
-    "'setuptools>=84.0.0' 'wheel>=0.48.0' 'cmake>=4.4.4' "
+    "'setuptools>=84.2.1' 'wheel>=0.48.0' 'cmake>=4.4.4' "
     "'Cython>=3.3.0' 'numpy>=1.24.0'\n"
 )
 

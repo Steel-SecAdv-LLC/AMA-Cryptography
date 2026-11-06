@@ -4,12 +4,22 @@
 # Build-time dependencies (PEP 518).  These versions are floors enforced
 # by setup.py's preflight check (D-9).
 #
-# - setuptools >= 84.0.0 (D-8/D-9): older releases — particularly Debian's
+# - setuptools >= 84.2.1 (D-8/D-9): older releases — particularly Debian's
 #   patched 68.x — fail bdist_wheel with `AttributeError: install_layout`.
-#   70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
-#   floor is pinned at 84.0.0 (the latest baseline) and setup.py's preflight
-#   check enforces the SAME value so the isolated-build requirement and the
-#   guard cannot drift.
+#   70.0.0 closes GHSA-cx63-2mw6-8hw5, 78.1.1 closes PYSEC-2025-49, and
+#   84.1.0 closes GHSA-xmj3-9gf7-h52w (Windows path escape via a wheel's
+#   `.dist-info/namespace_packages.txt` during legacy wheel installation,
+#   CWE-22, affecting every release from 38.2.2).  The floor is pinned at
+#   `setuptools >= 84.2.1` (the latest baseline, above that fix) and
+#   setup.py's preflight check enforces the SAME value so the isolated-build
+#   requirement and the guard cannot drift.  A version restated as a floor is
+#   written `<name> >= <version>` and is checked; a version named on its own
+#   (the "84.1.0 closes ..." above) is a historical fact about an upstream
+#   release, not a claim about this tree's floor, and is not.  tools/check_build_floor_coherence.py proves they
+#   have not: this comment, the `requires` entry below, setup.py's
+#   `_BUILD_REQS` table, setup.py's remedy string, the [dev] extra,
+#   requirements-dev.txt and every workflow `pip install` of a build
+#   dependency are read and compared.
 # - wheel >= 0.48.0 (D-8): 0.47.0 closes GHSA-8rrh-rw8j-w5fx; 0.48.0 closes
 #   GHSA-vgq5-9859-3mmw (`wheel convert` path traversal / arbitrary write).
 # - cmake: required to auto-build the native C cryptographic library during
@@ -21,7 +31,7 @@
 # (hash-checked; tools/check_release_pins.py keeps them at or above these
 # floors) rather than resolving these floors from the index.
 requires = [
-    "setuptools>=84.0.0",
+    "setuptools>=84.2.1",
     "wheel>=0.48.0",
     "cmake>=4.4.4",
     "Cython>=3.3.0",
@@ -197,7 +207,7 @@ dev = [
     # re-derivation under pytest==9.1.1 while the test lanes install this
     # extra, and pytest collection semantics move on minors.  Raise the cap
     # with the pins.
-    "pytest>=9.1.1,<9.2",
+    "pytest>=9.2.0,<9.3",
     "pytest-cov>=4.0.0",
     "hypothesis>=6.168.5",
     # Black's floor carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
@@ -208,8 +218,8 @@ dev = [
     # DEFAULT behaviour -- the surface that moves between releases (black
     # revises its stable style on calendar majors; ruff's default rule set
     # moves on minors).  Capped so one CI run measures one black and one ruff.
-    "black>=26.10.0,<27",
-    "ruff>=0.16.10,<0.17",
+    "black>=26.10.1,<27",
+    "ruff>=0.17.3,<0.18",
     # Floor and lock moved to 2.4.0 together with the lint-lane and
     # pre-commit pins (test_lint_job_environment.py holds them in lockstep).
     # The 2.3→2.4 boundary changed one measured behaviour: 2.4.0 stopped
@@ -219,7 +229,7 @@ dev = [
     # (`_HONOURED_BEFORE`) and passes under 2.4.0 (111 passed), and
     # `mypy --strict` with CI's exact invocation is clean on all 438 files.
     # Capped below 2.5 so one CI run measures one mypy.
-    "mypy>=2.4.0,<2.5",
+    "mypy>=2.4.1,<2.5",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
     # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
@@ -248,7 +258,7 @@ dev = [
     # floated only here.  test_every_gate_tool_is_pinned_coherently holds all
     # of them to the lock.
     "PyYAML>=6.0.3,<6.1",
-    "types-PyYAML>=6.0.12.20260906,<6.1",
+    "types-PyYAML>=6.0.12.20261030,<6.1",
     # Floor raised to the enforcement pin and capped below the next minor:
     # ci.yml pins bandit==1.9.4, and the suppression-hygiene premise tests
     # assert bandit's nosec attribution, which MOVED inside the old
@@ -279,7 +289,7 @@ dev = [
     # documented release target (`make dist` -> python -m build): "No
     # module named build".
     "build>=1.6.1",
-    "setuptools>=84.0.0",
+    "setuptools>=84.2.1",
     "wheel>=0.48.0",
 ]
 # Umbrella extra — aggregates the non-overlapping extras above via PEP 508
