@@ -188,7 +188,7 @@ textual pin holds: 74/74 in that module as root and as an unprivileged user.
 now name `qemu-user-binfmt`, a real package on 24.04 (depending on
 `qemu-user-static`) and the provider on 26.04. These lanes are gated by a
 change filter and did not run on `main`'s dispatch; this branch's C changes
-ran them.
+ran them. The one place a lane spelled the emulator's name out — the no-crypto lane's dispatcher check, `qemu-aarch64-static` — then failed on 26.04 with "command not found" (run 42248921079) while the three ctest lanes beside it passed through the toolchain file's `find_program` fallback to `qemu-aarch64`: 24.04's `qemu-user-static` ships the `-static` name, 26.04's `qemu-user` ships `qemu-aarch64` and no package carries the other. The step now makes the same lookup.
 
 **Not changed, stated:** the C-consumer job's `valgrind` install stalled on
 a 15.7 MB fetch from the Azure mirror twice at the same byte, in two jobs, at

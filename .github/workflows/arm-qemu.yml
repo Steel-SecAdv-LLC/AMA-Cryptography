@@ -213,7 +213,18 @@ jobs:
           EOF
           aarch64-linux-gnu-gcc -O1 /tmp/di.c -o /tmp/di_arm \
             -Lbuild-arm-nocrypto/lib -lama_cryptography
-          QEMU_CPU=max AMA_DISPATCH_VERBOSE=1 qemu-aarch64-static \
+          # The same lookup cmake/toolchains/aarch64-linux-gnu.cmake makes
+          # for ctest: 24.04's qemu-user-static ships qemu-aarch64-static,
+          # 26.04's qemu-user ships qemu-aarch64 and no package carries the
+          # -static name (measured on run 42248921079: this step alone, the
+          # one place the name was spelled out, failed with "command not
+          # found" while the three ctest lanes beside it passed).
+          QEMU_AARCH64="$(command -v qemu-aarch64-static || command -v qemu-aarch64)"
+          if [ -z "$QEMU_AARCH64" ]; then
+            echo "::error::neither qemu-aarch64-static nor qemu-aarch64 is on PATH" >&2
+            exit 1
+          fi
+          QEMU_CPU=max AMA_DISPATCH_VERBOSE=1 "$QEMU_AARCH64" \
             -L /usr/aarch64-linux-gnu \
             -E LD_LIBRARY_PATH="$PWD/build-arm-nocrypto/lib" \
             /tmp/di_arm 2>&1 | tee /tmp/di.txt
@@ -296,7 +307,7 @@ jobs:
             --lib build-arm-sve2/lib/libama_cryptography.so
 
       - name: Test at VL=${{ matrix.vl_bits }} bits
-        # QEMU_CPU reaches qemu-aarch64-static through binfmt, so every test
+        # QEMU_CPU reaches the qemu-aarch64 emulator through binfmt, so every test
         # binary ctest launches inherits the vector length.
         env:
           QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
