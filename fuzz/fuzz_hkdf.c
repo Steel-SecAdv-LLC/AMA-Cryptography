@@ -48,10 +48,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     const uint8_t *ikm = rest + salt_len;
     const uint8_t *info = rest + salt_len + ikm_len;
 
-    /* OKM length: 1 to 256 bytes (limited for fuzzing speed) */
+    /* OKM length: 1 to 256 bytes (limited for fuzzing speed), far inside
+     * HKDF's 255 * HashLen = 8160-byte ceiling, so no clamp is needed. */
     size_t okm_len = (okm_request % 256) + 1;
-    /* HKDF maximum is 255 * hash_len (255 * 32 = 8160) */
-    if (okm_len > 8160) okm_len = 8160;
 
     uint8_t okm1[256];
     uint8_t okm2[256];

@@ -58,12 +58,12 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_dilithium_invntt_bench` | 1 | — | — | — |
 | `ama_dilithium_invntt_bench_last_dispatch_get` | 1 | — | — | — |
 | `ama_dilithium_invntt_dispatch_slot_wired` | 1 | — | — | — |
-| `ama_dilithium_keypair` | 5 | 1 | — | 2 |
+| `ama_dilithium_keypair` | 6 | 1 | — | 2 |
 | `ama_dilithium_keypair_from_seed` | 1 | 1 | — | 1 |
 | `ama_dilithium_ntt_bench` | 1 | — | — | — |
 | `ama_dilithium_ntt_bench_last_dispatch_get` | 1 | — | — | — |
 | `ama_dilithium_ntt_dispatch_slot_wired` | 1 | — | — | — |
-| `ama_dilithium_sign` | 7 | 1 | — | 2 |
+| `ama_dilithium_sign` | 8 | 1 | — | 2 |
 | `ama_dilithium_sign_ctx` | 1 | — | — | 1 |
 | `ama_dilithium_verify` | 5 | 1 | — | 2 |
 | `ama_dilithium_verify_ctx` | 2 | — | — | 1 |

@@ -3222,15 +3222,19 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Parse arguments */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--measurements") == 0 && i + 1 < argc) {
-            g_measurements = atoi(argv[++i]);
+    /* Parse arguments.  A flag that takes a value consumes it, so the cursor
+     * advances by one or two; a while loop states that rather than bumping a
+     * for-loop counter from inside its body. */
+    int argi = 1;
+    while (argi < argc) {
+        const char *arg = argv[argi++];
+        if (strcmp(arg, "--measurements") == 0 && argi < argc) {
+            g_measurements = atoi(argv[argi++]);
             if (g_measurements < 1000) g_measurements = 1000;
-        } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
-            timeout_sec = atoi(argv[++i]);
-        } else if (argv[i][0] >= '0' && argv[i][0] <= '9') {
-            g_measurements = atoi(argv[i]);
+        } else if (strcmp(arg, "--timeout") == 0 && argi < argc) {
+            timeout_sec = atoi(argv[argi++]);
+        } else if (arg[0] >= '0' && arg[0] <= '9') {
+            g_measurements = atoi(arg);
             if (g_measurements < 1000) g_measurements = 1000;
         }
     }

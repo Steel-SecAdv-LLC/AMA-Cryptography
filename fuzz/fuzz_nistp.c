@@ -78,6 +78,161 @@ static ama_nist_curve_t pick_curve(uint8_t b) {
     }
 }
 
+static void fuzz_nistp_case_0(ama_nist_curve_t curve, const uint8_t *payload, size_t payload_len,
+                              size_t nb) {
+    /* The strict DER parser, with the canonical-encoding property.
+     *
+     * This is the classic parser target and the reason the harness exists:
+     * every rejection path in nistp_der_parse_int (long form, zero length,
+     * negative, non-minimal leading zero, over-long integer, trailing
+     * bytes) is driven by arbitrary bytes rather than by a vector someone
+     * wrote down. */
+    uint8_t raw[AMA_NISTP_MAX_PUBKEY_BYTES];
+    uint8_t again[AMA_NISTP_MAX_SIG_LEN];
+    size_t raw_len = sizeof(raw), again_len = sizeof(again);
+
+    if (ama_nistp_sig_der_to_raw(curve, payload, payload_len,
+                                 raw, &raw_len) != AMA_SUCCESS)
+        return;                              /* not a signature; fine */
+    if (raw_len != 2u * nb)
+        fail("sig_der_to_raw returned a raw signature of the wrong width");
+
+    if (ama_nistp_sig_raw_to_der(curve, raw, raw_len,
+                                 again, &again_len) != AMA_SUCCESS)
+        fail("a signature that parsed from DER could not be re-encoded");
+
+    /* Property 1. */
+    if (again_len != payload_len || memcmp(again, payload, again_len) != 0)
+        fail("DER is not canonical: a second encoding of one signature "
+             "was accepted (re-encoding differs from the input)");
+}
+
+static void fuzz_nistp_case_1(ama_nist_curve_t curve, const uint8_t *payload, size_t payload_len,
+                              size_t nb) {
+    /* The DER encoder from fuzzed raw bytes, then back.  Drives the
+     * minimal-integer path (leading-zero stripping, the 0x80 high-bit
+     * prefix) from the other side. */
+    uint8_t der[AMA_NISTP_MAX_SIG_LEN];
+    uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
+    size_t der_len = sizeof(der), back_len = sizeof(back);
+
+    if (payload_len < 2u * nb) return;
+    if (ama_nistp_sig_raw_to_der(curve, payload, 2u * nb,
+                                 der, &der_len) != AMA_SUCCESS)
+        return;
+    if (ama_nistp_sig_der_to_raw(curve, der, der_len,
+                                 back, &back_len) != AMA_SUCCESS)
+        fail("DER produced by the encoder was rejected by the parser");
+    if (back_len != 2u * nb || memcmp(back, payload, 2u * nb) != 0)
+        fail("raw -> DER -> raw did not return the original r || s");
+}
+
+static void fuzz_nistp_case_2(ama_nist_curve_t curve, const uint8_t *payload, size_t payload_len,
+                              size_t pub_len) {
+    /* The SEC 1 point decoder, with the encoding round trip (property 3). */
+    uint8_t pub[AMA_NISTP_MAX_PUBKEY_BYTES];
+    uint8_t enc[AMA_NISTP_MAX_PUBKEY_BYTES + 1];
+    uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
+    size_t enc_len;
+    int compressed;
+
+    if (ama_nistp_point_decode(curve, payload, payload_len, pub)
+            != AMA_SUCCESS)
+        return;                              /* not a point; fine */
+
+    /* A decoded point is on the curve, so it must validate. */
+    if (ama_nistp_pubkey_validate(curve, pub) != AMA_SUCCESS)
+        fail("point_decode accepted a point pubkey_validate rejects");
+
+    for (compressed = 0; compressed <= 1; compressed++) {
+        enc_len = sizeof(enc);
+        if (ama_nistp_point_encode(curve, pub, compressed, enc, &enc_len)
+                != AMA_SUCCESS)
+            fail("a decoded point could not be re-encoded");
+        if (ama_nistp_point_decode(curve, enc, enc_len, back) != AMA_SUCCESS)
+            fail("an encoding this library produced was rejected by its "
+                 "own decoder");
+        if (memcmp(back, pub, pub_len) != 0)
+            fail("point encode/decode did not return the same X || Y");
+    }
+}
+
+static void fuzz_nistp_case_3(ama_nist_curve_t curve, const uint8_t *payload, size_t payload_len,
+                              size_t pub_len) {
+    /* Fully fuzzed verify: digest, public key and DER signature all
+     * attacker-controlled, each from its own region of the input --
+     * digest (32) || public key (pub_len) || DER signature.  Drives
+     * nistp_load_point and the DER parser together, which is how they are
+     * reached in the field.  The digest used to be read from the first 32
+     * bytes of the public key itself, so the two were never independent
+     * and every verifying input signed its own key's x coordinate. */
+    const uint8_t *digest, *pub, *sig;
+    size_t sig_len;
+
+    if (payload_len < 32u + pub_len + 1u) return;
+    digest = payload;
+    pub = payload + 32u;
+    sig = pub + pub_len;
+    sig_len = payload_len - 32u - pub_len;
+
+    /* Any outcome is legal here; what matters is memory safety and that
+     * the two entry points do not disagree (property 2). */
+    if (ama_nistp_ecdsa_verify(curve, digest, 32u, pub, sig, sig_len)
+            == AMA_SUCCESS) {
+        uint8_t raw[AMA_NISTP_MAX_PUBKEY_BYTES];
+        size_t raw_len = sizeof(raw);
+
+        if (ama_nistp_sig_der_to_raw(curve, sig, sig_len, raw, &raw_len)
+                != AMA_SUCCESS)
+            fail("a DER signature that verified could not be converted to "
+                 "raw");
+        if (ama_nistp_ecdsa_verify_raw(curve, digest, 32u, pub,
+                                       raw, raw_len) != AMA_SUCCESS)
+            fail("a signature accepted in DER was rejected as raw r || s");
+    }
+}
+
+static void fuzz_nistp_case_4(ama_nist_curve_t curve, const uint8_t *payload, size_t payload_len,
+                              size_t pub_len) {
+    /* Public-key validation on arbitrary bytes.  Drives the canonical
+     * coordinate check and the curve equation; the identity encoding and
+     * out-of-field coordinates are both reachable from here. */
+    uint8_t enc[AMA_NISTP_MAX_PUBKEY_BYTES + 1];
+    uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
+    size_t enc_len = sizeof(enc);
+
+    if (payload_len < pub_len) return;
+    if (ama_nistp_pubkey_validate(curve, payload) != AMA_SUCCESS)
+        return;                              /* not a key; fine */
+
+    /* Property 4: validate and decode must agree. */
+    if (ama_nistp_point_encode(curve, payload, 1, enc, &enc_len)
+            != AMA_SUCCESS)
+        fail("a validated public key could not be compressed");
+    if (ama_nistp_point_decode(curve, enc, enc_len, back) != AMA_SUCCESS)
+        fail("the compression of a validated key failed to decode");
+    if (memcmp(back, payload, pub_len) != 0)
+        fail("compressing and decompressing a validated key changed it");
+}
+
+static void fuzz_nistp_case_default(ama_nist_curve_t curve, const uint8_t *payload,
+                                    size_t payload_len, size_t nb, size_t pub_len) {
+    /* Key derivation and ECDH from a fuzzed scalar.  The scalar range
+     * check ([1, n-1]) and the peer-key validation inside ECDH are the
+     * targets; both reject far more often than they accept. */
+    uint8_t pub[AMA_NISTP_MAX_PUBKEY_BYTES];
+    uint8_t shared[AMA_NISTP_MAX_FIELD_BYTES];
+
+    if (payload_len < nb) return;
+    if (ama_nistp_pubkey_from_privkey(curve, payload, pub) == AMA_SUCCESS) {
+        /* A derived key is on the curve by construction. */
+        if (ama_nistp_pubkey_validate(curve, pub) != AMA_SUCCESS)
+            fail("a public key this library derived does not validate");
+    }
+    if (payload_len >= nb + pub_len)
+        (void)ama_nistp_ecdh(curve, payload, payload + nb, shared);
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ama_nist_curve_t curve;
     const uint8_t *payload;
@@ -96,155 +251,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (nb == 0u || pub_len == 0u) return 0;   /* unreachable: curve is valid */
 
     switch (selector % 6u) {
-    case 0: {
-        /* The strict DER parser, with the canonical-encoding property.
-         *
-         * This is the classic parser target and the reason the harness exists:
-         * every rejection path in nistp_der_parse_int (long form, zero length,
-         * negative, non-minimal leading zero, over-long integer, trailing
-         * bytes) is driven by arbitrary bytes rather than by a vector someone
-         * wrote down. */
-        uint8_t raw[AMA_NISTP_MAX_PUBKEY_BYTES];
-        uint8_t again[AMA_NISTP_MAX_SIG_LEN];
-        size_t raw_len = sizeof(raw), again_len = sizeof(again);
-
-        if (ama_nistp_sig_der_to_raw(curve, payload, payload_len,
-                                     raw, &raw_len) != AMA_SUCCESS)
-            break;                              /* not a signature; fine */
-        if (raw_len != 2u * nb)
-            fail("sig_der_to_raw returned a raw signature of the wrong width");
-
-        if (ama_nistp_sig_raw_to_der(curve, raw, raw_len,
-                                     again, &again_len) != AMA_SUCCESS)
-            fail("a signature that parsed from DER could not be re-encoded");
-
-        /* Property 1. */
-        if (again_len != payload_len || memcmp(again, payload, again_len) != 0)
-            fail("DER is not canonical: a second encoding of one signature "
-                 "was accepted (re-encoding differs from the input)");
+    case 0:
+        fuzz_nistp_case_0(curve, payload, payload_len, nb);
         break;
-    }
-    case 1: {
-        /* The DER encoder from fuzzed raw bytes, then back.  Drives the
-         * minimal-integer path (leading-zero stripping, the 0x80 high-bit
-         * prefix) from the other side. */
-        uint8_t der[AMA_NISTP_MAX_SIG_LEN];
-        uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
-        size_t der_len = sizeof(der), back_len = sizeof(back);
-
-        if (payload_len < 2u * nb) break;
-        if (ama_nistp_sig_raw_to_der(curve, payload, 2u * nb,
-                                     der, &der_len) != AMA_SUCCESS)
-            break;
-        if (ama_nistp_sig_der_to_raw(curve, der, der_len,
-                                     back, &back_len) != AMA_SUCCESS)
-            fail("DER produced by the encoder was rejected by the parser");
-        if (back_len != 2u * nb || memcmp(back, payload, 2u * nb) != 0)
-            fail("raw -> DER -> raw did not return the original r || s");
+    case 1:
+        fuzz_nistp_case_1(curve, payload, payload_len, nb);
         break;
-    }
-    case 2: {
-        /* The SEC 1 point decoder, with the encoding round trip (property 3). */
-        uint8_t pub[AMA_NISTP_MAX_PUBKEY_BYTES];
-        uint8_t enc[AMA_NISTP_MAX_PUBKEY_BYTES + 1];
-        uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
-        size_t enc_len;
-        int compressed;
-
-        if (ama_nistp_point_decode(curve, payload, payload_len, pub)
-                != AMA_SUCCESS)
-            break;                              /* not a point; fine */
-
-        /* A decoded point is on the curve, so it must validate. */
-        if (ama_nistp_pubkey_validate(curve, pub) != AMA_SUCCESS)
-            fail("point_decode accepted a point pubkey_validate rejects");
-
-        for (compressed = 0; compressed <= 1; compressed++) {
-            enc_len = sizeof(enc);
-            if (ama_nistp_point_encode(curve, pub, compressed, enc, &enc_len)
-                    != AMA_SUCCESS)
-                fail("a decoded point could not be re-encoded");
-            if (ama_nistp_point_decode(curve, enc, enc_len, back) != AMA_SUCCESS)
-                fail("an encoding this library produced was rejected by its "
-                     "own decoder");
-            if (memcmp(back, pub, pub_len) != 0)
-                fail("point encode/decode did not return the same X || Y");
-        }
+    case 2:
+        fuzz_nistp_case_2(curve, payload, payload_len, pub_len);
         break;
-    }
-    case 3: {
-        /* Fully fuzzed verify: digest, public key and DER signature all
-         * attacker-controlled, each from its own region of the input --
-         * digest (32) || public key (pub_len) || DER signature.  Drives
-         * nistp_load_point and the DER parser together, which is how they are
-         * reached in the field.  The digest used to be read from the first 32
-         * bytes of the public key itself, so the two were never independent
-         * and every verifying input signed its own key's x coordinate. */
-        const uint8_t *digest, *pub, *sig;
-        size_t sig_len;
-
-        if (payload_len < 32u + pub_len + 1u) break;
-        digest = payload;
-        pub = payload + 32u;
-        sig = pub + pub_len;
-        sig_len = payload_len - 32u - pub_len;
-
-        /* Any outcome is legal here; what matters is memory safety and that
-         * the two entry points do not disagree (property 2). */
-        if (ama_nistp_ecdsa_verify(curve, digest, 32u, pub, sig, sig_len)
-                == AMA_SUCCESS) {
-            uint8_t raw[AMA_NISTP_MAX_PUBKEY_BYTES];
-            size_t raw_len = sizeof(raw);
-
-            if (ama_nistp_sig_der_to_raw(curve, sig, sig_len, raw, &raw_len)
-                    != AMA_SUCCESS)
-                fail("a DER signature that verified could not be converted to "
-                     "raw");
-            if (ama_nistp_ecdsa_verify_raw(curve, digest, 32u, pub,
-                                           raw, raw_len) != AMA_SUCCESS)
-                fail("a signature accepted in DER was rejected as raw r || s");
-        }
+    case 3:
+        fuzz_nistp_case_3(curve, payload, payload_len, pub_len);
         break;
-    }
-    case 4: {
-        /* Public-key validation on arbitrary bytes.  Drives the canonical
-         * coordinate check and the curve equation; the identity encoding and
-         * out-of-field coordinates are both reachable from here. */
-        uint8_t enc[AMA_NISTP_MAX_PUBKEY_BYTES + 1];
-        uint8_t back[AMA_NISTP_MAX_PUBKEY_BYTES];
-        size_t enc_len = sizeof(enc);
-
-        if (payload_len < pub_len) break;
-        if (ama_nistp_pubkey_validate(curve, payload) != AMA_SUCCESS)
-            break;                              /* not a key; fine */
-
-        /* Property 4: validate and decode must agree. */
-        if (ama_nistp_point_encode(curve, payload, 1, enc, &enc_len)
-                != AMA_SUCCESS)
-            fail("a validated public key could not be compressed");
-        if (ama_nistp_point_decode(curve, enc, enc_len, back) != AMA_SUCCESS)
-            fail("the compression of a validated key failed to decode");
-        if (memcmp(back, payload, pub_len) != 0)
-            fail("compressing and decompressing a validated key changed it");
+    case 4:
+        fuzz_nistp_case_4(curve, payload, payload_len, pub_len);
         break;
-    }
-    default: {
-        /* Key derivation and ECDH from a fuzzed scalar.  The scalar range
-         * check ([1, n-1]) and the peer-key validation inside ECDH are the
-         * targets; both reject far more often than they accept. */
-        uint8_t pub[AMA_NISTP_MAX_PUBKEY_BYTES];
-        uint8_t shared[AMA_NISTP_MAX_FIELD_BYTES];
-
-        if (payload_len < nb) break;
-        if (ama_nistp_pubkey_from_privkey(curve, payload, pub) == AMA_SUCCESS) {
-            /* A derived key is on the curve by construction. */
-            if (ama_nistp_pubkey_validate(curve, pub) != AMA_SUCCESS)
-                fail("a public key this library derived does not validate");
-        }
-        if (payload_len >= nb + pub_len)
-            (void)ama_nistp_ecdh(curve, payload, payload + nb, shared);
+    default:
+        fuzz_nistp_case_default(curve, payload, payload_len, nb, pub_len);
         break;
-    }
     }
 
     return 0;

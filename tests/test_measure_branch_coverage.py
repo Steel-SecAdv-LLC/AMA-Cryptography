@@ -155,8 +155,9 @@ call    0 returned 100%
 
 #: The two rows of ``x25519_scalarmult`` in ``src/c/ama_x25519.c`` that pick
 #: the MULX ladder (``use_mulx``), as this tree's coverage build reports them
-#: from the library's test object, and from ``tests/c/x25519_equiv_fe64.c``,
-#: which compiles the same source with ``x25519_scalarmult`` renamed.
+#: from the library's test object, and from the ``x25519_equiv_fe64`` object
+#: library (tests/c/CMakeLists.txt), which compiles the same source with
+#: ``x25519_scalarmult`` renamed.
 #: Excerpts: the header, the enclosing function's summary and the two rows,
 #: verbatim, with the paths shortened.
 LIBRARY_X25519 = """\
@@ -177,8 +178,8 @@ branch  3 taken 0%
 
 RENAMED_X25519 = """\
         -:    0:Source:/repo/src/c/ama_x25519.c
-        -:    0:Graph:x25519_equiv_fe64.c.gcno
-        -:    0:Data:x25519_equiv_fe64.c.gcda
+        -:    0:Graph:x25519_equiv_fe64.dir/ama_x25519.c.gcno
+        -:    0:Data:x25519_equiv_fe64.dir/ama_x25519.c.gcda
         -:    0:Runs:1
 function x25519_scalarmult_fe64 called 1024 returned 100% blocks executed 51%
     1024*:  426:    int use_mulx = (override_mode == -1) ? has_mulx : (override_mode != 0);
@@ -314,7 +315,7 @@ def test_a_function_grouped_in_one_unit_and_alone_in_another_merges(
 
 
 def test_one_function_compiled_under_two_names_merges(tool: ModuleType, tmp_path: Path) -> None:
-    """``x25519_equiv_fe64.c`` compiles ``ama_x25519.c`` with the ladder
+    """``x25519_equiv_fe64`` compiles ``ama_x25519.c`` with the ladder
     renamed; the ``use_mulx`` row's first arc is taken by the library's copy
     only.  Keyed by name the two copies would not merge, and the arc would be
     reported never taken although a suite takes it."""

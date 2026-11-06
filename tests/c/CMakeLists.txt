@@ -493,10 +493,36 @@ if(AMA_USE_NATIVE_PQC)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
        AND CMAKE_SIZEOF_VOID_P EQUAL 8
        AND NOT MSVC)
+        # Each side is src/c/ama_x25519.c itself, compiled as its own object
+        # with the field path forced and the ladder renamed, so the two link
+        # into one executable:
+        #   AMA_X25519_FORCE_FE51/FE64 -- pick that ladder regardless of host
+        #   AMA_X25519_NO_PUBLIC_API   -- skip the duplicate ama_x25519_* API
+        #   AMA_X25519_LADDER_LINKAGE  -- empty, i.e. external linkage
+        #   x25519_scalarmult          -- renamed to x25519_scalarmult_<side>
+        # x25519_equiv_ladders.h is force-included so the renamed ladder is
+        # defined against its prototype.  This used to be done by two wrapper
+        # TUs that #include'd the .c file; building the source directly keeps
+        # cpp/include-non-header meaningful for the rest of the tree.
+        foreach(_ama_fe fe51 fe64)
+            string(TOUPPER "${_ama_fe}" _ama_fe_uc)
+            add_library(x25519_equiv_${_ama_fe} OBJECT
+                ${CMAKE_SOURCE_DIR}/src/c/ama_x25519.c)
+            target_compile_definitions(x25519_equiv_${_ama_fe} PRIVATE
+                AMA_X25519_FORCE_${_ama_fe_uc}=1
+                AMA_X25519_NO_PUBLIC_API=1
+                "AMA_X25519_LADDER_LINKAGE="
+                x25519_scalarmult=x25519_scalarmult_${_ama_fe})
+            target_compile_options(x25519_equiv_${_ama_fe} PRIVATE
+                -include ${CMAKE_CURRENT_SOURCE_DIR}/x25519_equiv_ladders.h)
+            # The usage requirements the wrapper TUs got from linking
+            # ama_cryptography_test, and nothing more.
+            target_link_libraries(x25519_equiv_${_ama_fe} PRIVATE ama_cryptography_test)
+        endforeach()
         add_executable(test_x25519_field_equiv
             test_x25519_field_equiv.c
-            x25519_equiv_fe51.c
-            x25519_equiv_fe64.c
+            $<TARGET_OBJECTS:x25519_equiv_fe51>
+            $<TARGET_OBJECTS:x25519_equiv_fe64>
         )
         target_link_libraries(test_x25519_field_equiv ama_cryptography_test)
         add_test(NAME test_x25519_field_equiv COMMAND test_x25519_field_equiv)
@@ -1009,8 +1035,27 @@ endif()
 # own function, and requires one key, 256 distinct messages per pass, the same
 # 256 in every pass, and one sample per pass.  Built exactly where the harness
 # is built (POSIX timing, native PQC; see the top-level CMakeLists.txt).
+#
+# The harness is its own object library, built from the one source file the
+# benchmark_c_raw executable uses, with the two signer entry points and main
+# renamed by -D definitions; benchmark_c_raw_recorded.h is force-included so
+# each renamed symbol is defined against its prototype.  The test reaches the
+# row through benchmarks/benchmark_c_raw.h rather than by #include-ing the
+# harness source.
 if(NOT WIN32 AND AMA_USE_NATIVE_PQC)
+    add_library(benchmark_c_raw_recorded OBJECT
+        ${CMAKE_SOURCE_DIR}/benchmarks/benchmark_c_raw.c)
+    target_compile_definitions(benchmark_c_raw_recorded PRIVATE
+        _POSIX_C_SOURCE=200809L
+        ama_dilithium_sign=recording_dilithium_sign
+        ama_dilithium_keypair=recording_dilithium_keypair
+        main=benchmark_c_raw_main)
+    target_compile_options(benchmark_c_raw_recorded PRIVATE
+        -include ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_c_raw_recorded.h)
+    target_link_libraries(benchmark_c_raw_recorded PRIVATE ama_cryptography_test)
     add_ama_test(test_benchmark_mldsa_sign_pool test_benchmark_mldsa_sign_pool.c)
+    target_sources(test_benchmark_mldsa_sign_pool PRIVATE
+        $<TARGET_OBJECTS:benchmark_c_raw_recorded>)
     target_link_libraries(test_benchmark_mldsa_sign_pool m $<$<PLATFORM_ID:Linux>:rt>)
 endif()
 

@@ -3,8 +3,9 @@
 /**
  * fe51 vs fe64 byte-equivalence test for X25519 scalar multiplication.
  *
- * Two wrapper TUs (`x25519_equiv_fe{51,64}.c`) compile ama_x25519.c
- * twice with the field path forced via `AMA_X25519_FORCE_FE{51,64}`,
+ * Two object libraries (`x25519_equiv_fe{51,64}`, tests/c/CMakeLists.txt)
+ * compile ama_x25519.c twice with the field path forced via
+ * `AMA_X25519_FORCE_FE{51,64}`,
  * exposing `x25519_scalarmult_fe51` and `x25519_scalarmult_fe64` with
  * external linkage. This test runs both ladders against the same
  * 1024 random (clamped) scalars and the same random base points and
@@ -30,8 +31,8 @@
 #include <string.h>
 #include <time.h>
 
-/* External linkage — defined by the wrapper TUs, declared once in the header
- * both they and this file compile against. */
+/* External linkage — defined by the two equivalence objects, declared once in
+ * the header both they and this file compile against. */
 #include "x25519_equiv_ladders.h"
 
 #define N_VECTORS 1024

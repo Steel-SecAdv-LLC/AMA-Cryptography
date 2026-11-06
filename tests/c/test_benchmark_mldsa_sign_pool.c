@@ -15,9 +15,11 @@
  * messages and makes each sample one whole pass over it.
  *
  * Nothing about that is visible in a timing, which is noisy, so this test
- * does not time anything.  It compiles the harness itself (its main renamed)
- * with ama_dilithium_sign and ama_dilithium_keypair routed through recording
- * wrappers that still call the real functions, runs the row's own function,
+ * does not time anything.  It links a build of the harness itself (its main
+ * renamed; the benchmark_c_raw_recorded object library in tests/c/
+ * CMakeLists.txt) with ama_dilithium_sign and ama_dilithium_keypair routed
+ * through recording wrappers that still call the real functions, runs the
+ * row's own function,
  * and checks the calls:
  *
  *   1. one key per run -- the key half is redrawn per run by design;
@@ -37,13 +39,9 @@
  * Registered only where the harness itself is built (not WIN32, native PQC).
  */
 
-/* Before every #include, as in the harness: it uses clock_gettime, gmtime_r
- * and ctime_r, and its own definition would arrive after the headers below. */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
-
 #include "ama_cryptography.h"
+#include "benchmark_c_raw_recorded.h"
+#include "../../benchmarks/benchmark_c_raw.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -57,15 +55,21 @@ enum {
     MAX_MSG = 128
 };
 
+/* Every index the checks below read is under MAX_RECORDED by construction:
+ * the warm-up plus every timed pass fits, so the bound is a compile-time
+ * property of these constants, not a runtime branch. */
+_Static_assert(TEST_WARMUP + TEST_PASSES * EXPECTED_POOL <= MAX_RECORDED,
+               "g_msgs must hold the warm-up and every timed signature");
+
 static size_t g_sign_calls;
 static int g_keypair_calls;
 static uint8_t g_msgs[MAX_RECORDED][MAX_MSG];
 static size_t g_lens[MAX_RECORDED];
 static int g_overlong;
 
-static ama_error_t recording_dilithium_sign(uint8_t *signature, size_t *signature_len,
-                                            const uint8_t *message, size_t message_len,
-                                            const uint8_t *secret_key) {
+ama_error_t recording_dilithium_sign(uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key) {
     if (g_sign_calls < MAX_RECORDED) {
         if (message_len <= MAX_MSG) {
             memcpy(g_msgs[g_sign_calls], message, message_len);
@@ -78,23 +82,11 @@ static ama_error_t recording_dilithium_sign(uint8_t *signature, size_t *signatur
     return ama_dilithium_sign(signature, signature_len, message, message_len, secret_key);
 }
 
-static ama_error_t recording_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
+ama_error_t recording_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     g_keypair_calls++;
     return ama_dilithium_keypair(public_key, secret_key);
 }
 
-/* Route the harness's calls through the recorders.  ama_cryptography.h is
- * already included above, so its include guard keeps the harness's own
- * #include from re-declaring the real functions under the macro names. */
-int benchmark_c_raw_main(int argc, char **argv); /* the harness's main, renamed */
-
-#define ama_dilithium_sign recording_dilithium_sign
-#define ama_dilithium_keypair recording_dilithium_keypair
-#define main benchmark_c_raw_main
-#include "../../benchmarks/benchmark_c_raw.c"
-#undef main
-#undef ama_dilithium_keypair
-#undef ama_dilithium_sign
 
 static int g_failed;
 
@@ -145,7 +137,7 @@ int main(void) {
      * signs one fixed message is named as such rather than only as a count
      * mismatch. */
     const size_t window = timed < (size_t)EXPECTED_POOL ? timed : (size_t)EXPECTED_POOL;
-    if (first + window <= MAX_RECORDED) {
+    {
         size_t pairs = identical_pairs(first, window);
         CHECK(pairs == 0,
               "%zu pairs among the first %zu timed signatures sign the same message; "
@@ -155,7 +147,7 @@ int main(void) {
 
     /* Every pass: the same 256 distinct messages (in any order), so every
      * sample does the same work. */
-    if (timed == expected_timed && first + timed <= MAX_RECORDED) {
+    if (timed == expected_timed) {
         for (size_t p = 1; p < (size_t)TEST_PASSES; p++) {
             const size_t base_idx = first + p * EXPECTED_POOL;
             size_t pairs = identical_pairs(base_idx, EXPECTED_POOL);

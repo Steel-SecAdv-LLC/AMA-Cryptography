@@ -4,16 +4,17 @@
  * @file x25519_equiv_ladders.h
  * @brief The two renamed X25519 ladders used by the fe51/fe64 differential.
  *
- * `x25519_equiv_fe51.c` and `x25519_equiv_fe64.c` each compile
- * `src/c/ama_x25519.c` with one field path forced and `x25519_scalarmult`
- * #define-renamed, so both objects can be linked into one executable.  The
+ * The `x25519_equiv_fe51` and `x25519_equiv_fe64` object libraries
+ * (tests/c/CMakeLists.txt) each compile `src/c/ama_x25519.c` with one field
+ * path forced and `x25519_scalarmult` renamed by a -D definition, and
+ * force-include this header, so both objects link into one executable.  The
  * renamed symbols had no prototype at their definitions and were declared
  * with a local `extern` in `test_x25519_field_equiv.c` — so the signature the
  * test calls through and the signature the wrapper defines were two separate
  * transcriptions, on a differential whose entire purpose is to prove two
  * implementations agree byte for byte.
  *
- * One declaration, included by all three, so the compiler checks what the
+ * One declaration, seen by all three, so the compiler checks what the
  * comment was asserting.
  */
 #ifndef AMA_X25519_EQUIV_LADDERS_H

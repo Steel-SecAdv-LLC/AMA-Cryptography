@@ -22,9 +22,18 @@ than to an exit code the scanner never sets.
 
 Policy
 ------
-Block on any result whose effective SARIF level is ``error``.  ``warning`` and
-``note`` results are reported and do not block, matching how the Semgrep gate
-treats its WARNING-level constant-time advisories.
+Block on every result at SARIF level ``error``, ``warning`` or ``note`` —
+every finding CodeQL reports.  Only level ``none`` (SARIF's "not a problem")
+does not block, unless its rule carries a security rating at or above the
+floor below.
+
+Until 2026-11-06 ``warning`` and ``note`` were reported and passed, matching
+the Semgrep gate's WARNING-level advisories.  That let a ``note``
+(``py/print-during-import`` in ``tools/check_build_floor_coherence.py``) reach
+main with every check green, found only in the code-scanning UI after the
+merge (corrected per AGENTS.md 6.6).  The tree carries no CodeQL result at any
+level, so holding it there costs nothing and a new result of any level is
+seen in the PR that introduces it.
 
 SARIF puts a result's level in one of two places: on the result itself
 (``result.level``), or — far more often for CodeQL — only on the rule, in
@@ -40,8 +49,8 @@ scenario it most likely describes is an analysis step that did not run.
 
 Exit status
 -----------
-  0  no error-level results.
-  1  at least one error-level result, or the report could not be read.
+  0  no blocking result.
+  1  at least one blocking result, or the report could not be read.
 """
 
 from __future__ import annotations
@@ -53,7 +62,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 #: Levels that block. SARIF 2.1.0 defines: none, note, warning, error.
-BLOCKING_LEVELS = frozenset({"error"})
+BLOCKING_LEVELS = frozenset({"error", "warning", "note"})
 
 #: What the operator is told to do about a blocking result.
 #:
@@ -149,8 +158,9 @@ def findings(sarif: dict[str, Any]) -> list[tuple[str, str, str, str, float | No
 
 
 def blocks(level: str, security_severity: float | None) -> bool:
-    """Whether one result blocks: error level, or a security rating at or
-    above :data:`SECURITY_SEVERITY_FLOOR` regardless of level."""
+    """Whether one result blocks: any level in :data:`BLOCKING_LEVELS`, or a
+    security rating at or above :data:`SECURITY_SEVERITY_FLOOR` at level
+    ``none``."""
     if level in BLOCKING_LEVELS:
         return True
     return security_severity is not None and security_severity >= SECURITY_SEVERITY_FLOOR
@@ -209,8 +219,8 @@ def non_blocking(paths: Iterable[Path]) -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Fail on CodeQL results at error level, or with a security-severity "
-            f"rating of {SECURITY_SEVERITY_FLOOR:g} or higher at any level."
+            "Fail on every CodeQL result at error, warning or note level, and on a "
+            f"level-none result rated {SECURITY_SEVERITY_FLOOR:g} or higher."
         )
     )
     parser.add_argument(
@@ -240,8 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  {row}")
     if failures:
         print(
-            f"\nCODEQL SEVERITY GATE FAILED — {blocking} blocking result(s) (error level, "
-            f"or security-severity >= {SECURITY_SEVERITY_FLOOR:g}):\n",
+            f"\nCODEQL SEVERITY GATE FAILED — {blocking} blocking result(s) (error, "
+            f"warning or note level, or security-severity >= {SECURITY_SEVERITY_FLOOR:g}):\n",
             file=sys.stderr,
         )
         for row in failures:
@@ -249,7 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(REMEDY, file=sys.stderr)
         return 1
     print(
-        "PASS — no CodeQL result at error level or with security-severity "
+        "PASS — no CodeQL result at error, warning or note level, and none rated "
         f">= {SECURITY_SEVERITY_FLOOR:g}."
     )
     return 0

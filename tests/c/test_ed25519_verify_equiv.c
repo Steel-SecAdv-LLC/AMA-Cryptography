@@ -301,8 +301,8 @@ int main(void) {
             if (err != AMA_SUCCESS) tamper_rejects++;
         }
 
-        /* Tamper #3: flip a bit in the message. */
-        if (msg_len > 0) {
+        /* Tamper #3: flip a bit in the message (msg_len is in [1, 64]). */
+        {
             uint8_t bad_msg[64];
             memcpy(bad_msg, msg, msg_len);
             bad_msg[(size_t)t % msg_len] ^= 0x10;

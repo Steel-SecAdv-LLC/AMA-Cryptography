@@ -98,6 +98,147 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
     return 0;
 }
 
+static void fuzz_frost_case_0(uint8_t n, const uint8_t *shares) {
+    ama_error_t rc;
+    /* Exercise round1 for every participant — must not crash and must
+     * produce a valid Ed25519 compressed point. */
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t nonce_pair[64];
+        uint8_t commitment[64];
+        rc = ama_frost_round1_commit(
+            nonce_pair, commitment, shares + (size_t)i * 64);
+        if (rc != AMA_SUCCESS) __builtin_trap();
+    }
+}
+
+static void fuzz_frost_case_1(uint8_t threshold, const uint8_t *payload, size_t payload_len,
+                              size_t copy, const uint8_t *group_pk, const uint8_t *shares) {
+    ama_error_t rc;
+    /* Happy-path threshold sign, then verify with ama_ed25519_verify.
+     * Uses the first `threshold` participants. */
+    uint8_t signer_indices[FROST_FUZZ_MAX_N];
+    for (uint8_t i = 0; i < threshold; i++) signer_indices[i] = (uint8_t)(i + 1);
+
+    /* Every input from here on is honest: dealt, committed and signed by
+     * the library itself.  The fuzzer chooses only the message (and the
+     * RNG seed), and a FROST ceremony must complete for every message.
+     * So a refusal at ANY step below is a completeness failure, and it
+     * traps.  These steps used to `return 0` on failure, which made a
+     * message-dependent completeness break (round 2 and aggregation
+     * disagreeing on a challenge or a Lagrange coefficient, say)
+     * indistinguishable from a clean run: libFuzzer saw the same return
+     * either way, and the ama_ed25519_verify assertion at the end was
+     * never reached.  Keygen above is the one step allowed to refuse,
+     * because the input can legitimately cause it (a secret that
+     * reduces to zero mod l). */
+    uint8_t nonces[FROST_FUZZ_MAX_N * 64];
+    uint8_t commitments[FROST_FUZZ_MAX_N * 64];
+    for (uint8_t i = 0; i < threshold; i++) {
+        rc = ama_frost_round1_commit(
+            nonces + (size_t)i * 64,
+            commitments + (size_t)i * 64,
+            shares + (size_t)i * 64);
+        if (rc != AMA_SUCCESS) __builtin_trap();
+    }
+
+    const uint8_t *msg = payload + copy;
+    size_t msg_len = payload_len > copy ? payload_len - copy : 0;
+
+    uint8_t sig_shares[FROST_FUZZ_MAX_N * 32];
+    for (uint8_t i = 0; i < threshold; i++) {
+        rc = ama_frost_round2_sign(
+            sig_shares + (size_t)i * 32,
+            msg, msg_len,
+            shares + (size_t)i * 64,
+            signer_indices[i],
+            nonces + (size_t)i * 64,
+            commitments, signer_indices,
+            threshold, group_pk);
+        if (rc != AMA_SUCCESS) __builtin_trap();
+    }
+
+    /* INVARIANT-49: aggregation verifies every share, which needs each
+     * signer's PUBLIC key share — the second half of its dealt share,
+     * gathered in signer_indices order. */
+    uint8_t signer_public_shares[FROST_FUZZ_MAX_N * 32];
+    for (uint8_t i = 0; i < threshold; i++) {
+        memcpy(signer_public_shares + (size_t)i * 32,
+               shares + (size_t)i * 64 + 32, 32);
+    }
+
+    /* The standalone share check must accept every honest share, over
+     * the same inputs aggregation checks it against.  Case 2 feeds this
+     * entry point fuzzed bytes and asserts only that it does not crash;
+     * its completeness is asserted here. */
+    for (uint8_t i = 0; i < threshold; i++) {
+        rc = ama_frost_verify_share(
+            sig_shares + (size_t)i * 32, signer_indices[i],
+            signer_public_shares + (size_t)i * 32,
+            commitments, signer_indices, threshold,
+            msg, msg_len, group_pk);
+        if (rc != AMA_SUCCESS) __builtin_trap();
+    }
+
+    uint8_t signature[64];
+    uint8_t bad_index = 0xFF;
+    rc = ama_frost_aggregate(
+        signature, sig_shares, commitments,
+        signer_public_shares,
+        signer_indices, threshold,
+        msg, msg_len, group_pk, &bad_index);
+    /* Honest shares only: aggregation refusing them is a completeness
+     * failure, not a verdict on the input. */
+    if (rc != AMA_SUCCESS) __builtin_trap();
+    /* On success the blame channel must read "not attributable" (0).  A
+     * non-zero value alongside AMA_SUCCESS would mean the out-parameter
+     * is not being reset on entry, which is the stale-attribution bug
+     * the contract exists to exclude. */
+    if (bad_index != 0) __builtin_trap();
+
+    /* Aggregated FROST signature must verify as a standard Ed25519
+     * signature under the group public key. */
+    rc = ama_ed25519_verify(signature, msg, msg_len, group_pk);
+    if (rc != AMA_SUCCESS) __builtin_trap();
+}
+
+static void fuzz_frost_case_2(uint8_t threshold, const uint8_t *payload, size_t payload_len,
+                              const uint8_t *group_pk) {
+    /* Feed fully-fuzzed aggregate inputs to exercise input validation
+     * and commitment parsing. Must not crash regardless of input. */
+    size_t needed = (size_t)threshold * 32 + (size_t)threshold * 64 +
+                    (size_t)threshold * 32 + (size_t)threshold + 1;
+    if (payload_len < needed) return;
+
+    const uint8_t *sig_shares_raw = payload;
+    const uint8_t *commitments_raw = sig_shares_raw + (size_t)threshold * 32;
+    const uint8_t *public_shares_raw =
+        commitments_raw + (size_t)threshold * 64;
+    const uint8_t *signer_indices_raw =
+        public_shares_raw + (size_t)threshold * 32;
+    const uint8_t *msg_raw = signer_indices_raw + threshold;
+    size_t msg_len = payload_len - (size_t)(msg_raw - payload);
+
+    /* Fuzzed public key shares as well as fuzzed commitments: the share
+     * verification added for INVARIANT-49 decompresses both, so both are
+     * attacker-controlled inputs to point decoding and both belong in
+     * this arm. */
+    uint8_t signature[64];
+    uint8_t bad_index = 0;
+    ama_frost_aggregate(
+        signature, sig_shares_raw, commitments_raw,
+        public_shares_raw,
+        signer_indices_raw, threshold,
+        msg_raw, msg_len, group_pk, &bad_index);
+
+    /* The share-verification entry point takes the same fuzzed inputs
+     * directly; it is a public API surface of its own and must be
+     * equally crash-free. */
+    ama_frost_verify_share(
+        sig_shares_raw, signer_indices_raw[0], public_shares_raw,
+        commitments_raw, signer_indices_raw, threshold,
+        msg_raw, msg_len, group_pk);
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Need at least a selector + 4 struct bytes + one byte of payload. */
     if (size < 6) return 0;
@@ -133,143 +274,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (rc != AMA_SUCCESS) return 0;
 
     switch (selector % 3) {
-    case 0: {
-        /* Exercise round1 for every participant — must not crash and must
-         * produce a valid Ed25519 compressed point. */
-        for (uint8_t i = 0; i < n; i++) {
-            uint8_t nonce_pair[64];
-            uint8_t commitment[64];
-            rc = ama_frost_round1_commit(
-                nonce_pair, commitment, shares + (size_t)i * 64);
-            if (rc != AMA_SUCCESS) __builtin_trap();
-        }
+    case 0:
+        fuzz_frost_case_0(n, shares);
         break;
-    }
-    case 1: {
-        /* Happy-path threshold sign, then verify with ama_ed25519_verify.
-         * Uses the first `threshold` participants. */
-        uint8_t signer_indices[FROST_FUZZ_MAX_N];
-        for (uint8_t i = 0; i < threshold; i++) signer_indices[i] = (uint8_t)(i + 1);
-
-        /* Every input from here on is honest: dealt, committed and signed by
-         * the library itself.  The fuzzer chooses only the message (and the
-         * RNG seed), and a FROST ceremony must complete for every message.
-         * So a refusal at ANY step below is a completeness failure, and it
-         * traps.  These steps used to `return 0` on failure, which made a
-         * message-dependent completeness break (round 2 and aggregation
-         * disagreeing on a challenge or a Lagrange coefficient, say)
-         * indistinguishable from a clean run: libFuzzer saw the same return
-         * either way, and the ama_ed25519_verify assertion at the end was
-         * never reached.  Keygen above is the one step allowed to refuse,
-         * because the input can legitimately cause it (a secret that
-         * reduces to zero mod l). */
-        uint8_t nonces[FROST_FUZZ_MAX_N * 64];
-        uint8_t commitments[FROST_FUZZ_MAX_N * 64];
-        for (uint8_t i = 0; i < threshold; i++) {
-            rc = ama_frost_round1_commit(
-                nonces + (size_t)i * 64,
-                commitments + (size_t)i * 64,
-                shares + (size_t)i * 64);
-            if (rc != AMA_SUCCESS) __builtin_trap();
-        }
-
-        const uint8_t *msg = payload + copy;
-        size_t msg_len = payload_len > copy ? payload_len - copy : 0;
-
-        uint8_t sig_shares[FROST_FUZZ_MAX_N * 32];
-        for (uint8_t i = 0; i < threshold; i++) {
-            rc = ama_frost_round2_sign(
-                sig_shares + (size_t)i * 32,
-                msg, msg_len,
-                shares + (size_t)i * 64,
-                signer_indices[i],
-                nonces + (size_t)i * 64,
-                commitments, signer_indices,
-                threshold, group_pk);
-            if (rc != AMA_SUCCESS) __builtin_trap();
-        }
-
-        /* INVARIANT-49: aggregation verifies every share, which needs each
-         * signer's PUBLIC key share — the second half of its dealt share,
-         * gathered in signer_indices order. */
-        uint8_t signer_public_shares[FROST_FUZZ_MAX_N * 32];
-        for (uint8_t i = 0; i < threshold; i++) {
-            memcpy(signer_public_shares + (size_t)i * 32,
-                   shares + (size_t)i * 64 + 32, 32);
-        }
-
-        /* The standalone share check must accept every honest share, over
-         * the same inputs aggregation checks it against.  Case 2 feeds this
-         * entry point fuzzed bytes and asserts only that it does not crash;
-         * its completeness is asserted here. */
-        for (uint8_t i = 0; i < threshold; i++) {
-            rc = ama_frost_verify_share(
-                sig_shares + (size_t)i * 32, signer_indices[i],
-                signer_public_shares + (size_t)i * 32,
-                commitments, signer_indices, threshold,
-                msg, msg_len, group_pk);
-            if (rc != AMA_SUCCESS) __builtin_trap();
-        }
-
-        uint8_t signature[64];
-        uint8_t bad_index = 0xFF;
-        rc = ama_frost_aggregate(
-            signature, sig_shares, commitments,
-            signer_public_shares,
-            signer_indices, threshold,
-            msg, msg_len, group_pk, &bad_index);
-        /* Honest shares only: aggregation refusing them is a completeness
-         * failure, not a verdict on the input. */
-        if (rc != AMA_SUCCESS) __builtin_trap();
-        /* On success the blame channel must read "not attributable" (0).  A
-         * non-zero value alongside AMA_SUCCESS would mean the out-parameter
-         * is not being reset on entry, which is the stale-attribution bug
-         * the contract exists to exclude. */
-        if (bad_index != 0) __builtin_trap();
-
-        /* Aggregated FROST signature must verify as a standard Ed25519
-         * signature under the group public key. */
-        rc = ama_ed25519_verify(signature, msg, msg_len, group_pk);
-        if (rc != AMA_SUCCESS) __builtin_trap();
+    case 1:
+        fuzz_frost_case_1(threshold, payload, payload_len, copy, group_pk, shares);
         break;
-    }
-    case 2: {
-        /* Feed fully-fuzzed aggregate inputs to exercise input validation
-         * and commitment parsing. Must not crash regardless of input. */
-        size_t needed = (size_t)threshold * 32 + (size_t)threshold * 64 +
-                        (size_t)threshold * 32 + (size_t)threshold + 1;
-        if (payload_len < needed) return 0;
-
-        const uint8_t *sig_shares_raw = payload;
-        const uint8_t *commitments_raw = sig_shares_raw + (size_t)threshold * 32;
-        const uint8_t *public_shares_raw =
-            commitments_raw + (size_t)threshold * 64;
-        const uint8_t *signer_indices_raw =
-            public_shares_raw + (size_t)threshold * 32;
-        const uint8_t *msg_raw = signer_indices_raw + threshold;
-        size_t msg_len = payload_len - (size_t)(msg_raw - payload);
-
-        /* Fuzzed public key shares as well as fuzzed commitments: the share
-         * verification added for INVARIANT-49 decompresses both, so both are
-         * attacker-controlled inputs to point decoding and both belong in
-         * this arm. */
-        uint8_t signature[64];
-        uint8_t bad_index = 0;
-        ama_frost_aggregate(
-            signature, sig_shares_raw, commitments_raw,
-            public_shares_raw,
-            signer_indices_raw, threshold,
-            msg_raw, msg_len, group_pk, &bad_index);
-
-        /* The share-verification entry point takes the same fuzzed inputs
-         * directly; it is a public API surface of its own and must be
-         * equally crash-free. */
-        ama_frost_verify_share(
-            sig_shares_raw, signer_indices_raw[0], public_shares_raw,
-            commitments_raw, signer_indices_raw, threshold,
-            msg_raw, msg_len, group_pk);
+    case 2:
+        fuzz_frost_case_2(threshold, payload, payload_len, group_pk);
         break;
-    }
     }
 
     return 0;

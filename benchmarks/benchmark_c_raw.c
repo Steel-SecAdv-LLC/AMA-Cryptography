@@ -38,6 +38,7 @@
 
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
+#include "benchmark_c_raw.h"
 
 /* ============================================================================
  * FAIL-CLOSED CONTRACT
@@ -108,34 +109,7 @@ static double now_ns(void) {
  * STATISTICS
  * ============================================================================ */
 
-/* Row label storage.
- *
- * `name` is an in-struct array rather than a `const char *` on purpose.  The
- * pointer form forced every parameterised benchmark to park its label in a
- * function-local `static char labels[N][64]` rotated modulo N, because the
- * struct outlives the function that built the string.  Five such caches
- * existed with three different depths (8, 4, 2), each one silently correct
- * only while the number of call sites stayed below its own N — adding a fifth
- * AES-GCM size, say, would have made two rows share one label with nothing to
- * catch it.  Copying the label into the row removes the aliasing hazard by
- * construction, removes the statics, and removes the `strncpy(dst, src, 63)`
- * idiom that drew -Wstringop-truncation at -O2 in seven places.
- *
- * 64 bytes holds every label the harness produces (longest today:
- * "ML-KEM-1024 poly_reduce (dispatch)", 34 chars); compute_stats() copies with
- * snprintf, so an over-long future label truncates instead of overrunning. */
-#define BENCH_NAME_MAX 64
-
-typedef struct {
-    char name[BENCH_NAME_MAX];
-    double mean_ns;
-    double median_ns;
-    double stddev_ns;
-    double min_ns;
-    double max_ns;
-    double ops_per_sec;
-    int iterations;
-} bench_result_t;
+/* Row label storage and bench_result_t: see benchmark_c_raw.h. */
 
 static int cmp_double(const void *a, const void *b) {
     double da = *(const double *)a;
@@ -632,7 +606,7 @@ static bench_result_t bench_dilithium_keygen(int iters, int warmup) {
  * check stays out of the measurement window as everywhere else: inside the
  * pass only the first failing status is recorded, and it is acted on after
  * the closing now_ns(). */
-static bench_result_t bench_dilithium_sign(int passes, int warmup) {
+bench_result_t bench_dilithium_sign(int passes, int warmup) {
     uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
     uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
