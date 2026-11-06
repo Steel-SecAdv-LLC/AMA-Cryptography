@@ -883,6 +883,51 @@ def test_a_retry_after_a_stall_moves_to_the_other_mirrors(tmp_path: Path) -> Non
 
 
 @_LINUX_ONLY
+def test_the_copied_sources_are_readable_by_apt_s_unprivileged_methods(tmp_path: Path) -> None:
+    """The copy must live where the `_apt` user can reach it.
+
+    apt runs its acquire methods as `_apt`, and the runner's temp directory
+    is not traversable by it: the first version of the fallback wrote the
+    copy under $RUNNER_TEMP, and on run 42250760162 every retry failed with
+    `File not found - .../apt-mirrors.txt (13: Permission denied)` -- a stall
+    turned into a certain failure.  So, with no explicit location and a
+    0700 $RUNNER_TEMP (the runner's shape), the directory the script chooses
+    must not be under $RUNNER_TEMP, every component of its path must be
+    searchable by others, and the files must be readable by others.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir(mode=0o700)
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        RUNNER_TEMP=str(runner_temp),
+    )
+    assert r.returncode == 0, r.stderr
+    match = re.search(r"\(sources copied to (\S+)\)", r.stdout)
+    assert match, r.stdout
+    alt = Path(match.group(1))
+    try:
+        assert alt.is_dir()
+        assert runner_temp.resolve() not in alt.resolve().parents, alt
+        for component in [alt, *alt.parents]:
+            assert component.stat().st_mode & 0o001, f"{component} is not searchable by others"
+        for f in (
+            alt / "apt-mirrors.txt",
+            alt / "sources.list",
+            alt / "sources.list.d" / "ubuntu.sources",
+        ):
+            assert f.stat().st_mode & 0o004, f"{f} is not readable by others"
+        assert (alt / "sources.list.d").stat().st_mode & 0o001
+    finally:
+        shutil.rmtree(alt, ignore_errors=True)
+
+
+@_LINUX_ONLY
 def test_a_stall_with_no_other_mirror_retries_the_same_one_and_says_so(tmp_path: Path) -> None:
     """Moving mirrors is a change of destination, never a dropped attempt."""
     etc = _apt_etc_fixture(tmp_path)

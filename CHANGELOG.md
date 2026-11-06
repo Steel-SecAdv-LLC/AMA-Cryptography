@@ -138,7 +138,17 @@ host's. Where no list exists or nothing but the stalled host is on it, the
 retry says so and goes to the same mirror. This changes where a retry
 fetches from, never whether it is bounded or whether its failure fails the
 job. Two tests drive it through the runner image's exact apt layout and
-fail against the previous script (PIN); 77/77 in the module.
+fail against the previous script (PIN). **Corrected the same day (section
+6.6):** the first version wrote the copy under `$RUNNER_TEMP`, which apt's
+unprivileged `_apt` acquire user cannot traverse, and on run 42250760162
+every retry failed with `(13: Permission denied)` on the mirror list — a
+stall turned into a certain failure. Reproduced locally (the same list
+under a 0700 directory is refused, under a 0755 one it is read); the copy
+now goes to a `mktemp` directory under `/tmp` opened to 0755 with 0644
+files, and a third test, run with a 0700 `$RUNNER_TEMP` and no explicit
+location, requires the chosen path to lie outside it with every
+component searchable and every file readable by others; it fails against
+the first version (PIN). 78/78 in the module.
 
 **MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
 `libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs

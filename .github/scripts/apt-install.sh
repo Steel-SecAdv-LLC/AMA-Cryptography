@@ -197,8 +197,19 @@ APT_NET_OPTS=(
 # says so and goes to the same mirror as before: this changes WHERE a
 # retry fetches from, never whether it is bounded or whether its failure
 # fails the job.
+#
+# The copy lives under /tmp, NOT under $RUNNER_TEMP.  apt runs its acquire
+# methods as the unprivileged `_apt` user, and the runner's temp directory
+# is not traversable by it: the first version of this fallback wrote there,
+# and on run 42250760162 every retry failed with `File not found -
+# .../ama-apt-alt-sources/apt-mirrors.txt (13: Permission denied)` -- a
+# stall turned into a certain failure, worse than the retry it replaced
+# (corrected per AGENTS.md section 6.6).  Reproduced locally: the same list
+# under a 0700 directory is refused, under a 0755 one it is read.  mktemp's
+# directory is 0700, so it is opened to 0755 and the files to 0644; they
+# hold nothing but the host's own public sources.
 APT_ETC="${APT_ETC_DIR:-/etc/apt}"
-APT_ALT_DIR="${APT_ALT_SOURCES_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ama-apt-alt-sources}"
+APT_ALT_DIR="${APT_ALT_SOURCES_DIR:-}"
 APT_ALT_OPTS=()
 STALLED_HOST_PATTERN='azure\.archive\.ubuntu\.com'
 
@@ -211,8 +222,13 @@ prefer_other_mirrors() {
              "retry fetches from the same mirror"
         return 0
     fi
+    if [ -z "$APT_ALT_DIR" ]; then
+        APT_ALT_DIR="$(mktemp -d /tmp/ama-apt-alt-sources.XXXXXX)"
+    fi
     mkdir -p "$APT_ALT_DIR/sources.list.d"
+    chmod 0755 "$APT_ALT_DIR" "$APT_ALT_DIR/sources.list.d"
     grep -v "$STALLED_HOST_PATTERN" "$list" >"$APT_ALT_DIR/apt-mirrors.txt" || true
+    chmod 0644 "$APT_ALT_DIR/apt-mirrors.txt"
     if [ ! -s "$APT_ALT_DIR/apt-mirrors.txt" ]; then
         echo "apt-install.sh: $list names only the mirror that stalled; the" \
              "retry fetches from it again"
@@ -229,12 +245,14 @@ prefer_other_mirrors() {
     else
         : >"$APT_ALT_DIR/sources.list"
     fi
+    find "$APT_ALT_DIR" -type f -exec chmod 0644 {} +
     APT_ALT_OPTS=(
         -o "Dir::Etc::SourceList=$APT_ALT_DIR/sources.list"
         -o "Dir::Etc::SourceParts=$APT_ALT_DIR/sources.list.d"
     )
     echo "apt-install.sh: the stalled attempt fetched through $list; the" \
-         "retries use the other mirrors on it:" \
+         "retries use the other mirrors on it" \
+         "(sources copied to $APT_ALT_DIR):" \
          "$(awk '{print $1}' "$APT_ALT_DIR/apt-mirrors.txt" | tr '\n' ' ')"
 }
 
