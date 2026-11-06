@@ -238,11 +238,54 @@ sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* \
 # On a clean dpkg database both are no-ops.  Neither failure is fatal here:
 # the apt-get that follows reports what it makes of the database, and that
 # failure is the attempt's.
+# A wall-clock bound that reaches the whole process tree, not just the child.
+#
+# GNU timeout signals the process group it runs the command in.  The uutils
+# coreutils `timeout` that ubuntu-latest ships from 26.04 (0.10.0) signals the
+# direct child only.  Measured 2026-11-06 on that image, in the shape every
+# call below has (elevated, bounded, a script as the command): a TERM-ignoring
+# apt-get stand-in was SIGKILLed on schedule and its `sleep` child survived,
+# holding the step's pipes open -- which is how a wedged apt's http method
+# would outlive its bound and run the job into its own timeout, the stall
+# this script exists to prevent.  tests/test_apt_retry_gate.py's two
+# behavioural tests measured exactly that: the script exited inside its
+# budget and pytest waited on the orphan until TimeoutExpired.
+#
+# So the bounded command is started in its own session (setsid: new session
+# and process group, pgid = that pid; elevation keeps its children in it,
+# measured on the same image), the bound is applied exactly as before, and
+# whatever that group still holds afterwards is swept with SIGKILL.  The sweep
+# is a shell BUILTIN run elevated, because the external kill, elevated,
+# refused the group form (measured: `kill -KILL -- -<pgid>` exit 1 with
+# the orphan alive; the builtin, exit 0 and none), and it needs the privilege
+# the processes have.  The exit status is timeout's own: 124 on the bound,
+# 137 after the SIGKILL escalation, the command's otherwise.
+timeout_group() {
+    local bound="$1"
+    shift
+    local pid rc
+    setsid -w sudo timeout --kill-after="$KILL_AFTER" "$bound" "$@" &
+    pid=$!
+    wait "$pid"
+    rc=$?
+    # Sweep whatever the bound left in the session's process group.  The
+    # group is gone in the common case (the command finished or died with
+    # its children) and the look costs nothing.  Survivors we own die to the
+    # builtin; survivors the elevation made root's refuse it with EPERM, and
+    # only then is the elevated builtin asked -- so no elevated call happens
+    # unless there is something only it can kill.
+    if pgrep -g "$pid" >/dev/null 2>&1; then
+        kill -KILL -- "-$pid" 2>/dev/null ||
+            sudo bash -c 'kill -KILL -- "-$1"' _ "$pid" 2>/dev/null || true
+    fi
+    return "$rc"
+}
+
 recover_dpkg() {
     local bound="$1"
     local left
     local -a broken=()
-    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" dpkg --configure -a; then
+    if ! timeout_group "$bound" dpkg --configure -a; then
         echo "apt-install.sh: dpkg --configure -a did not complete; the" \
              "apt-get below reports the state it leaves" >&2
     fi
@@ -256,7 +299,7 @@ recover_dpkg() {
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
     echo "apt-install.sh: reinstalling what an interrupted attempt left" \
          "half-installed: ${broken[*]}"
-    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+    if ! timeout_group "$bound" \
             apt-get "${APT_NET_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
         echo "apt-install.sh: the reinstall did not complete; the apt-get" \
              "below reports the state it leaves" >&2
@@ -273,7 +316,7 @@ attempt_install() {
     left="$(budget_left)"
     if [ "$left" -le 0 ]; then return 124; fi
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+    timeout_group "$bound" \
         apt-get "${APT_NET_OPTS[@]}" update
     rc=$?
     # Propagate update's own status (124/137 mean a stalled mirror, and the
@@ -294,7 +337,7 @@ attempt_install() {
 install_only() {
     local bound="$1"
     shift
-    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+    timeout_group "$bound" \
         apt-get "${APT_NET_OPTS[@]}" install -y "$@"
 }
 

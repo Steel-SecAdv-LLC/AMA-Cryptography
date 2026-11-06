@@ -527,8 +527,23 @@ static void poly1305_update(poly1305_ctx *ctx, const uint8_t *data,
  * Constant-time final reduction and tag computation.
  */
 static void poly1305_final(poly1305_ctx *ctx, uint8_t tag[16]) {
-    /* Process any remaining partial block */
-    if (ctx->buf_len > 0) {
+    /* Process any remaining partial block.
+     *
+     * poly1305_update never leaves a full block buffered -- it absorbs at 16
+     * -- so on every reachable path 0 < buf_len < 16 here.  That bound lives
+     * in another function, though, and this one used to index `block` with
+     * buf_len on nothing stronger than `buf_len > 0`: correct by invariant,
+     * one byte out of bounds the day a caller breaks the invariant, and the
+     * reason clang 21's security.ArrayBound reported this line.  The two
+     * cases are now spelled out and each is the RFC 8439 Section 2.5.1 MAC
+     * input for that case: a full buffered block is a full block (high bit
+     * set, as the update path would have absorbed it) and a partial block
+     * is padded with 0x01 and absorbed with the high bit clear.  No branch
+     * indexes past `block` or `ctx->buf`, and nothing is silently dropped or
+     * clamped.  buf_len is message length, public. */
+    if (ctx->buf_len >= sizeof(ctx->buf)) {
+        poly1305_block(ctx, ctx->buf, 1);
+    } else if (ctx->buf_len > 0) {
         uint8_t block[16];
         /* Pre-zero with the secure scrub primitive — `block` will hold the
          * tail of the last absorbed message and is in the same scrub

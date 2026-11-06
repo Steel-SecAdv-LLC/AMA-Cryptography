@@ -29,6 +29,96 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### main made green again on the 26.04 runner image — 2026-11-06
+
+`main` at `702e253` — the signed `v5.0.0` commit — stopped passing its own
+CI when `ubuntu-latest` moved to Ubuntu 26.04.1 (gcc 15.2.0, clang 21.1.8,
+and `timeout` from uutils coreutils 0.10.0 in place of GNU). Measured by
+dispatching `static-analysis.yml` and `ci.yml` on unmodified `main` the same
+day: four workflows red, every failure below reproduced there, none caused
+by any open pull request. Each is fixed at source. No exemption, no skip, no
+widened allowlist.
+
+**Compiler warnings (gcc, clang, AArch64 cross) — five sites, all test code
+but one.** `tests/c/test_argon2id.c` initialised `uint8_t[16]` and `[8]`
+from string literals of exactly that length — legal C (C11 6.7.9p14 drops
+the NUL) that gcc 15 `-Wextra` and clang 21 now flag; the bytes are now
+`memcpy`'d, `sizeof` unchanged. `tests/c/test_ascon.c` applied `~` to a
+`uint8_t`, promoting to a negative `int` before `& 1u`; the operand is
+promoted to `unsigned` explicitly. `tests/c/test_base64.c` `malloc`'d one
+byte for the empty input and left it undefined, which gcc 15 Release tracked
+into the decode call; `calloc`. The one library site, `src/c/ama_kyber.c`
+`poly_basemul`, negated an `int16_t` zeta into `int` and narrowed back
+implicitly; the cast is explicit — zetas are public NTT constants and the
+object code is unchanged. Re-measured with the CI flags on gcc 13.3, gcc
+14.2, clang 18.1 and clang 19.1 locally (eight builds, None and Release+LTO)
+and on the runner's gcc 15.2 / clang 21.1: zero warnings outside the frozen
+allowlist on all of them.
+
+**clang-tidy: one finding, in Poly1305.** clang 21 promoted
+`alpha.security.ArrayBoundV2` to `security.ArrayBound` and reported
+`src/c/ama_chacha20poly1305.c:538`, `block[ctx->buf_len] = 0x01` on
+`uint8_t block[16]` guarded only by `buf_len > 0`. By construction
+`poly1305_update` never leaves a full block buffered — it absorbs at 16 — so
+`buf_len` is 1..15 here on every reachable path and the write is in bounds;
+but that bound lived in another function, and a caller that ever broke it
+would get a one-byte stack overrun inside the MAC. `poly1305_final` now
+states both cases: a full buffered block is absorbed as a full block with the
+high bit set (what `update` would have done), a partial one is padded with
+`0x01` and absorbed with it clear — RFC 8439 Section 2.5.1 in each branch,
+nothing dropped or clamped, and the index provably below 16. Treated at the
+higher classification until measured, per section 7; it is a latent defect,
+not a reachable one. Neither clang-tidy 19's alpha checker nor cppcheck
+reproduces the finding; ctest 157/157 and every ChaCha20-Poly1305 KAT sweep
+and the Wycheproof runner are green after the change.
+
+**MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
+`libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs
+`libunwind-18-dev`; added to both lanes' install lines. Verified on the
+runner: configure, build and the KAT run under MSan green.
+
+**`tools/check_secret_division.py`: `ama_argon2id_core` 10 divides against
+6 recorded.** The 6 was measured on gcc-13. gcc-14 reproduces the runner's
+10 exactly, and `objdump -d -l` on a `-g` Release build attributes every one:
+`ama_argon2.c:684` ×1 (`m_cost / (lanes * 4)`), `:536` ×3 (`J2 % lanes`),
+`:577` ×6 (`(start + z) % lane_length`). The newer gcc inlines
+`argon2_index_alpha` into more loop versions, so the same three public-
+operand expressions are emitted more times; no divide on any new operand.
+Recorded as 10 with that per-line inventory and both compiler versions, so
+the next move is diffable by line. Mutation-proven: one added divide on a
+runtime operand → 11 → the gate fails.
+
+**Two history-dependent tests, and the commits they need.** The 2026-08-14
+calibration commits (`7766faa`, `e7f378d`, `1c0cd29`, `5fe7edb`, `26df305`)
+and the 2026-10-08 snapshot commit (`1d8dab6a`) were recorded on pull-request
+branches and squash-merged; once those branches were deleted, `fetch-depth:
+0` — which fetches branches and tags, not `refs/pull/*` — no longer brought
+the objects, and the guards that passed on 2026-10-12 failed on an unmodified
+`main`. Each commit is now pinned by an annotated tag
+(`calibration/2026-08-14/p1`..`p5`, `benchmark-snapshot/2026-10-08`); a clone
+with tags has all six objects, `--no-tags` has none. Two new tests require
+every recorded measurement commit to be reachable from a tag or `main` — not
+merely present — and fail while the branch still exists, which is the moment
+it can still be fixed; deleting a tag fails them (PIN).
+
+**`apt-install.sh`: a bound that did not reach the process tree.** The two
+behavioural tests in `tests/test_apt_retry_gate.py` failed on every pytest
+leg: the script exited inside its budget and pytest then waited on an orphan
+until `TimeoutExpired`. Measured on the runner: uutils `timeout` signals its
+direct child only, where GNU signalled the process group, so a TERM-ignoring
+`apt-get` stand-in was SIGKILLed on schedule and its child survived — exactly
+how a wedged apt's http method would outlive its bound in production. Every
+bounded call now runs in its own session (`setsid`), and the session's
+process group is swept afterwards with a shell builtin — the external `kill`
+under sudo refused the group form — elevated only when the survivors are
+root's. Nothing else in the call shape changed, so every existing fake and
+textual pin holds: 74/74 in that module as root and as an unprivileged user.
+
+**Not changed, stated:** the C-consumer job's `valgrind` install stalled on
+a 15.7 MB fetch from the Azure mirror twice at the same byte, in two jobs, at
+the same minute, under a script that already carries `Acquire::*::Timeout`
+and bounded it correctly. That is the mirror, with evidence; the next run
+decides it.
 ### Three advisories closed at source, and the gate that could not see them — 2026-11-06
 
 Unifies Dependabot PRs #423, #425, #426 and #427 onto one branch and closes

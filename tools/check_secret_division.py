@@ -119,7 +119,18 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "function.",
     ),
     "ama_argon2id_core": (
-        6,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
+        # EXACT on the CI compiler.  gcc-13 -O3 emits 6; gcc-14.2 and gcc-15.2
+        # (ubuntu-latest since 2026-11) emit 10, every one attributed to source
+        # with `objdump -d -l` on a -g Release build (2026-11-06, x86-64):
+        #   ama_argon2.c:684  x1  segment_length = m_cost / (lanes * 4)
+        #   ama_argon2.c:536  x3  ref_lane = J2 % lanes
+        #   ama_argon2.c:577  x6  abs_index = (start + z) % lane_length
+        # The newer gcc inlines `argon2_index_alpha` into more loop versions, so
+        # the SAME three expressions are emitted more times; no divide on any
+        # new operand appeared, and line 574's `% lane_length` is folded on
+        # every compiler.  A count above 10, or a divide outside these three
+        # lines, is a new finding and must be attributed the same way.
+        10,
         "ama_argon2.c `argon2_index_alpha` (inlined into ama_argon2id_core): "
         "`ref_lane = J2 % lanes`. On Argon2id's data-INdependent phase J2 "
         "comes from the counter-driven address "
@@ -129,7 +140,11 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "its call site is a secret-indexed read into a multi-megabyte buffer — "
         "a far stronger channel than divide latency, on the same secret. "
         "Removing the divide would deviate from RFC 9106 without changing "
-        "the property. Recorded rather than silently dropped.",
+        "the property. Recorded rather than silently dropped. The other two "
+        "divisors, `lanes * ARGON2_SYNC_POINTS` (line 684) and `lane_length` "
+        "(line 577), are the public memory geometry; line 577's dividend "
+        "`start + z` is derived from J1 in the same two phases as J2 and "
+        "carries the same justification.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
         14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)

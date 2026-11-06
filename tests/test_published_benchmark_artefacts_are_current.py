@@ -253,3 +253,41 @@ def test_the_generator_escapes_a_bar_inside_a_cell() -> None:
         "45%",
         "PASS",
     ], line
+
+
+@pytest.mark.requires_git_history
+def test_the_snapshot_commit_is_pinned_by_a_tag_or_main(results: dict[str, Any]) -> None:
+    """``provenance.commit`` must be reachable from a tag or ``main``.
+
+    The test above only requires the object to be present; this one requires it
+    to be present for a reason that survives branch deletion.  Measured
+    2026-11-06: the 2026-10-08 snapshot was taken at ``1d8dab6a`` on pull
+    request #415's branch, squash-merged, and the branch deleted — after which
+    ``fetch-depth: 0`` could no longer bring the object and the presence test
+    failed on an unmodified ``main``.  It is pinned by the annotated
+    ``benchmark-snapshot/2026-10-08`` tag; a snapshot recorded at an unpinned
+    commit fails here while its branch still exists.
+    """
+    commit = cast("dict[str, Any]", results["provenance"])["commit"]
+    proc = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains",
+            commit,
+            "refs/tags",
+            "refs/remotes/origin/main",
+            "refs/heads/main",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"commit {commit[:12]} is not in this checkout (shallow clone)")
+    refs = [line for line in proc.stdout.splitlines() if line.strip()]
+    assert refs, (
+        f"snapshot commit {commit[:12]} is reachable from no tag and not from main; "
+        "tag it (benchmark-snapshot/<date>) so fetch-depth: 0 checkouts keep the object."
+    )

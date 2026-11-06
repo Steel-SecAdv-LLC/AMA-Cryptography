@@ -2991,3 +2991,70 @@ def test_every_extension_source_is_a_floored_path() -> None:
         )
 
     assert not [path for path in sources if not floored(path)], sources
+
+
+# ---------------------------------------------------------------------------
+# A measurement commit must be pinned by a ref that cannot be deleted in passing
+# ---------------------------------------------------------------------------
+
+#: Refs that outlive the branch a measurement was taken on: every tag, and main.
+_PINNING_REFS = ("refs/tags", "refs/remotes/origin/main", "refs/heads/main")
+
+
+def _pinning_refs_containing(commit: str) -> list[str]:
+    """Tags and main refs whose history contains ``commit`` (empty if none)."""
+    import benchmarks.check_baseline_justification as guard
+
+    listed = guard._run_git(
+        "for-each-ref", "--format=%(refname)", "--contains", commit, *_PINNING_REFS
+    )
+    return [line for line in listed.splitlines() if line.strip()]
+
+
+@pytest.mark.requires_git_history
+def test_every_calibration_commit_is_pinned_by_a_tag_or_main() -> None:
+    """Every commit ``metadata.calibration_evidence.runs`` names is reachable
+    from a tag or from ``main`` — not merely present in this checkout.
+
+    Measured 2026-11-06: the five calibration commits of the 2026-08-14 passes
+    were recorded on pull request #394's branch and squash-merged, so no branch
+    ever reached them after that branch was deleted.  ``fetch-depth: 0`` fetches
+    branches and tags, not ``refs/pull/*``, so the two history-dependent guards
+    in this file and ``test_published_benchmark_artefacts_are_current.py`` went
+    from passing (2026-10-12, branch still present) to failing (2026-11-06) on
+    an unmodified ``main`` — an object that was reachable only through a
+    deletable ref.  Each is now pinned by an annotated ``calibration/<date>/<pass>``
+    tag, and this test refuses the next measurement recorded at an unpinned
+    commit.  A commit reachable only from a feature branch fails here while that
+    branch still exists, which is the moment it can still be fixed.
+    """
+    import benchmarks.check_baseline_justification as guard
+
+    repo_root = Path(__file__).resolve().parent.parent
+    seen: set[str] = set()
+    for path in guard.ALL_BASELINE_PATHS:
+        baseline = repo_root / path
+        if not baseline.is_file():  # pragma: no cover - baseline absent
+            pytest.skip(f"{path} is not present in the working tree")
+        evidence = json.loads(baseline.read_text(encoding="utf-8"))["metadata"].get(
+            "calibration_evidence", {}
+        )
+        for key, entry in sorted((evidence.get("runs") or {}).items()):
+            match = guard._CALIBRATION_COMMIT_RE.search(str(entry))
+            assert match is not None, f"{path}: runs.{key} names no commit: {entry!r}"
+            commit = match.group(1)
+            if commit in seen:
+                continue
+            seen.add(commit)
+            try:
+                refs = _pinning_refs_containing(commit)
+            except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
+                pytest.skip(
+                    f"calibration commit {commit} ({path} runs.{key}) is not in this checkout"
+                )
+            assert refs, (
+                f"{path}: calibration commit {commit} (runs.{key}) is reachable from no tag and "
+                "not from main. It is pinned only by a branch, which can be deleted — tag it "
+                "(calibration/<recorded-date>/<pass>) so fetch-depth: 0 checkouts keep the object."
+            )
+    assert seen, "no calibration commits were found to check"

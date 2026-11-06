@@ -671,7 +671,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
+          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev libunwind-18-dev
 
       - name: Build with MSan (every SIMD kernel instrumented)
         # This lane configured -DAMA_ENABLE_SIMD=OFF from the day it was added,
@@ -1529,7 +1529,7 @@ jobs:
       # carry is in that script's header.
       - name: Install dependencies
         run: |
-          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
+          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev libunwind-18-dev
 
       - name: Configure with MSan (KAT-only, SIMD on, const-time AES)
         # SIMD was OFF here too, so the per-PR MSan coverage of the PQC KATs

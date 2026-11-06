@@ -311,8 +311,10 @@ static void test_parameter_validation(void) {
     /* RFC 9106 Sec 3.1 domain: out-of-range parameters are rejected,
      * never silently clamped to the nearest legal value.  Each row
      * below used to derive a tag under substituted parameters. */
-    const uint8_t salt16[16] = "argon2-validate!";
-    const uint8_t pw[8] = "password";
+    uint8_t salt16[16];
+    uint8_t pw[8];
+    memcpy(salt16, "argon2-validate!", sizeof(salt16));
+    memcpy(pw, "password", sizeof(pw));
     static const struct {
         size_t salt_len;
         uint32_t t_cost, m_cost, parallelism;
