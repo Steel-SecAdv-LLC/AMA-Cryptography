@@ -124,6 +124,22 @@ does not touch, reproduced identically in two lanes while a third succeeded
 on the same commit, which is the section 8 standard for an infrastructure
 conclusion.
 
+**`apt-install.sh`: a retry after a stall moves to the other mirrors.**
+Every stall this script has recorded was a transfer that trickled or hung
+on the runner's in-datacentre mirror, and every retry was the same request
+to the same host. The image lists `azure.archive.ubuntu.com` first and the
+public archive and security hosts after it, but apt's mirror method moves
+down the list only on an error, and a slow transfer is not one. Once a
+bounded attempt has ended in the bound's own status, the attempts after it
+read a copy of the image's sources whose mirror list omits that host,
+written under the job's temp directory and handed to apt by option;
+`/etc/apt` is never edited, and suites, components and keyring are the
+host's. Where no list exists or nothing but the stalled host is on it, the
+retry says so and goes to the same mirror. This changes where a retry
+fetches from, never whether it is bounded or whether its failure fails the
+job. Two tests drive it through the runner image's exact apt layout and
+fail against the previous script (PIN); 77/77 in the module.
+
 **MemorySanitizer, both lanes: `cannot find -lunwind`.** 26.04's
 `libc++abi-18` links against LLVM libunwind, so `-stdlib=libc++` now needs
 `libunwind-18-dev`; added to both lanes' install lines. Verified on the

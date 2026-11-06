@@ -241,7 +241,11 @@ def _fake_sudo(tmp_path: Path) -> Path:
             verb="$1"; shift
             args=()
             while [ "$#" -gt 0 ]; do
-              case "$1" in -o) shift 2 ;; *) args+=("$1"); shift ;; esac
+              case "$1" in
+                -o) [ -n "${FAKE_APT_LOG:-}" ] && echo "$verb $2" >> "${FAKE_APT_LOG}.options"
+                    shift 2 ;;
+                *) args+=("$1"); shift ;;
+              esac
             done
             set -- "$verb" "${args[@]}"
             [ -n "${FAKE_APT_LOG:-}" ] && echo "$1 $2" >> "$FAKE_APT_LOG"
@@ -792,6 +796,118 @@ def test_a_bounded_first_attempt_is_reported_as_a_stall_not_stale_lists(
     assert "stalled or slow mirror, not stale lists" in r.stdout, r.stdout
     assert "did not satisfy" not in r.stdout, r.stdout
     assert "libclang-rt-dev" in r.stdout
+
+
+def _apt_etc_fixture(tmp_path: Path) -> Path:
+    """The runner image's apt layout: a mirror list, and sources that use it.
+
+    actions/runner-images configure-apt-sources.sh writes exactly this
+    shape: azure.archive.ubuntu.com at priority 1, the public archive and
+    security hosts after it, and the deb822 `ubuntu.sources` pointing at the
+    list through `mirror+file:`.
+    """
+    etc = tmp_path / "etc-apt"
+    (etc / "sources.list.d").mkdir(parents=True)
+    mirrors = etc / "apt-mirrors.txt"
+    mirrors.write_text(
+        "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n"
+        "https://archive.ubuntu.com/ubuntu/\tpriority:2\n"
+        "https://security.ubuntu.com/ubuntu/\tpriority:3\n",
+        encoding="utf-8",
+    )
+    (etc / "sources.list.d" / "ubuntu.sources").write_text(
+        "Types: deb\n"
+        f"URIs: mirror+file:{mirrors}\n"
+        "Suites: resolute resolute-updates resolute-backports resolute-security\n"
+        "Components: main universe restricted multiverse\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n",
+        encoding="utf-8",
+    )
+    (etc / "sources.list").write_text(
+        "# Ubuntu sources have moved to ubuntu.sources\n", encoding="utf-8"
+    )
+    return etc
+
+
+@_LINUX_ONLY
+def test_a_retry_after_a_stall_moves_to_the_other_mirrors(tmp_path: Path) -> None:
+    """A retry is not the same request to the same mirror.
+
+    Six lanes on 2026-11-06 drew a runner whose azure.archive.ubuntu.com
+    fetch ran at a few hundred kB/s; every bounded attempt ended on the same
+    archive and every retry re-fetched it from the same host.  Once an
+    attempt has ended in the bound's own status, the attempts after it read
+    a copy of the image's sources whose mirror list omits that host, handed
+    to apt by option -- /etc/apt is never edited.  Suites, components and
+    keyring are copied through unchanged.
+    """
+    etc = _apt_etc_fixture(tmp_path)
+    alt = tmp_path / "alt"
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "the retries use the other mirrors on it" in r.stdout, r.stdout
+    # The copied list drops only the stalled host and keeps the order.
+    copied = (alt / "apt-mirrors.txt").read_text(encoding="utf-8").splitlines()
+    assert [ln.split("\t")[0] for ln in copied] == [
+        "https://archive.ubuntu.com/ubuntu/",
+        "https://security.ubuntu.com/ubuntu/",
+    ], copied
+    # The copied sources are the host's, pointed at the copied list.
+    sources = (alt / "sources.list.d" / "ubuntu.sources").read_text(encoding="utf-8")
+    assert f"URIs: mirror+file:{alt / 'apt-mirrors.txt'}" in sources
+    assert "Suites: resolute resolute-updates resolute-backports resolute-security" in sources
+    assert "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" in sources
+    assert (alt / "sources.list").read_text(encoding="utf-8").startswith("# Ubuntu sources")
+    # The host's files are untouched.
+    assert "azure.archive.ubuntu.com" in (etc / "apt-mirrors.txt").read_text(encoding="utf-8")
+    assert f"mirror+file:{etc / 'apt-mirrors.txt'}" in (
+        etc / "sources.list.d" / "ubuntu.sources"
+    ).read_text(encoding="utf-8")
+    # Every apt-get after the stall -- the refresh and the retried install --
+    # read the copy; the stalled first attempt did not.
+    options = (
+        (log / "..").resolve().joinpath("apt.log.options").read_text(encoding="utf-8").splitlines()
+    )
+    parts = f"Dir::Etc::SourceParts={alt / 'sources.list.d'}"
+    assert [o for o in options if parts in o] == [f"apt-get {parts}"] * 2, options
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2 and "apt-get update" in verbs, verbs
+
+
+@_LINUX_ONLY
+def test_a_stall_with_no_other_mirror_retries_the_same_one_and_says_so(tmp_path: Path) -> None:
+    """Moving mirrors is a change of destination, never a dropped attempt."""
+    etc = _apt_etc_fixture(tmp_path)
+    (etc / "apt-mirrors.txt").write_text(
+        "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n", encoding="utf-8"
+    )
+    alt = tmp_path / "alt"
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["cmake"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_FIRST_INSTALL_STALLS="1",
+        APT_ETC_DIR=str(etc),
+        APT_ALT_SOURCES_DIR=str(alt),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "names only the mirror that stalled" in r.stdout, r.stdout
+    assert not (alt / "sources.list.d").exists() or not any((alt / "sources.list.d").iterdir())
+    options_file = tmp_path / "apt.log.options"
+    assert "Dir::Etc::SourceParts" not in (
+        options_file.read_text(encoding="utf-8") if options_file.exists() else ""
+    )
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert verbs.count("apt-get install") == 2 and "apt-get update" in verbs, verbs
 
 
 @_LINUX_ONLY

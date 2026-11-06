@@ -170,6 +170,74 @@ APT_NET_OPTS=(
     -o Acquire::Retries=1
 )
 
+# WHY A RETRY MAY CHANGE MIRROR
+# -----------------------------
+# Every stall this script has recorded was a transfer that trickled or hung
+# on the runner's in-datacentre mirror, and every retry so far was the same
+# request to the same mirror -- the diagnosis the `update`-skipping arm
+# above was written from, and still true of the arm it added.  Measured on
+# 2026-11-06 (runs 42242159577, 42242159624, 42244243340, 42244243120): six
+# lanes drew a runner whose fetch from azure.archive.ubuntu.com ran at a few
+# hundred kB/s, each bounded attempt ended on the same multi-megabyte
+# archive, and every retry re-fetched it from the same host while a sibling
+# lane on the same commit installed the identical set at 31.9 MB/s.  The
+# image lists that mirror first and the public archive and security hosts
+# after it (actions/runner-images configure-apt-sources.sh), but apt's
+# mirror method only moves down the list on an error, and a slow transfer
+# is not an error.
+#
+# So once a bounded attempt has ended in a stall (exit 124 or 137), the
+# attempts after it read a copy of the image's sources that lists every
+# mirror BUT the one that stalled, written under the job's temp directory
+# and handed to apt by option -- /etc/apt itself is never edited.  The copy
+# is made from whatever the host has (deb822 `.sources`, one-line `.list`,
+# the top-level sources.list), with only the mirror-list reference changed,
+# so suites, components and signing keys are exactly the host's.  Where no
+# mirror list exists, or nothing but the stalled host is on it, the retry
+# says so and goes to the same mirror as before: this changes WHERE a
+# retry fetches from, never whether it is bounded or whether its failure
+# fails the job.
+APT_ETC="${APT_ETC_DIR:-/etc/apt}"
+APT_ALT_DIR="${APT_ALT_SOURCES_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ama-apt-alt-sources}"
+APT_ALT_OPTS=()
+STALLED_HOST_PATTERN='azure\.archive\.ubuntu\.com'
+
+prefer_other_mirrors() {
+    local list="$APT_ETC/apt-mirrors.txt"
+    local f
+    if [ "${#APT_ALT_OPTS[@]}" -ne 0 ]; then return 0; fi
+    if [ ! -s "$list" ]; then
+        echo "apt-install.sh: no mirror list at $list to move down; the" \
+             "retry fetches from the same mirror"
+        return 0
+    fi
+    mkdir -p "$APT_ALT_DIR/sources.list.d"
+    grep -v "$STALLED_HOST_PATTERN" "$list" >"$APT_ALT_DIR/apt-mirrors.txt" || true
+    if [ ! -s "$APT_ALT_DIR/apt-mirrors.txt" ]; then
+        echo "apt-install.sh: $list names only the mirror that stalled; the" \
+             "retry fetches from it again"
+        return 0
+    fi
+    for f in "$APT_ETC"/sources.list.d/*.sources "$APT_ETC"/sources.list.d/*.list; do
+        [ -f "$f" ] || continue
+        sed "s#mirror+file:$list#mirror+file:$APT_ALT_DIR/apt-mirrors.txt#g" "$f" \
+            >"$APT_ALT_DIR/sources.list.d/$(basename "$f")"
+    done
+    if [ -f "$APT_ETC/sources.list" ]; then
+        sed "s#mirror+file:$list#mirror+file:$APT_ALT_DIR/apt-mirrors.txt#g" \
+            "$APT_ETC/sources.list" >"$APT_ALT_DIR/sources.list"
+    else
+        : >"$APT_ALT_DIR/sources.list"
+    fi
+    APT_ALT_OPTS=(
+        -o "Dir::Etc::SourceList=$APT_ALT_DIR/sources.list"
+        -o "Dir::Etc::SourceParts=$APT_ALT_DIR/sources.list.d"
+    )
+    echo "apt-install.sh: the stalled attempt fetched through $list; the" \
+         "retries use the other mirrors on it:" \
+         "$(awk '{print $1}' "$APT_ALT_DIR/apt-mirrors.txt" | tr '\n' ' ')"
+}
+
 if [ "$ATTEMPTS" -lt 1 ]; then
     echo "apt-install.sh: APT_ATTEMPTS must be at least 1 (got $ATTEMPTS)" >&2
     exit 2
@@ -300,7 +368,7 @@ recover_dpkg() {
     echo "apt-install.sh: reinstalling what an interrupted attempt left" \
          "half-installed: ${broken[*]}"
     if ! timeout_group "$bound" \
-            apt-get "${APT_NET_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
+            apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
         echo "apt-install.sh: the reinstall did not complete; the apt-get" \
              "below reports the state it leaves" >&2
     fi
@@ -317,7 +385,7 @@ attempt_install() {
     if [ "$left" -le 0 ]; then return 124; fi
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
     timeout_group "$bound" \
-        apt-get "${APT_NET_OPTS[@]}" update
+        apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" update
     rc=$?
     # Propagate update's own status (124/137 mean a stalled mirror, and the
     # final-attempt diagnosis below reads them), never collapse it to 1.
@@ -338,7 +406,7 @@ install_only() {
     local bound="$1"
     shift
     timeout_group "$bound" \
-        apt-get "${APT_NET_OPTS[@]}" install -y "$@"
+        apt-get "${APT_NET_OPTS[@]}" "${APT_ALT_OPTS[@]}" install -y "$@"
 }
 
 # FIRST, WITHOUT `update`: every stall on record has been in `apt-get update`.
@@ -395,6 +463,7 @@ case "$fast_rc" in
              "package lists, exceeded its ${bound}s bound (exit ${fast_rc}:" \
              "a stalled or slow mirror, not stale lists) — refreshing them" \
              "and retrying: $*"
+        prefer_other_mirrors
         ;;
     *)
         echo "apt-install.sh: the image's package lists did not satisfy: $*" \
@@ -413,10 +482,13 @@ for attempt in $(seq 1 "$final"); do
     fi
     bound="$ATTEMPT_TIMEOUT"
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
-    if attempt_install "$bound" "$@"; then
+    attempt_rc=0
+    attempt_install "$bound" "$@" || attempt_rc=$?
+    if [ "$attempt_rc" -eq 0 ]; then
         echo "apt-install.sh: installed on attempt ${attempt}: $*"
         exit 0
     fi
+    case "$attempt_rc" in 124|137) prefer_other_mirrors ;; esac
     delay=$((attempt * BACKOFF_UNIT))
     left="$(budget_left)"
     if [ "$delay" -gt "$left" ]; then delay="$left"; fi
