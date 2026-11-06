@@ -68,6 +68,15 @@ int main(void) {
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
 #endif
+/* Apple libc puts strict-POSIX mode on the macros above and gates its
+ * BSD surface on `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`;
+ * test_dispatch_cache_file.c failed the `C Library (macos-latest, clang)`
+ * lane on `O_NOFOLLOW` for exactly that.  This file's mkdtemp(), nftw() and
+ * open() calls are kept on the same footing, as src/c/dispatch/ama_dispatch.c
+ * does for issetugid().  No-op on non-Apple platforms. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>

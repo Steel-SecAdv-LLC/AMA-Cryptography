@@ -44,6 +44,17 @@
  * is a superset of the line it replaces. */
 #define _XOPEN_SOURCE 700
 
+/* Apple libc hides O_NOFOLLOW (and mkdtemp) behind
+ * `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`, and the
+ * feature-test macro above puts it in strict-POSIX mode; the
+ * `C Library (macos-latest, clang)` lane failed on exactly that
+ * (`use of undeclared identifier 'O_NOFOLLOW'`).  _DARWIN_C_SOURCE
+ * re-exposes the BSD surface without lowering the POSIX baseline, as
+ * src/c/dispatch/ama_dispatch.c does for issetugid().  No-op elsewhere. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
