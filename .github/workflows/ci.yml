@@ -402,7 +402,7 @@ jobs:
       # -e -o pipefail fails the step at the pip error itself.
       shell: bash
       run: |
-        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
+        pip install "Cython>=3.3.0" "numpy>=1.24.0,<3.0.0"
         # [legacy] + [benchmark] supply PyCA cryptography / PyNaCl, and
         # pycryptodome backs the AES-GCM differential harness.  Without them the
         # cross-implementation validation tests (tests/test_differential.py,
@@ -727,10 +727,10 @@ jobs:
         #
         # Collection needs no native library and no editable install — verified
         # against a pristine checkout — so this stays a fast, tool-only job.
-        pip install "black==26.10.0" "ruff==0.16.10" "mypy==2.4.0" \
-                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260906" \
+        pip install "black==26.10.1" "ruff==0.17.3" "mypy==2.4.1" \
+                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20261030" \
                     "types-setuptools==84.0.0.20261006" \
-                    "pytest==9.1.1"
+                    "pytest==9.2.0"
 
     - name: Lint with ruff
       run: |
@@ -800,6 +800,35 @@ jobs:
       # shape, so the gate cannot decay into a no-op.
       run: |
         python tools/check_release_pins.py
+
+    - name: "Build-dependency floors agree everywhere (tools/check_build_floor_coherence.py)"
+      # check_release_pins.py above reads the floors pyproject.toml
+      # [build-system].requires and setup.py's _BUILD_REQS declare, but only to
+      # hold the release MANIFEST PINS at or above them.  It never compares the
+      # two declarations with each other, and nothing else did either, so a
+      # floor raised in one place and left behind in another was invisible to
+      # every gate in the tree.
+      #
+      # Measured, not hypothesised: Dependabot PR #427 raised setuptools for
+      # GHSA-xmj3-9gf7-h52w in the three requirement manifests and in the first
+      # line of the [build-system] comment, and left 84.0.0 in six other
+      # places -- including [build-system].requires itself, the line an
+      # isolated PEP 517 build resolves, and setup.py's preflight floor, the
+      # guard whose own comment says it "enforces the SAME value".  CI was
+      # green.  The same sweep found cmake installed at >=4.4.3 beneath a
+      # declared 4.4.4 in two lanes and Cython at >=3.0.0 beneath 3.3.0 in
+      # three, none of them new; setup.py carries a comment recording a third
+      # instance from earlier still.
+      #
+      # Four sites claim to state the floor IDENTICALLY and are held to
+      # equality; the manifests, extras and workflow installs state a minimum
+      # and are held at or above.  No exemption list (AGENTS.md section 10):
+      # a site either names a version for one of the five build packages or it
+      # does not.  tests/test_build_floor_coherence_gate.py restores each of
+      # the nine measured drifts and asserts this gate reports it, so it
+      # cannot decay into a no-op.
+      run: |
+        python tools/check_build_floor_coherence.py
 
     - name: "Every text-mode file access names its encoding (tools/check_text_encoding.py)"
       # Python's text I/O defaults to the locale codec: UTF-8 on Linux and
@@ -987,7 +1016,7 @@ jobs:
         # check in an unpinned release changes what the gate can catch with no
         # diff in this repository to review.  bandit matches
         # requirements-lock.txt.
-        pip install "pip-audit==2.10.1" "bandit==1.9.4" "PyYAML==6.0.3" "pytest==9.1.1"
+        pip install "pip-audit==2.10.1" "bandit==1.9.4" "PyYAML==6.0.3" "pytest==9.2.0"
 
     - name: Audit dependencies (strict, lock-file scoped)
       # Scope the audit to requirements-lock.txt — this project's pinned
@@ -1809,7 +1838,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
+        pip install "Cython>=3.3.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
     - name: Re-sign the integrity artefact for this build's native library

@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-12 |
+| Last Updated | 2026-11-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -33,6 +33,161 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > completion pass, with the measurements and rationale behind each change —
 > is kept verbatim in
 > [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+
+### Three advisories closed at source, and the gate that could not see them — 2026-11-06
+
+Unifies Dependabot PRs #423, #425, #426 and #427 onto one branch and closes
+the three open alerts. #425 (black 26.10.1) and #426 (setuptools 84.1.0) are
+strict subsets of #427 and carry nothing #427 does not; they are superseded,
+not merged twice.
+
+**GHSA-cg8m-r9f2-5wm2 / CVE-2026-114134 (black, High, CVSS 8.8).** The flaw is
+in black's *GitHub Action*: with `use_pyproject: true` it installs
+`tool.black.required-version` from `pyproject.toml` without validating it, so
+a pull request editing that key can run untrusted code. Measured: this
+repository uses no `psf/black` action anywhere in `.github/workflows/**` and
+declares no `required-version` key, so the exploit path is **not present
+here** — the honest statement (INVARIANT-16) is that the alert is closed by
+moving the floor to 26.10.1, not that an exposure was fixed. Black runs as a
+pinned `pip install` in two lint lanes and as a pre-commit rev.
+
+**GHSA-xmj3-9gf7-h52w (setuptools, CWE-22).** Windows path escape via a
+wheel's `.dist-info/namespace_packages.txt` during legacy wheel installation;
+every release from 38.2.2 is affected and 84.1.0 carries the fix. Two alerts
+(#10, #11) because setuptools is declared in more than one manifest — which is
+also why moving the lock alone does not close them. Taken to 84.2.1, the
+version #427 proposed.
+
+**What Dependabot left undone, and why no gate noticed.** #427 raised
+setuptools in `requirements-dev.txt`, `requirements-lock.txt` and
+`requirements-release-build.txt`, and rewrote the first line of the
+`[build-system]` comment to read 84.2.1. It left 84.0.0 — the affected
+version — in six other places: that same comment's own sentence naming the
+pinned value, `[build-system].requires` itself (the line an isolated PEP 517
+build resolves), the `[dev]` extra's build/packaging mirror, `setup.py`'s
+`_BUILD_REQS` preflight floor, `setup.py`'s `_REMEDY` string, and
+`static-analysis.yml`'s reproducible-wheel build install. Every gate passed.
+`tools/check_release_pins.py` reads both floor tables, but only to hold the
+release *manifest pins* at or above them; it never compares the two tables
+with each other, so a floor left behind is invisible to it and a manifest
+moving past a stale floor reads as compliance. All six are corrected here.
+
+**Two drifts already in the tree, same shape, neither new.** The sweep that
+found the above found `cmake>=4.4.3` installed beneath a declared floor of
+4.4.4 in `static-analysis.yml` and `integrity-anchor-check.yml`, and
+`Cython>=3.0.0` beneath a declared 3.3.0 in `ci.yml` (twice) and
+`ci-build-test.yml`. Classified Medium, not High: `setup.py`'s preflight still
+runs in each of those lanes, so a resolve below the floor aborts the next step
+with its FATAL rather than compiling — a latent outage and a false claim, not
+a bypass. `setup.py` carries a comment recording a third instance from before
+either ("bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched"), so
+this is a recurring defect class. All five lines corrected.
+
+**The mechanism (AGENTS.md section 5, section 10).**
+`tools/check_build_floor_coherence.py` reads the floors from
+`[build-system].requires` through `check_release_pins`'s own readers — never a
+second copy of the list — and compares every other declaration against them:
+equality for the four sites that claim in prose to state the *same* value
+(`_BUILD_REQS`, `_REMEDY`, and the two comment blocks), at-or-above for the
+sites that state a minimum (the extras, `requirements-dev.txt`, and every
+`pip install` in `.github/workflows/**`). Workflow text is parsed as YAML,
+shell comments are stripped quote-aware and arguments read with `shlex`, so
+`release.yml`'s deliberately historical commented install is not read as live.
+No exemption list: a site either names a version for one of the five build
+packages or it does not, and a bare `pip install setuptools` resolves the
+latest and declares no floor. Non-vacuity floors pin the live counts (5
+packages, 9 prose restatements, 5 remedy tokens, 11 manifest/extra floors, 15
+workflow floors across 15 workflows).
+
+Two corrections the mutation pass forced on the gate itself, recorded per
+section 6.6 because the first draft of it passed while reading less than it
+claimed. (1) It matched the bare word `pip`, so
+`/opt/python/cp311-cp311/bin/pip install` in `static-analysis.yml` — the one
+lane whose setuptools floor had actually drifted — was the one lane it could
+not see; it now matches a pip or python executable behind any path, and
+`<python> -m pip install` as well. (2) A floor restated in prose as a bare
+number ("the floor is pinned at 84.0.0") is unreadable to any checker, which
+is exactly the half of Dependabot's comment edit that would have slipped
+through. Both comment blocks now restate the floor as `<name> >= <version>`,
+the form the gate reads, and the convention is stated where it is relied on: a
+version named on its own is a historical fact about an upstream release, not a
+claim about this tree's floor. `tests/test_build_floor_coherence_gate.py`
+restores each of the nine measured drifts and asserts the gate reports it —
+PIN by mutation, all 25 cases — plus RANGE cases for what it deliberately does
+not claim, and a non-vacuity case that an emptied workflow directory fails.
+
+**Dependabot's PyKCS11 bump in #427 is rejected, not completed.** It raised
+the `[hsm]` floor from `>=1.5.18,!=1.5.19` to `!=1.5.19,>=1.5.20`, which
+removes 1.5.18 — the only Windows version with recorded green evidence in this
+repository — from the resolvable set, and leaves a `!=1.5.19` clause that is
+redundant beneath a 1.5.20 floor.
+`tests/test_hsm_integration.py::test_pykcs11_broken_windows_wheels_stay_excluded`
+exists to refuse exactly that ("the exclusion took the known-good 1.5.18 with
+it; Windows has nothing left to install") and fails on the bump. No advisory
+motivates it, and there is no measurement here that 1.5.20's Windows wheels
+work, so the specifier is kept as measured. The gate was right and the bot was
+wrong; the test is not relaxed.
+
+**Three restated pins in `tests/test_release_pins_gate.py`, the same defect
+class as the floors, in a file that had already recorded it.** Its
+`_live_cmake` helper carries the note *"Read, not restated: these tests used
+the literal `cmake>=4.4.3`, so the routine floor bump to 4.4.4 failed them
+while the gate itself was right"* — and three other tests in the same file
+still spelled out `setuptools==84.0.0` and `pip==26.2.1`, so this bump failed
+all three for exactly that reason (measured: 3 failed / 69 passed before, 72
+passed after). One `_live_pin(root, manifest, name)` reader now serves all
+three, so the next bump moves nothing there. Each site keeps the assertion
+that its mutation applied (`block is not None`, `count == 1`), so reading
+rather than restating does not make any of them vacuous.
+
+**Toolchain moved as one set,** because `test_lint_job_environment.py` holds
+the lock, the two workflow lint lanes, the pre-commit revs and the capped
+`[dev]` ranges in lockstep: black 26.10.0 → 26.10.1, ruff 0.16.10 → 0.17.3,
+mypy 2.4.0 → 2.4.1, pytest 9.1.1 → 9.2.0, types-PyYAML → 6.0.12.20261030,
+plus `ast_serialize` 0.13.1, `pluggy` 1.7.0 and `pip` 26.2.2 in the pinned
+sets. One behaviour moved with ruff: 0.17 stopped counting a trailing pragma
+comment toward E501, so three `# noqa: E501` directives became dead and are
+removed at source rather than kept (`docs/conf.py` ×2,
+`fuzz/python/fuzz_key_formats.py`) — ruff 0.17 also permits an import below a
+`sys.path` edit, which is why the new gate needs no E402 marker. Measured on
+the pinned set: black clean on 437 files, ruff clean, `mypy --strict` with
+CI's exact invocation clean on 437 files, `requirements-lock.txt` resolves.
+
+**AGENTS.md section 9's verification procedure could not produce a green
+suite, and now says so** (corrected per section 6.6, measured 2026-11-06 on a
+fresh clone). Its baseline was `cmake --build build`, `ctest`, `pytest
+tests/ -q`. A bare cmake build builds the native library *only*: it does not
+generate `ama_cryptography/_integrity_signature.py`, which is per-build,
+ephemeral and untracked (section 8 item 4). Without it fifteen tests across
+six modules fail — ten with `cannot import name '_integrity_signature'` and
+seventeen child processes with `No module named 'ama_cryptography'` — on an
+unmodified tree. Measured both ways: 15 failed / 11,084 passed / 189 skipped
+before `pip install -e . --no-build-isolation`, and the same six modules
+201/201 green after it. The install is now in the documented procedure with
+that measurement beside it, because an agent following the three old lines
+verbatim reaches fifteen red tests that are not defects and the usual next
+move is to investigate a product that is fine, or to call the suite flaky.
+The install also exercised the raised floors end to end: it resolved and
+built against setuptools 84.2.1, cmake 4.4.4, Cython 3.3.0 and numpy 2.4.4 —
+`setup.py`'s preflight accepting exactly the values this change declares.
+
+Known and left open, stated where it is measured: `types-setuptools` stays at
+84.0.0.20261006 while setuptools moves to 84.2.1. The stubs are not a
+`[build-system]` requirement, so this gate does not cover them, and
+`test_every_gate_tool_is_pinned_coherently` derives their cap from the lock
+rather than from setuptools; raising them is a separate change with its own
+`mypy --strict` re-measurement.
+
+### GitHub Actions group bump: 9 pins — 2026-11-06
+
+`actions/setup-python` v7.0.0 → v7.1.0, `actions/upload-artifact` v7.0.1 →
+v7.0.2, `actions/download-artifact` v8.0.1 → v8.0.2, `github/codeql-action/*`
+v4.39.0 → v4.39.1, `docker/login-action` v4.6.0 → v4.7.0, `pypa/cibuildwheel`
+v4.3.3 → v4.3.4, `pypa/gh-action-pypi-publish` v1.14.2 → v1.14.3,
+`trufflesecurity/trufflehog` v3.99.6 → v3.99.7 (Dependabot #423). Each is a
+40-hex SHA with its version comment re-derived; `tools/check_action_pins.py`
+(INVARIANT-24) resolves every SHA upstream and checks the comment names the
+tag that SHA belongs to.
 
 ### CodeQL #776-#781 closed at source in the signing-path suite — 2026-10-12
 

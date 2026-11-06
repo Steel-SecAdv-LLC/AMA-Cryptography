@@ -126,7 +126,7 @@ jobs:
         # without installing it: `No module named pytest`, exit 1, on a job
         # whose other two steps are plain scripts.  Pinned to the version
         # ci.yml installs so the two agree.
-        run: pip install "pytest==9.1.1"
+        run: pip install "pytest==9.2.0"
 
       - name: Every NIST/Ascon/POST vector must match its recorded digest
         # This repository's own pre-commit hooks rewrote these files.  The KAT

@@ -475,7 +475,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
+          pip install "Cython>=3.3.0" "numpy>=1.24.0,<3.0.0"
 
       # Pre-build the native C library so the install step can rely on
       # an already-populated ``build/`` directory. Mirrors the
@@ -813,10 +813,10 @@ jobs:
           # `mypy --strict tests/` types every pytest call as `Any` and its
           # verdict changes with whether pytest happens to be installed.
           # See the longer note in ci.yml::code-quality.
-          pip install "black==26.10.0" "ruff==0.16.10" "mypy==2.4.0" \
-                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260906" \
+          pip install "black==26.10.1" "ruff==0.17.3" "mypy==2.4.1" \
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20261030" \
                       "types-setuptools==84.0.0.20261006" \
-                      "pytest==9.1.1"
+                      "pytest==9.2.0"
 
       - name: Lint (ruff)
         run: ruff check .
