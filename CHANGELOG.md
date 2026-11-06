@@ -19,20 +19,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-10-08
-
-> **Released 2026-10-08.** Until 2026-09-24 this heading carried the date
-> 2026-09-10, on which no release was cut; dating it is part of cutting the
-> release, and `tools/check_release_state.py` refuses the tag while the
-> shipped documents still call the version unreleased. What follows is the
-> release notes: the dated audit passes of the release branch (#407) that
-> closed out the version, the behavioural and breaking changes at a glance,
-> then the Security, Fixed, Changed and Performance entries. The dated
-> development journal that accumulated in this file while 5.0.0 was prepared
-> — every maintenance, verification, constant-time, audit-remediation and
-> completion pass, with the measurements and rationale behind each change —
-> is kept verbatim in
-> [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
+> Work on `main` after the signed `v5.0.0` tag, which was applied on
+> 2026-10-13 at `702e253` and whose GitHub Release published the same day.
+> Entries below are **not** in the 5.0.0 artifacts. They were first written
+> under the `[5.0.0]` heading and moved here (section 6.6): every entry that
+> heading carries, including the 2026-10-11 and 2026-10-12 ones, predates the
+> tag and so is genuinely in the release; these two do not, and attributing
+> them to 5.0.0 was a claim that does not resolve against the published
+> artifact. `pyproject.toml` still declares 5.0.0; the next version number
+> is the maintainer's decision, not this entry's.
 
 ### Three advisories closed at source, and the gate that could not see them — 2026-11-06
 
@@ -188,6 +183,21 @@ v4.3.3 → v4.3.4, `pypa/gh-action-pypi-publish` v1.14.2 → v1.14.3,
 40-hex SHA with its version comment re-derived; `tools/check_action_pins.py`
 (INVARIANT-24) resolves every SHA upstream and checks the comment names the
 tag that SHA belongs to.
+
+## [5.0.0] - 2026-10-08
+
+> **Released 2026-10-08.** Until 2026-09-24 this heading carried the date
+> 2026-09-10, on which no release was cut; dating it is part of cutting the
+> release, and `tools/check_release_state.py` refuses the tag while the
+> shipped documents still call the version unreleased. What follows is the
+> release notes: the dated audit passes of the release branch (#407) that
+> closed out the version, the behavioural and breaking changes at a glance,
+> then the Security, Fixed, Changed and Performance entries. The dated
+> development journal that accumulated in this file while 5.0.0 was prepared
+> — every maintenance, verification, constant-time, audit-remediation and
+> completion pass, with the measurements and rationale behind each change —
+> is kept verbatim in
+> [`docs/changelog/5.0.0-development-journal.md`](docs/changelog/5.0.0-development-journal.md).
 
 ### CodeQL #776-#781 closed at source in the signing-path suite — 2026-10-12
 
