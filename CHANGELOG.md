@@ -71,7 +71,20 @@ instruction sequence.
   run on x86-64 and under QEMU on AArch64 with and without FEAT_DIT, fails
   on each of three planted defects.
 - **Not analysed:** AArch64 (no validated Valgrind run in this change),
-  AVX-512, VAES, AES-NI GCM; clang is measured locally, not in CI. Out of scope: power, EM,
+  AVX-512, VAES, AES-NI GCM; clang is measured locally, not in CI.
+- **Corrected after the first CI run (section 6.6).** Three defects in this
+  change, each fixed at source and each pinned by a test that fails without
+  the fix: (1) the condition-code spelling probes were paired with
+  disassembled lines by position, so MinGW's COFF section padding (39 lines
+  for 33 probes) failed all ten Windows pytest lanes; each probe is now read
+  back by its own label (ELF, COFF and Mach-O checked). (2) BRANCH was given
+  to the instruction that owned an exit statement, and gcc 15.2.0 on CI
+  produced a `je` whose guard ran under a neighbouring `jbe`, listed
+  unlabelled; BRANCH now follows data flow into exits, and a new OTHER bit
+  keeps an instruction whose result also feeds a register or memory from
+  being labelled a branch. (3) The tests that build and run the tool skipped
+  on every pytest lane; `security-checks` now runs them under
+  `AMA_CI_REQUIRE_MEMCHECK`. Out of scope: power, EM,
   acoustic, fault, speculative and frequency-scaling channels.
 
 ### Argon2id legacy verify: the verdict was a branch — 2026-11-07

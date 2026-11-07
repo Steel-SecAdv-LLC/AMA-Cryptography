@@ -163,10 +163,14 @@ def load_allowlist(isa: str) -> tuple[set[str], dict[str, str]]:
 #: Bits the tool reports per site.  DIV, FP and SQRT are the variable-latency
 #: classes both vendor lists exclude (no divide, no floating-point arithmetic,
 #: no square root is on Intel's DOIT list or on Arm's DIT list; Arm lists only
-#: FCSEL of scalar floating point).  BRANCH marks taint reaching a block exit
-#: or an indirect target: leakage class (a), which the Memcheck lane
-#: adjudicates bit-exactly and this gate only labels.
-CLASS_BITS = {"DIV": 1, "FP": 2, "SQRT": 4, "BRANCH": 8}
+#: FCSEL of scalar floating point).  BRANCH marks a tainted value the
+#: instruction used flowing into an exit guard or an indirect target -- leakage
+#: class (a), which the Memcheck lane adjudicates bit-exactly.  OTHER marks one
+#: flowing anywhere else (a register, memory, a helper).  Only a site with
+#: BRANCH and without OTHER is labelled a class (a) branch (:func:`is_branch_only`):
+#: an unlisted instruction whose result ALSO feeds a branch still has an operand
+#: whose latency is this gate's question, and must not be excused as a branch.
+CLASS_BITS = {"DIV": 1, "FP": 2, "SQRT": 4, "BRANCH": 8, "OTHER": 16}
 BLOCKING_CLASSES = ("DIV", "FP", "SQRT")
 
 _IROP = re.compile(r"\b(Iop_[A-Za-z0-9_]+)\b")
@@ -213,6 +217,7 @@ def generate_opclass_header(vex_header: Path) -> tuple[str, dict[str, int]]:
         "#define CT_CLASS_FP 2u",
         "#define CT_CLASS_SQRT 4u",
         "#define CT_CLASS_BRANCH 8u",
+        "#define CT_CLASS_OTHER 16u",
         "static UInt ct_op_class(IROp op)",
         "{",
         "    switch (op) {",
@@ -222,6 +227,11 @@ def generate_opclass_header(vex_header: Path) -> tuple[str, dict[str, int]]:
         lines.append(f"        return CT_CLASS_{cls};")
     lines += ["    default:", "        return 0;", "    }", "}", ""]
     return "\n".join(lines), {c: len(v) for c, v in by_class.items()}
+
+
+def is_branch_only(bits: int) -> bool:
+    """True when every tainted use the site made flowed into control flow."""
+    return bool(bits & CLASS_BITS["BRANCH"]) and not bits & CLASS_BITS["OTHER"]
 
 
 def class_names(bits: int) -> list[str]:
@@ -282,6 +292,45 @@ def aarch64_canonical(text: str) -> str:
     return mnemonic.upper()
 
 
+#: Label prefix the spelling probes are assembled under (see probe_texts).
+_PROBE_LABEL = "ctprobe_"
+_PROBE_HEADER = re.compile(r"^[0-9a-f]+ <" + _PROBE_LABEL + r"(\d+)>:$")
+
+
+def probe_texts(dump: str, count: int) -> list[str]:
+    """The one instruction under each ``ctprobe_<i>`` label of ``dump``, in order.
+
+    Fails unless every label is present and every probe but the last
+    disassembles to exactly one instruction: a probe the assembler expanded
+    or merged would otherwise map the wrong spelling.  Lines after the last
+    probe's instruction (section padding) are ignored by construction.
+    """
+    found: dict[int, list[str]] = {}
+    current: Optional[int] = None
+    for line in dump.splitlines():
+        head = _PROBE_HEADER.match(line.strip())
+        if head:
+            current = int(head.group(1))
+            found[current] = []
+            continue
+        if line.strip().endswith(">:"):
+            current = None  # some other symbol: nothing of ours follows
+            continue
+        match = _DISASM_LINE.match(line)
+        if current is not None and match and not match.group(2).startswith("<"):
+            found[current].append(match.group(2))
+    missing = [i for i in range(count) if not found.get(i)]
+    if missing:
+        raise RuntimeError(f"probe disassembly has no instruction under probe(s) {missing}")
+    expanded = [i for i in range(count - 1) if len(found[i]) != 1]
+    if expanded:
+        raise RuntimeError(
+            f"probe(s) {expanded} did not disassemble to exactly one instruction: "
+            + "; ".join(f"{i}: {found[i]}" for i in expanded)
+        )
+    return [found[i][0] for i in range(count)]
+
+
 def derive_x86_spellings(allowed: set[str], workdir: Path) -> dict[str, str]:
     """``{objdump spelling: list spelling}`` for listed mnemonics objdump renames.
 
@@ -299,10 +348,17 @@ def derive_x86_spellings(allowed: set[str], workdir: Path) -> dict[str, str]:
             probes.append((name, f"{name.lower()} al"))
     for name, lines in _X86_PROBES.items():
         probes.extend((name, line) for line in lines)
+    # Each probe sits under its own label and is read back BY that label, not
+    # by position.  Pairing the n-th probe with the n-th disassembled line held
+    # only while the object contained nothing but the probes: MinGW's `as`
+    # writes COFF and pads .text to its alignment, so objdump printed 39 lines
+    # for 33 probes and every Windows pytest lane failed (2026-11-07).  The
+    # padding now falls under the last label, after its one instruction.
     asm = workdir / "probe.s"
     obj = workdir / "probe.o"
     asm.write_text(
-        ".intel_syntax noprefix\n.text\n" + "".join(f"{line}\n" for _, line in probes),
+        ".intel_syntax noprefix\n.text\n"
+        + "".join(f"{_PROBE_LABEL}{i}:\n{line}\n" for i, (_, line) in enumerate(probes)),
         encoding="utf-8",
     )
     subprocess.run(["as", "-o", str(obj), str(asm)], check=True, capture_output=True)
@@ -312,11 +368,7 @@ def derive_x86_spellings(allowed: set[str], workdir: Path) -> dict[str, str]:
         capture_output=True,
         text=True,
     ).stdout
-    texts = [m.group(1) for m in re.finditer(r"^\s+[0-9a-f]+:\s+(.+)$", dump, re.MULTILINE)]
-    if len(texts) != len(probes):
-        raise RuntimeError(
-            f"probe disassembly returned {len(texts)} lines for {len(probes)} probes"
-        )
+    texts = probe_texts(dump, len(probes))
     spellings: dict[str, str] = {}
     for (name, _), text in zip(probes, texts):
         spellings[x86_canonical(text)] = name
@@ -775,7 +827,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for site, name, text in sorted(verdict.unlisted, key=lambda v: (v[1], v[0].obj, v[0].svma)):
             label = (
                 "class (a) branch: adjudicated by the Memcheck lane; "
-                if site.classes & CLASS_BITS["BRANCH"]
+                if is_branch_only(site.classes)
                 else ""
             )
             print(f"  - {name}: `{text}`  [{label}{_where(site)}]")

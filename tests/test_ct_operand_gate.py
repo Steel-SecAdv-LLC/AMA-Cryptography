@@ -25,6 +25,7 @@ in four distinct places, each pinned here:
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import platform
@@ -188,6 +189,52 @@ def test_condition_code_synonyms_are_learned_from_the_assembler(
     assert all(listed in allowed for listed in spellings.values())
 
 
+#: The shape GNU objdump prints for a MinGW (COFF) probe object: .text is
+#: padded to its alignment, so `nop`s follow the last probe's instruction.
+#: Pairing probes with lines by position read 39 lines for 33 probes on every
+#: Windows pytest lane (2026-11-07); this fixture is that shape, so the rule is
+#: held on every host, not only on one with an assembler.
+_COFF_PROBE_DUMP = """
+probe.o:     file format pe-x86-64
+
+Disassembly of section .text:
+
+0000000000000000 <ctprobe_0>:
+   0:\tcmove  rax,rbx
+
+0000000000000004 <ctprobe_1>:
+   4:\tsete   al
+   7:\tnop
+   8:\tnop
+   9:\tnop
+"""
+
+
+class TestProbeTexts:
+    def test_section_padding_after_the_last_probe_is_ignored(self, gate: ModuleType) -> None:
+        assert gate.probe_texts(_COFF_PROBE_DUMP, 2) == ["cmove  rax,rbx", "sete   al"]
+
+    def test_a_missing_probe_is_refused(self, gate: ModuleType) -> None:
+        with pytest.raises(RuntimeError, match=r"probe\(s\) \[2\]"):
+            gate.probe_texts(_COFF_PROBE_DUMP, 3)
+
+    def test_a_probe_that_is_not_one_instruction_is_refused(self, gate: ModuleType) -> None:
+        dump = _COFF_PROBE_DUMP.replace(
+            "   0:\tcmove  rax,rbx\n", "   0:\tcmove  rax,rbx\n   3:\tnop\n"
+        )
+        with pytest.raises(RuntimeError, match="exactly one instruction"):
+            gate.probe_texts(dump, 2)
+
+    def test_lines_under_another_symbol_are_not_read_as_a_probe(self, gate: ModuleType) -> None:
+        # Between two probes, where it would otherwise count as a second
+        # instruction of probe 0 and fail the one-instruction rule.
+        dump = _COFF_PROBE_DUMP.replace(
+            "\n0000000000000004 <ctprobe_1>:",
+            "\n0000000000000003 <other>:\n   3:\tud2\n\n0000000000000004 <ctprobe_1>:",
+        )
+        assert gate.probe_texts(dump, 2) == ["cmove  rax,rbx", "sete   al"]
+
+
 # ---------------------------------------------------------------------------
 # 3. IR classes and the verdict
 # ---------------------------------------------------------------------------
@@ -215,6 +262,7 @@ def test_op_class(gate: ModuleType, name: str, expected: str | None) -> None:
     assert gate.op_class(name) == expected
 
 
+@pytest.mark.requires_memcheck
 def test_the_generated_class_table_is_nonempty_for_the_installed_vex(gate: ModuleType) -> None:
     header = Path("/usr/include/valgrind/libvex_ir.h")
     if not header.is_file():
@@ -240,6 +288,25 @@ def _classify(gate: ModuleType, text: str, table: dict[int, str]) -> Any:
     return gate.classify(
         report, "x86_64", {"MOV", "DIV", "IMUL"}, {}, set(), disassembly={"obj": table}
     )
+
+
+@pytest.mark.parametrize(
+    ("bits", "expected"),
+    [
+        (["BRANCH"], True),
+        (["BRANCH", "OTHER"], False),
+        (["OTHER"], False),
+        ([], False),
+        (["BRANCH", "DIV"], True),
+    ],
+)
+def test_only_a_pure_branch_is_labelled_class_a(
+    gate: ModuleType, bits: list[str], expected: bool
+) -> None:
+    """An unlisted instruction whose result also reaches a register or memory
+    keeps an operand-latency question; only a pure branch defers to Memcheck."""
+    value = sum(gate.CLASS_BITS[b] for b in bits)
+    assert gate.is_branch_only(value) is expected
 
 
 class TestVerdict:
@@ -313,6 +380,12 @@ __attribute__((noinline)) double f_fp(int64_t a, double s) { return (double)a * 
 __attribute__((noinline)) double f_sqrt(double a) { return __builtin_sqrt(a); }
 __attribute__((noinline)) uint64_t f_mul(uint64_t a, uint64_t b) { return a * b; }
 __attribute__((noinline)) uint64_t g_div(uint64_t a, uint64_t b) { return a / b; }
+__attribute__((noinline)) int h_branch(uint64_t a, uint64_t b) {
+    int r;
+    __asm__ volatile("cmp %1, %2\n\tje 1f\n\tjbe 1f\n\tmov $0, %0\n\tjmp 2f\n"
+                     "1: mov $1, %0\n2:\n" : "=r"(r) : "r"(a), "r"(b) : "cc");
+    return r;
+}
 int main(void) {
     volatile uint64_t seed = 12345, seven = 7;
     volatile double scale = 1.5;
@@ -325,7 +398,8 @@ int main(void) {
     volatile double r3 = f_sqrt(r2);
     volatile uint64_t r4 = f_mul(secret, seven);
     volatile uint64_t r5 = g_div(declassified, seven);
-    (void)r1; (void)r2; (void)r3; (void)r4; (void)r5;
+    volatile int r6 = h_branch(secret, seven);
+    (void)r1; (void)r2; (void)r3; (void)r4; (void)r5; (void)r6;
     return 0;
 }
 """
@@ -373,6 +447,22 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
     assert not classes_in("f_mul") & {"DIV", "FP", "SQRT"}
     # A declassified value is public again: its divide is not recorded at all.
     assert not any(s.symbol.startswith("g_div+") for s in report.sites)
+    # A conditional jump on the secret is BRANCH and nothing else; the `cmp`
+    # feeding it writes the flags, which is a non-branch use (OTHER).
+    jumps = [
+        s
+        for s in report.sites
+        if s.symbol.startswith("h_branch+") and s.classes & gate.CLASS_BITS["BRANCH"]
+    ]
+    assert len(jumps) == 2 and all(gate.is_branch_only(s.classes) for s in jumps), [
+        (s.symbol, gate.class_names(s.classes)) for s in jumps
+    ]
+    compare = [
+        s
+        for s in report.sites
+        if s.symbol.startswith("h_branch+") and not s.classes & gate.CLASS_BITS["BRANCH"]
+    ]
+    assert compare and all(s.classes & gate.CLASS_BITS["OTHER"] for s in compare)
     blocking = {name for _, name, _ in verdict.class_violations}
     assert {"DIV", "CVTSI2SD", "MULSD", "SQRTSD"} <= blocking, blocking
 
@@ -417,6 +507,33 @@ def test_the_job_is_fail_closed_and_aggregated() -> None:
     assert "secret-operand-check" in workflow["jobs"]["dudect-gate"]["needs"]
     gate_script = "\n".join(s.get("run", "") for s in workflow["jobs"]["dudect-gate"]["steps"])
     assert "check secret-operand-check" in gate_script
+
+
+def test_the_instrument_tests_run_where_valgrind_is_provisioned() -> None:
+    """The tests that build and run the tool skip without valgrind's tool
+    headers, and no ordinary pytest lane installs them.  ci.yml's
+    security-checks job does, and runs ``-m requires_memcheck`` with
+    AMA_CI_REQUIRE_MEMCHECK set, which turns a skip into a failure
+    (INVARIANT-47): this module must be in that step and its tool tests must
+    carry the marker, or they pin nothing in CI."""
+    ci = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    steps = ci["jobs"]["security-checks"]["steps"]
+    step = next(s for s in steps if "-m requires_memcheck" in str(s.get("run", "")))
+    assert "tests/test_ct_operand_gate.py" in step["run"]
+    assert str((step.get("env") or {}).get("AMA_CI_REQUIRE_MEMCHECK")) == "1"
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    marked = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and any("requires_memcheck" in ast.unparse(d) for d in node.decorator_list)
+    }
+    assert {
+        "test_the_tool_reports_each_class_on_the_secret_sites_only",
+        "test_the_generated_class_table_is_nonempty_for_the_installed_vex",
+    } <= marked, marked
 
 
 def test_the_gate_scripts_are_in_both_path_filters() -> None:

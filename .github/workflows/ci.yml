@@ -1498,8 +1498,14 @@ jobs:
       # 5 and fails the step rather than passing on nothing.
       env:
         AMA_CI_REQUIRE_MEMCHECK: "1"
+      #
+      # tests/test_ct_operand_gate.py is here for the same reason: its tests
+      # that build and run the ctoperand Valgrind tool (the instrument behind
+      # dudect.yml's secret-operand-check) skipped on every pytest lane, so
+      # the tests that pin what the tool reports never ran in CI.
       run: |
-        python -m pytest tests/test_documentation_integrity_gates.py -m requires_memcheck -q
+        python -m pytest tests/test_documentation_integrity_gates.py \
+          tests/test_ct_operand_gate.py -m requires_memcheck -q
 
     - name: "Security-relevant constructions must match the code that implements them"
       # For an integrator, a cryptographic document IS the specification. When

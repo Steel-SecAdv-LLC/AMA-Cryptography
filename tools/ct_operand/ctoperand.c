@@ -213,10 +213,11 @@ typedef struct {
     IRSB   *out;
     IRTemp *sh;        /* shadow (Ity_I1) per original temp */
     Bool   *live;      /* original temp reaches an architectural effect */
+    Bool   *branchy;   /* original temp reaches an exit guard or the next address */
     Int     n_orig;
     Int     gs_off;    /* offset of shadow area 1 in the guest state */
     IRExpr *cons;      /* I1 atom: did the current instruction read taint? */
-    IRExpr *cls[4];    /* I1 atoms: taint reached a DIV / FP / SQRT op, a branch */
+    IRExpr *cls[5];    /* I1 atoms, one per CT_CLASS_* bit: DIV, FP, SQRT, BRANCH, OTHER */
     Addr    ip;        /* current guest instruction, 0 before the first IMark */
 } Env;
 
@@ -403,7 +404,7 @@ static void flush(Env *e)
 {
     if (e->ip != 0 && !is_false(e->cons)) {
         IRExpr *mask = IRExpr_Const(IRConst_U64(0));
-        for (Int k = 0; k < 4; k++) {
+        for (Int k = 0; k < 5; k++) {
             if (is_false(e->cls[k]))
                 continue;
             IRExpr *bit = assign(e, Ity_I64, IRExpr_Unop(Iop_1Uto64, e->cls[k]));
@@ -416,7 +417,7 @@ static void flush(Env *e)
         addStmtToIRSB(e->out, IRStmt_Dirty(d));
     }
     e->cons = F1();
-    for (Int k = 0; k < 4; k++)
+    for (Int k = 0; k < 5; k++)
         e->cls[k] = F1();
 }
 
@@ -424,7 +425,7 @@ static void flush(Env *e)
  * `taint`, for the current instruction. */
 static void note_class(Env *e, UInt bits, IRExpr *taint)
 {
-    for (Int k = 0; k < 4; k++)
+    for (Int k = 0; k < 5; k++)
         if (bits & (1u << k))
             e->cls[k] = or1(e, e->cls[k], taint);
 }
@@ -530,6 +531,7 @@ static void do_dirty(Env *e, IRStmt *st)
         }
     }
     consume(e, in);
+    note_class(e, CT_CLASS_OTHER, in);
     addStmtToIRSB(e->out, st);
     /* A dirty call's guard is always present; a constant-true one needs no
      * guarding of the shadow writes below. */
@@ -642,6 +644,38 @@ static void liveness(IRSB *in, Bool *live, Int n)
     }
 }
 
+/* Backward pass: which temporaries' values reach control flow -- an exit
+ * guard or the block's next address -- through other temporaries.  BRANCH is
+ * decided by this data flow, not by which instruction owns the exit
+ * statement: CI's gcc 15.2.0 build of poly_basemul showed a `je` whose
+ * consumption was recorded with no exit of its own (the guard it computed
+ * was evaluated under a neighbouring `jbe`), so tagging only the exit's
+ * instruction reported a conditional jump as an ordinary unlisted
+ * instruction (2026-11-07). */
+static void branch_flow(IRSB *in, Bool *branchy, Int n)
+{
+    for (Int i = 0; i < n; i++)
+        branchy[i] = False;
+    mark(branchy, n, in->next);
+    for (Int i = in->stmts_used - 1; i >= 0; i--) {
+        IRStmt *st = in->stmts[i];
+        if (st == NULL)
+            continue;
+        if (st->tag == Ist_Exit)
+            mark(branchy, n, st->Ist.Exit.guard);
+        else if (st->tag == Ist_WrTmp && branchy[st->Ist.WrTmp.tmp])
+            mark_expr(branchy, n, st->Ist.WrTmp.data);
+    }
+}
+
+/* Charge `taint` as a non-branch use: a register write, a store, a helper
+ * call, a guarded load, or an expression whose value reaches one of those. */
+static void consume_other(Env *e, IRExpr *taint)
+{
+    consume(e, taint);
+    note_class(e, CT_CLASS_OTHER, taint);
+}
+
 static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestLayout *layout,
                            const VexGuestExtents *vge, const VexArchInfo *archinfo,
                            IRType gWordTy, IRType hWordTy)
@@ -661,9 +695,11 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
         e.sh[i] = IRTemp_INVALID;
     e.live = VG_(malloc)("ct.live", (e.n_orig ? e.n_orig : 1) * sizeof(Bool));
     liveness(in, e.live, e.n_orig);
+    e.branchy = VG_(malloc)("ct.branchy", (e.n_orig ? e.n_orig : 1) * sizeof(Bool));
+    branch_flow(in, e.branchy, e.n_orig);
     e.gs_off = layout->total_sizeB;
     e.cons = F1();
-    for (Int k = 0; k < 4; k++)
+    for (Int k = 0; k < 5; k++)
         e.cls[k] = F1();
     e.ip = 0;
 
@@ -699,15 +735,21 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
                 use = sh_atom(&e, data->Iex.Load.addr);
             else if (data->tag == Iex_GetI)
                 use = sh_atom(&e, data->Iex.GetI.ix);
-            if (e.live[st->Ist.WrTmp.tmp])
-                consume(&e, use);
+            if (e.live[st->Ist.WrTmp.tmp]) {
+                if (e.branchy[st->Ist.WrTmp.tmp]) {
+                    consume(&e, use);
+                    note_class(&e, CT_CLASS_BRANCH, use);
+                } else {
+                    consume_other(&e, use);
+                }
+            }
             addStmtToIRSB(e.out, st);
             set_sh(&e, st->Ist.WrTmp.tmp, s);
             break;
         }
         case Ist_Put: {
             IRExpr *s = sh_atom(&e, st->Ist.Put.data);
-            consume(&e, s);
+            consume_other(&e, s);
             addStmtToIRSB(e.out, st);
             sh_put(&e, st->Ist.Put.offset,
                    sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.Put.data)), s);
@@ -716,7 +758,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
         case Ist_PutI: {
             IRPutI *p = st->Ist.PutI.details;
             IRExpr *s = or1(&e, sh_atom(&e, p->data), sh_atom(&e, p->ix));
-            consume(&e, s);
+            consume_other(&e, s);
             addStmtToIRSB(e.out, st);
             IRType ity = int_ty_of_size(sizeofIRType(p->descr->elemTy));
             IRRegArray *sd = mkIRRegArray(p->descr->base + e.gs_off, ity, p->descr->nElems);
@@ -726,7 +768,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
         case Ist_Store: {
             IRExpr *a = sh_atom(&e, st->Ist.Store.addr);
             IRExpr *s = sh_atom(&e, st->Ist.Store.data);
-            consume(&e, or1(&e, a, s));
+            consume_other(&e, or1(&e, a, s));
             addStmtToIRSB(e.out, st);
             call_st(&e, st->Ist.Store.addr,
                     sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.Store.data)), s, NULL);
@@ -736,7 +778,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
             IRStoreG *sg = st->Ist.StoreG.details;
             IRExpr *s = sh_atom(&e, sg->data);
             IRExpr *g = sh_atom(&e, sg->guard);
-            consume(&e, or1(&e, or1(&e, sh_atom(&e, sg->addr), s), g));
+            consume_other(&e, or1(&e, or1(&e, sh_atom(&e, sg->addr), s), g));
             addStmtToIRSB(e.out, st);
             call_st(&e, sg->addr, sizeofIRType(typeOfIRExpr(in->tyenv, sg->data)), s, sg->guard);
             break;
@@ -748,7 +790,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
             IRExpr *ls = or1(&e, call_ld(&e, lg->addr, sizeofIRType(tyArg)), sh_atom(&e, lg->addr));
             IRExpr *v = ite1(&e, lg->guard, ls, sh_atom(&e, lg->alt));
             v = or1(&e, v, sh_atom(&e, lg->guard));
-            consume(&e, v);
+            consume_other(&e, v);
             addStmtToIRSB(e.out, st);
             set_sh(&e, lg->dst, v);
             break;
@@ -760,7 +802,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
             IRExpr *ls = or1(&e, call_ld(&e, c->addr, total), sh_atom(&e, c->addr));
             IRExpr *in_t = or1(&e, or1(&e, sh_atom(&e, c->dataLo), sh_atom(&e, c->dataHi)),
                                or1(&e, sh_atom(&e, c->expdLo), sh_atom(&e, c->expdHi)));
-            consume(&e, or1(&e, ls, in_t));
+            consume_other(&e, or1(&e, ls, in_t));
             addStmtToIRSB(e.out, st);
             set_sh(&e, c->oldLo, ls);
             if (c->oldHi != IRTemp_INVALID)
@@ -773,12 +815,12 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
             if (st->Ist.LLSC.storedata == NULL) {
                 IRType ty = typeOfIRTemp(in->tyenv, st->Ist.LLSC.result);
                 IRExpr *ls = or1(&e, call_ld(&e, st->Ist.LLSC.addr, sizeofIRType(ty)), a);
-                consume(&e, ls);
+                consume_other(&e, ls);
                 addStmtToIRSB(e.out, st);
                 set_sh(&e, st->Ist.LLSC.result, ls);
             } else {
                 IRExpr *s = sh_atom(&e, st->Ist.LLSC.storedata);
-                consume(&e, or1(&e, a, s));
+                consume_other(&e, or1(&e, a, s));
                 addStmtToIRSB(e.out, st);
                 call_st(&e, st->Ist.LLSC.addr,
                         sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.LLSC.storedata)), s, NULL);
@@ -807,6 +849,7 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
     flush(&e);
     VG_(free)(e.sh);
     VG_(free)(e.live);
+    VG_(free)(e.branchy);
     return e.out;
 }
 

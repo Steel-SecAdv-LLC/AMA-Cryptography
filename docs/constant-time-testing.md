@@ -379,13 +379,23 @@ optimised before instrumentation (`--vex-iropt-level=0`), so an
 instruction's computation stays attached to its own address. Each record
 carries class bits taken from the VEX operation that consumed the taint:
 DIV, FP and SQRT, generated from the installed Valgrind VEX IR header by
-`check_ct_operand.op_class` (the op names say what they compute), and
-BRANCH for an exit guard or indirect target. The gate disassembles every
-recorded address with objdump (Intel syntax on x86-64, `-M no-aliases` on
-AArch64, so mnemonics are the architectural names the lists use; condition
-code synonyms such as `CMOVZ`/`cmove` are learned by assembling both
-spellings, not tabulated) and reports `symbol+offset`, the object, the
-execution count and the call chain.
+`check_ct_operand.op_class` (the op names say what they compute); BRANCH when
+a tainted value the instruction used flows, through IR temporaries, into an
+exit guard or an indirect target; and OTHER when one flows anywhere else (a
+register, memory, a helper). BRANCH is a property of that data flow, not of
+which instruction owns the exit statement: CI's gcc 15.2.0 build put a `je`
+in `poly_basemul` whose consumption was recorded with no exit of its own, and
+the first version of the tool, which tagged only the exit's instruction,
+printed it as an ordinary unlisted instruction. A site is labelled a class (a)
+branch only with BRANCH and without OTHER, so an unlisted instruction whose
+result also feeds a branch keeps its operand-latency question. The gate
+disassembles every recorded address with objdump (Intel syntax on x86-64,
+`-M no-aliases` on AArch64, so mnemonics are the architectural names the lists
+use; condition code synonyms such as `CMOVZ`/`cmove` are learned by
+assembling both spellings, each probe read back by its own label so that
+section padding cannot shift the pairing — positional pairing broke on
+MinGW's COFF output — and checked on ELF, COFF and Mach-O objects) and
+reports `symbol+offset`, the object, the execution count and the call chain.
 
 ### The verdict: one blocking half, one inventory
 
@@ -434,6 +444,17 @@ the eight targets those branches occur in, passes all eight, so they are
 over-approximation by this tool's coarser propagation, not secret branches.
 Every one is unlisted and open in the sense above.
 
+On **CI** (`ubuntu-latest`, Ubuntu 26.04, GNU 15.2.0, run `42394370852` at
+`27b321d`) every target passed the blocking criterion on the archive and on
+the `.so`. The inventory added `MOVHPS` and `MOVLHPS` in `kyber_cpapke_enc`,
+and a `je`/`jbe` pair in `poly_basemul` — branches the Memcheck lane in the
+same workflow passes on that build, so over-approximation again, and the
+case that showed BRANCH must follow data flow (the `je` was listed without
+the class (a) label). A **gcc 14.2.0** archive measured here passes 18/18
+with the gcc 13 set plus a third `MOVHLPS`. The inventory is a property of
+the compiler as much as of the source, which is the reason it is a
+measurement and not a list to block on.
+
 Clearing a row means changing the code generation (or obtaining a vendor
 statement), not adding it to a list.
 
@@ -451,7 +472,9 @@ decapsulation: the KyberSlash site), and was reverted after the run.
 | Multiply | `quotient * one`, `one` volatile | PASS by default (the vendor lists admit integer multiply); with `--deny IMUL,MUL,MULX --require-listed` FAIL; the planted run carries 44 two-register `imul` sites against the unplanted run's 20 under the same flags, and the 24 added are in `poly_compress` (16) and `kyber_decapsulate_internal` (8), the same 24 inlined copies the divide plant hit |
 
 `tests/test_ct_operand_gate.py` pins the instrument itself on a small
-program: a secret divide, a secret double multiply and a secret square root
+program (in CI from `ci.yml`'s `security-checks` job, the one pytest lane that
+installs Valgrind, under `AMA_CI_REQUIRE_MEMCHECK` so that a skip fails; until
+2026-11-07 these tests skipped on every pytest lane and pinned nothing in CI): a secret divide, a secret double multiply and a secret square root
 are reported with the right class, a secret multiply is consumed but in no
 blocking class, and a divide of a declassified value is not recorded.
 
@@ -460,8 +483,9 @@ blocking class, and a divide of a declassified value is not recorded.
 * **Analysed:** x86-64 under Valgrind's CPU model, which exposes AVX2 and
   not AVX-512: the default dispatch wiring on that model (AVX2 Kyber and
   ML-DSA NTT, the BMI2 scalar Keccak, the AVX2 Ed25519 niels-select fold,
-  scalar X25519), on the archive and the shipped `.so` with gcc 13.3.0, and
-  on the archive with clang 18.1.3 (measured here; CI runs gcc only).
+  scalar X25519), on the archive and the shipped `.so` with gcc 13.3.0 and,
+  in CI, gcc 15.2.0; and on the archive with gcc 14.2.0 and clang 18.1.3
+  (measured here, not in CI).
 * **Not analysed:** every AVX-512 and VAES kernel (Valgrind does not
   implement AVX-512, and no hosted runner is guaranteed to carry it);
   the AES-NI / PCLMULQDQ AES-GCM kernels (the AES-GCM drivers force the
