@@ -29,6 +29,51 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### Secret operands at variable-latency instructions: a gate for class (c) — 2026-11-07
+
+The constant-time gates saw secret-dependent branches and addresses
+(Memcheck taint), instruction-sequence differences (callgrind counts) and
+divide instructions in the object (KyberSlash inventory), and said in their
+own documentation that they could not see a secret **operand** of a fixed
+instruction sequence.
+
+- **Allowlists, from the vendors.** `tools/ct_operand/allowlists.json`:
+  Intel's Data Operand Independent Timing list (594 mnemonics) and Arm's DIT
+  list (651, SME omitted), each with URL, retrieval date and the way it was
+  read and cross-checked; no entry written from memory. Neither admits a
+  divide, floating-point arithmetic or a square root; both admit integer
+  multiply, in their timing mode.
+- **Instrument.** `tools/ct_operand/ctoperand.c`, a Valgrind tool on VEX IR
+  that runs the existing taint drivers unchanged (Memcheck's client
+  requests, the same `AMA_CT_DECLASSIFY` points) and records every
+  instruction that consumes a tainted operand, with the IR class of the
+  consuming operation. `tools/check_ct_operand.py` maps each to its mnemonic
+  and location. `check_ghash_constant_time.build_driver` is the shared
+  driver build.
+- **Verdict.** Blocking with no exemption: a secret reaching a DIV, FP or
+  SQRT operation. Inventory, not blocking: consuming mnemonics the vendor
+  list does not name (`rep movsq`, `leave`, `cwde`, `shufps`, `movhlps`, and
+  two branches that are class (a)), reviewed in
+  `docs/constant-time-testing.md`; blocking on them would need a standing
+  exemption list (AGENTS.md section 10).
+- **Measured.** All 18 taint targets on the archive and the 10 shipped-object
+  targets on the LTO `.so` pass the blocking criterion (gcc 13.3.0, x86-64),
+  and all 18 on a clang 18.1.3 archive.
+  A divide, a double multiply and a square root planted in
+  `kyber_compress_d_impl` each fail at the planted instructions; a planted
+  multiply passes and, once multiplies are denied, is reported at its 24
+  inlined copies (44 two-register `imul` sites against 20 unplanted).
+- **Runtime mode.** `ama_ct_hw_mode_status` / `_enable` / `_control`
+  (`include/ama_dispatch.h`): the library did not enable or report Intel
+  DOITM or Arm PSTATE.DIT, and now reports both and sets DIT for the calling
+  thread where FEAT_DIT allows. DOITM needs privilege (user-mode `RDMSR`
+  faults, measured) and is reported UNKNOWN. `tests/c/test_ct_hw_mode.c`,
+  run on x86-64 and under QEMU on AArch64 with and without FEAT_DIT, fails
+  on each of three planted defects.
+- **Not analysed:** AArch64 (no validated Valgrind run in this change),
+  AVX-512, VAES, AES-NI GCM; clang is measured locally, not in CI. Out of scope: power, EM,
+  acoustic, fault, speculative and frequency-scaling channels.
+
 ### Argon2id legacy verify: the verdict was a branch — 2026-11-07
 
 `main` went red at `9bbb9f7` on one lane, `dudect - Utility Functions`:

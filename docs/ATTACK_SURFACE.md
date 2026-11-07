@@ -16,8 +16,8 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 
 ## Summary
 
-- Declared / exported entry points: **196**
-- Referenced by C tests: **194**
+- Declared / exported entry points: **199**
+- Referenced by C tests: **197**
 - Referenced by Fuzz: **78**
 - Referenced by CT gate: **43**
 - Referenced by Python layer: **140**
@@ -55,6 +55,9 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_consttime_swap` | 2 | 1 | 2 | — |
 | `ama_context_free` | 4 | — | — | 1 |
 | `ama_context_init` | 4 | — | — | 1 |
+| `ama_ct_hw_mode_control` | 1 | — | — | — |
+| `ama_ct_hw_mode_enable` | 1 | — | — | — |
+| `ama_ct_hw_mode_status` | 1 | — | — | — |
 | `ama_dilithium_invntt_bench` | 1 | — | — | — |
 | `ama_dilithium_invntt_bench_last_dispatch_get` | 1 | — | — | — |
 | `ama_dilithium_invntt_dispatch_slot_wired` | 1 | — | — | — |

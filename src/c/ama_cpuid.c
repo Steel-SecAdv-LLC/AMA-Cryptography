@@ -709,3 +709,126 @@ int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif
 
+
+/* ============================================================================
+ * Hardware data-independent-timing mode (declared in include/ama_dispatch.h)
+ *
+ * Sources for every constant below, so none is taken on trust:
+ *   - Arm A-profile Architecture Registers, DIT (DDI 0601, 2026-03 release):
+ *     DIT is PSTATE bit [24]; MRS/MSR <Xt> encoding op0=0b11 op1=0b011
+ *     CRn=0b0100 CRm=0b0010 op2=0b101, i.e. the generic system-register name
+ *     S3_3_C4_C2_5; accessible at EL0 when FEAT_DIT is implemented.
+ *   - Intel, Data Operand Independent Timing ISA Guidance (2025-09-10):
+ *     DOITM is enumerated in IA32_ARCH_CAPABILITIES, which exists only when
+ *     CPUID.(EAX=07H,ECX=0):EDX[29] = 1; the control is an MSR.
+ *   - Measured on this project's x86-64 CI-class host (2026-11-07): RDMSR of
+ *     IA32_ARCH_CAPABILITIES from user mode raises SIGSEGV, so user code can
+ *     read neither the enumeration bit nor the control.
+ *   - HWCAP_DIT is taken from the C library's own <sys/auxv.h>; where that
+ *     header does not define it the probe is not compiled and the answer is
+ *     UNKNOWN, rather than a bit position written here.
+ * ============================================================================ */
+
+#include "../include/ama_dispatch.h"
+
+#include <string.h>
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+
+static void ct_mode_cpuid(unsigned leaf, unsigned sub, unsigned out[4]) {
+#ifdef _MSC_VER
+    int regs[4];
+    __cpuidex(regs, (int)leaf, (int)sub);
+    for (int i = 0; i < 4; i++) {
+        out[i] = (unsigned)regs[i];
+    }
+#else
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    __cpuid_count(leaf, sub, a, b, c, d);
+    out[0] = a;
+    out[1] = b;
+    out[2] = c;
+    out[3] = d;
+#endif
+}
+
+/* "GenuineIntel" is the CPUID leaf-0 vendor string in EBX, EDX, ECX order. */
+static int ct_mode_is_intel(unsigned *max_leaf) {
+    unsigned r[4];
+    char vendor[12];
+    ct_mode_cpuid(0u, 0u, r);
+    memcpy(vendor + 0, &r[1], 4);
+    memcpy(vendor + 4, &r[3], 4);
+    memcpy(vendor + 8, &r[2], 4);
+    *max_leaf = r[0];
+    return memcmp(vendor, "GenuineIntel", sizeof vendor) == 0;
+}
+
+static int ct_mode_x86(void) {
+    unsigned max_leaf = 0;
+    unsigned r[4];
+    if (!ct_mode_is_intel(&max_leaf) || max_leaf < 7u) {
+        return AMA_CT_HW_MODE_NOT_IMPLEMENTED;
+    }
+    ct_mode_cpuid(7u, 0u, r);
+    return ((r[3] >> 29) & 1u) ? AMA_CT_HW_MODE_UNKNOWN : AMA_CT_HW_MODE_NOT_IMPLEMENTED;
+}
+
+int ama_ct_hw_mode_status(void) { return ct_mode_x86(); }
+
+/* Writing IA32_UARCH_MISC_CTL needs ring 0; there is nothing to do here. */
+int ama_ct_hw_mode_enable(void) { return ct_mode_x86(); }
+
+const char *ama_ct_hw_mode_control(void) {
+    unsigned max_leaf = 0;
+    return ct_mode_is_intel(&max_leaf) ? "intel-doitm" : "none";
+}
+
+#elif (defined(__aarch64__) && defined(__linux__) && defined(HWCAP_DIT) && \
+       (defined(__GNUC__) || defined(__clang__)))
+
+static int ct_mode_dit_implemented(void) {
+    return (getauxval(AT_HWCAP) & (unsigned long)HWCAP_DIT) != 0;
+}
+
+static uint64_t ct_mode_dit_read(void) {
+    uint64_t v;
+    __asm__ volatile("mrs %0, S3_3_C4_C2_5" : "=r"(v));
+    return v;
+}
+
+static int ct_mode_aarch64(void) {
+    if (!ct_mode_dit_implemented()) {
+        return AMA_CT_HW_MODE_NOT_IMPLEMENTED;
+    }
+    return ((ct_mode_dit_read() >> 24) & 1u) ? AMA_CT_HW_MODE_ENABLED : AMA_CT_HW_MODE_DISABLED;
+}
+
+int ama_ct_hw_mode_status(void) { return ct_mode_aarch64(); }
+
+int ama_ct_hw_mode_enable(void) {
+    if (ct_mode_dit_implemented()) {
+        uint64_t v = ct_mode_dit_read() | ((uint64_t)1u << 24);
+        __asm__ volatile("msr S3_3_C4_C2_5, %0" : : "r"(v) : "memory");
+    }
+    return ct_mode_aarch64();
+}
+
+const char *ama_ct_hw_mode_control(void) { return "arm-pstate-dit"; }
+
+#elif defined(__aarch64__) || defined(_M_ARM64)
+
+/* AArch64 without a probe this file can compile (macOS, Windows on Arm, a C
+ * library whose <sys/auxv.h> lacks HWCAP_DIT): the control may exist, but
+ * whether it does is not known here. */
+int ama_ct_hw_mode_status(void) { return AMA_CT_HW_MODE_UNKNOWN; }
+int ama_ct_hw_mode_enable(void) { return AMA_CT_HW_MODE_UNKNOWN; }
+const char *ama_ct_hw_mode_control(void) { return "arm-pstate-dit"; }
+
+#else
+
+int ama_ct_hw_mode_status(void) { return AMA_CT_HW_MODE_UNKNOWN; }
+int ama_ct_hw_mode_enable(void) { return AMA_CT_HW_MODE_UNKNOWN; }
+const char *ama_ct_hw_mode_control(void) { return "none"; }
+
+#endif
