@@ -248,15 +248,28 @@ static inline void dudect_print_result(dudect_ctx_t *ctx) {
      * these measurement counts the statistic resolves differences well under
      * one CPU cycle, and a reviewer cannot tell a sub-nanosecond measurement
      * artefact from an exploitable difference without seeing the difference
-     * itself. */
+     * itself.
+     *
+     * The difference printed beside "rung N" is rung N's own, so its sign
+     * agrees with t's.  It used to be dudect_cropped_effect_delta(), which is
+     * the UNCROPPED difference whenever that is the larger, and main at
+     * 9bbb9f7 logged "t = +6.3194 ... rung 2, class0-class1 = -25.679 ns":
+     * a positive statistic beside a negative difference from another rung.
+     * The effect size the verdict rule gates on is still printed, separately,
+     * whenever it is not the winning rung's. */
+    double effect = dudect_cropped_effect_delta(&ctx->ttest);
     printf("  %-35s t = %+8.4f  [%s]  (%ld measurements, rung %d, "
-           "class0-class1 = %+.3f ns)\n",
+           "class0-class1 = %+.3f ns",
            ctx->name,
            t,
            within ? "within threshold" : "OVER THRESHOLD",
            (long)ctx->total_measurements,
            ctx->ttest.winning_rung,
-           dudect_cropped_effect_delta(&ctx->ttest));
+           ctx->ttest.winning_delta);
+    if (effect != ctx->ttest.winning_delta) {
+        printf("; uncropped %+.3f ns", effect);
+    }
+    printf(")\n");
     if (ctx->ttest.usable_rungs == 0) {
         printf("    NOTE: UNCROPPED statistic — no cropped rung reached "
                "DUDECT_CROP_MIN_PER_CLASS (%d) in both classes at %ld "

@@ -679,6 +679,9 @@ class TestCalibration:
             "ascon-hash",
             "ascon-encrypt",
             "agent-binding",
+            # Two verdicts, like agent-binding: a matching and a mismatching
+            # stored tag.  Added after the verdict branch it pins (gcc 13).
+            "argon2id-verify",
             "kyber-decaps",
             "sha3-256",
             "ed25519-sign",
@@ -902,6 +905,7 @@ ENTRY_POINTS: dict[str, str] = {
     "ascon-hash": "ama_ascon_hash256",
     "ascon-encrypt": "ama_ascon_aead128_encrypt",
     "agent-binding": "ama_agent_binding_check",
+    "argon2id-verify": "ama_argon2id_legacy_verify",
     "kyber-decaps": "ama_kyber_decapsulate",
     "sha3-256": "ama_sha3_256",
     "ed25519-sign": "ama_ed25519_sign",

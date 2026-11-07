@@ -990,11 +990,21 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
         return rc;
     }
 
-    /* ama_consttime_memcmp returns 0 on equality. */
+    /* ama_consttime_memcmp returns 0 on equality and 1 on any difference. */
     int diff = ama_consttime_memcmp(computed, expected_tag, tag_len);
     ama_secure_memzero(computed, tag_len);
     free(computed);
-    return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+
+    /* Single exit, selected arithmetically, as ama_agent_binding_check() does:
+     * AMA_SUCCESS is 0, so the error code times the mismatch bit is the
+     * verdict.  The former `(diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED`
+     * compiled under gcc 13 -O3 to a branch on the verdict (`test; jne` to a
+     * separate `mov $-4; jmp` block), so rejecting retired two instructions
+     * per call more than accepting.  clang 18 happened to emit it branch-free.
+     * `--target argon2id-verify` in tools/check_ghash_constant_time.py pins
+     * this (count lane, and the taint lane on the LTO shared object). */
+    uint32_t reject = (uint32_t)diff & 1u;
+    return (ama_error_t)(AMA_ERROR_VERIFY_FAILED * (int)reject);
 }
 
 /* ============================================================================

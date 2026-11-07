@@ -584,9 +584,15 @@ static dudect_measurement_t test_aes_gcm_tag_verify(int iterations) {
  * utility lane runs above): Ascon has its dedicated forgery-position
  * lane; Argon2id legacy verify and the agent-binding check hoist the
  * compare into a value and run a single straight-line fail path with
- * no length-masked work after it (src/c/ama_argon2.c:923-926,
- * src/c/ama_agent_binding.c:354-355), so there is no per-site control
- * flow left for a position lane to witness.
+ * no length-masked work after it (ama_argon2id_legacy_verify() in
+ * src/c/ama_argon2.c, ama_agent_binding_check() in
+ * src/c/ama_agent_binding.c), so there is no per-site control flow left
+ * for a position lane to witness.  Corrected 2026-11-07: until then the
+ * Argon2id return was a ternary that gcc 13 compiled to a branch on the
+ * verdict, so its fail path was not the straight line this comment said;
+ * both now select the verdict arithmetically, and `--target
+ * argon2id-verify` / `--target agent-binding` in
+ * tools/check_ghash_constant_time.py pin it deterministically.
  * ----------------------------------------------------------------------- */
 static dudect_measurement_t test_aes_gcm_forgery_position(int iterations) {
     dudect_ctx_t ctx;
@@ -1036,6 +1042,14 @@ static dudect_measurement_t test_chacha20poly1305_forgery_position(int iteration
  * because the compare step is invariant under the cost parameters.
  * Closes the gap noted at tests/c/test_argon2id.c:6-22 (which is
  * byte-equivalence only).
+ *
+ * The deterministic counterpart is `--target argon2id-verify` in
+ * tools/check_ghash_constant_time.py (instruction count and secret taint).
+ * It was added when this lane failed main at 9bbb9f7: |t| 14.86 in 3 of 3
+ * rounds, class0 - class1 negative (reject slower) in every round, and the
+ * call returned through a branch on the verdict that cost the reject path
+ * two instructions.  The cropped-rung t flipped sign between rounds while
+ * the effect did not, which the verdict rule reported as UNUSABLE.
  * ----------------------------------------------------------------------- */
 static dudect_measurement_t test_argon2id_legacy_verify(int iterations) {
     dudect_ctx_t ctx;
