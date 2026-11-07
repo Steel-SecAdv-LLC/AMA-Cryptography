@@ -207,9 +207,15 @@ jobs:
           # None: CodeQL and the clang static analyzer read the source the
           # compiler is given, not the code it emits, so the optimizer plays no
           # part.  Stated rather than defaulted.
+          #
+          # AMA_ENABLE_AVX512 defaults OFF, which left the AVX-512 kernel out
+          # of every analysed build; it is one more translation unit beside
+          # the rest, so it is turned on here.  The configurations this build
+          # cannot compile are analysed by codeql-variants below.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=None \
             -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_ENABLE_AVX512=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF
@@ -242,12 +248,91 @@ jobs:
           output: codeql-sarif
           upload: always
 
-      - name: Fail on CodeQL results at or above error severity
+      - name: Fail on any CodeQL result
         # `codeql-action/analyze` exits 0 whatever it finds, and nothing read
         # the results — so `static-analysis-gate`'s `check codeql success`
         # proved only that the scan had completed and an error-level finding
         # left the merge-blocking gate green.  This applies the policy to the
         # SARIF, the same construction as check_semgrep_severity.py.
+        run: python tools/check_codeql_severity.py codeql-sarif
+
+  codeql-variants:
+    # The codeql job analyses one build: x86-64, constant-time AES, no fuzz
+    # harnesses.  CodeQL sees only what a traced compiler compiles, so the
+    # NEON and SVE2 kernels, the table S-box arm of the AES backend and every
+    # fuzz harness were never analysed.  Each is analysed here, in its own
+    # database, and held to the same gate.
+    #
+    # One database per configuration, not one for all: tracing these builds
+    # into a single database (measured with CodeQL 2.27.4 on 2026-11-06)
+    # reports 42 static functions in src/c as unreachable, every one with a
+    # live caller in its own file -- the same source compiled under several
+    # configurations confuses the query -- while each configuration alone
+    # reports nothing.  Nothing is uploaded: code scanning keeps the one
+    # configuration main files its alerts under (see the codeql job), and a
+    # result here fails this job, which static-analysis-gate requires.
+    name: CodeQL (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: aarch64-neon-sve2
+            packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+            cmake_args: >-
+              -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
+              -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SVE2=ON
+          - variant: aes-table
+            packages: ""
+            cmake_args: >-
+              -DAMA_USE_NATIVE_PQC=ON -DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON
+          - variant: fuzz-harnesses
+            packages: clang libclang-rt-dev
+            cmake_args: >-
+              -DCMAKE_C_COMPILER=clang -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_FUZZ=ON
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install the variant's compiler
+        # Before init: once CodeQL's tracer is in the environment, apt and
+        # dpkg would be traced too.
+        if: matrix.packages != ''
+        env:
+          PACKAGES: ${{ matrix.packages }}
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          read -ra pkgs <<< "$PACKAGES"
+          .github/scripts/apt-install.sh --no-install-recommends "${pkgs[@]}"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        with:
+          languages: c-cpp
+          queries: security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Build the variant for CodeQL
+        env:
+          CMAKE_ARGS: ${{ matrix.cmake_args }}
+        run: |
+          read -ra args <<< "$CMAKE_ARGS"
+          cmake -B build -DCMAKE_BUILD_TYPE=None -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_LTO=OFF "${args[@]}"
+          cmake --build build -j$(nproc)
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        with:
+          output: codeql-sarif
+          upload: never
+
+      - name: Fail on any CodeQL result
         run: python tools/check_codeql_severity.py codeql-sarif
 
   compiler-warnings:
@@ -1583,6 +1668,7 @@ jobs:
       - cppcheck
       - clang-analyzer
       - codeql
+      - codeql-variants
       - compiler-warnings
       - compiler-warnings-aarch64
       - version-consistency
@@ -1597,7 +1683,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Fail unless every job reached the state this trigger requires
-        # A gate that demanded `success` from all thirteen jobs would be red on
+        # A gate that demanded `success` from all fourteen jobs would be red on
         # every pull request, because valgrind-memcheck is schedule/dispatch-only
         # and skips on PRs by design, and clang-tidy / reproducible-build skip
         # on a non-PR push (memory-sanitizer and thread-sanitizer run on every
@@ -1632,6 +1718,7 @@ jobs:
           R_CPPCHECK: ${{ needs.cppcheck.result }}
           R_CLANG_ANALYZER: ${{ needs.clang-analyzer.result }}
           R_CODEQL: ${{ needs.codeql.result }}
+          R_CODEQL_VARIANTS: ${{ needs.codeql-variants.result }}
           R_WARNINGS: ${{ needs.compiler-warnings.result }}
           R_WARNINGS_ARM: ${{ needs.compiler-warnings-aarch64.result }}
           R_VERSION: ${{ needs.version-consistency.result }}
@@ -1683,6 +1770,7 @@ jobs:
           check cppcheck             "${R_CPPCHECK}"       success
           check clang-analyzer       "${R_CLANG_ANALYZER}" success
           check codeql               "${R_CODEQL}"         success
+          check codeql-variants      "${R_CODEQL_VARIANTS}" success
           check compiler-warnings    "${R_WARNINGS}"       success
           check compiler-warnings-aarch64 "${R_WARNINGS_ARM}" success
           check version-consistency  "${R_VERSION}"        success

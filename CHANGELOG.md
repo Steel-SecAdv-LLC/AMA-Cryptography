@@ -29,6 +29,82 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### CodeQL: every result blocks, and the source CodeQL never saw — 2026-11-06
+
+The note above reached `main` with every check green because
+`tools/check_codeql_severity.py` blocked on `error` level (or a
+security-severity of 7.0 and up) only; `warning` and `note` results were
+printed and passed. Two defects, fixed together (AGENTS.md section 10):
+
+- **The gate now blocks every result at `error`, `warning` or `note`.**
+  Only SARIF level `none` passes, unless rated at or above the floor.
+  `tests/test_codeql_severity_gate.py` pins it: restoring the old
+  `BLOCKING_LEVELS` fails three tests, including the `py/print-during-import`
+  note that reached main (job 128133109808).
+- **CodeQL analysed one build.** It sees only what a traced compiler compiles,
+  and the `codeql` job built the x86-64 library with default options. The
+  AVX-512 kernel (`AMA_ENABLE_AVX512` defaults OFF), the NEON and SVE2
+  kernels, the table S-box arm of the AES backend and all fuzz harnesses were
+  never analysed. The `codeql` job now also builds AVX-512. A new
+  `codeql-variants` matrix (`aarch64-neon-sve2`, `aes-table`,
+  `fuzz-harnesses`) analyses each of the others in its own database, under the
+  same gate, without uploading, and `static-analysis-gate` requires it. One
+  database per configuration because tracing them into one reports 42 static
+  functions in `src/c` as unreachable, each with a live caller in its own file.
+  Each configuration alone reports nothing. Measured with CodeQL 2.27.4, the
+  bundle the pinned action used on main.
+
+Measured locally with that bundle, `security-and-quality`, on 2026-11-06:
+Python 0 results; GitHub Actions 1 (below). C/C++: 0 in every library
+configuration; 9 in the fuzz harnesses (6 `cpp/long-switch`, 3
+`cpp/constant-comparison`); in `tests/c`, which no CI configuration analyses,
+the findings below. Fixed at source:
+
+- `fuzz/`: each selector case of the six switch harnesses is its own
+  function. Each `break` became `return` only where it left the case, and
+  one inside a loop was kept (checked by scope). The dead length re-checks in
+  `fuzz_ed25519.c` and the dead clamp in `fuzz_hkdf.c` are removed, with the
+  entry guarantee stated. All seven harnesses build warning-free and run.
+- `tests/c/test_dispatch_cache_hostile.c`: the scratch directory comes from
+  `mkdtemp` (it was a pid-derived `/tmp` name); files are created `0600`, not
+  `0666 & ~umask`; cleanup is `nftw(FTW_DEPTH | FTW_PHYS)` with a reported
+  failure, where it had been `system("rm -rf ...")` with an empty `if`.
+- `tests/c/test_dispatch_cache_file.c`: cache-file ownership is checked with
+  `fstat` on an `O_NOFOLLOW` descriptor, not `stat` on the name. Mutation
+  (expected uid + 1) fails the test.
+- `cpp/include-non-header`, the rule the CodeQL config keeps active for
+  exactly this pattern: the two `x25519_equiv_fe{51,64}.c` wrappers that
+  `#include`d `src/c/ama_x25519.c` are now object libraries compiling that
+  source directly. The objects resolve different externals, so each compiles
+  its forced field path. `test_benchmark_mldsa_sign_pool.c` no longer
+  `#include`s `benchmarks/benchmark_c_raw.c`. It links an object build of the
+  harness through the new `benchmarks/benchmark_c_raw.h`. Dropping the signer
+  rename fails the test.
+- Smaller items: `test_x25519.c` declares its hook prototypes once, at file
+  scope. `test_dudect.c` parses arguments in a `while` loop instead of bumping
+  a `for` counter. Constant guards in `test_benchmark_mldsa_sign_pool.c` became
+  a `_Static_assert`, and `test_ed25519_verify_equiv.c` drops an always-true
+  condition. The tcId 90 vector in `test_chacha20poly1305.c` moved to file
+  scope, and the embedding gate still fails on a one-byte change.
+
+Classified, not changed. Each one is the test's purpose, and changing it would
+weaken the instrument:
+
+- `cpp/using-expired-stack-address` and `cpp/stack-address-escape` (four, in
+  `residue_probe.h`, `test_secure_free_scrub.c` and
+  `test_slhdsa_fault_residue.c`): these are the dead-stack residue probes
+  (INVARIANT-6). Reading a dead frame is the measurement.
+- `cpp/uncontrolled-process-operation` in `test_dispatch_cache_hostile.c`:
+  the test re-execs its own binary because dispatch initialises once per
+  process image (`tests/c/CMakeLists.txt`).
+- 14 `cpp/unused-static-function` notes, which appear only when
+  `ama_cryptography_test` (the sources recompiled with `AMA_TESTING_MODE`)
+  shares a database with the library. This is the same artifact as above.
+- `actions/unpinned-tag` on the SLSA generator in `release.yml`: upstream
+  requires a semantic-version tag and fails the attestation on a SHA. That is
+  the one named exemption in `tools/check_action_pins.py`. GitHub Actions is
+  not among the analysed languages, so this result is not uploaded or gated.
+
 ### CodeQL note in the build-floor gate — 2026-11-06
 
 CodeQL flagged a module-level `print` in `tools/check_build_floor_coherence.py`

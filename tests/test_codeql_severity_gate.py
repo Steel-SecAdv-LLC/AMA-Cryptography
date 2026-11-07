@@ -6,7 +6,12 @@ The gate had no tests.  It blocked on ``result.level == "error"`` only, and
 CodeQL's security queries mostly carry ``warning`` with the CVSS-style rating in
 the rule's ``properties.security-severity`` — so a warning-level result rated
 9.8 passed (measured with the crafted report below).  Results at or above
-:data:`SECURITY_SEVERITY_FLOOR` now block at any level.
+:data:`SECURITY_SEVERITY_FLOOR` then blocked at any level.
+
+``warning`` and ``note`` results still passed: a ``note``
+(``py/print-during-import``) reached main green on 2026-11-06.  Every result
+at ``error``, ``warning`` or ``note`` now blocks; only level ``none`` passes,
+unless rated at or above the floor.
 """
 
 from __future__ import annotations
@@ -63,15 +68,30 @@ def test_a_warning_rated_high_blocks(tmp_path: Path) -> None:
     assert gate.main([str(report)]) == 1
 
 
-def test_a_warning_rated_below_the_floor_does_not_block(tmp_path: Path) -> None:
+def test_a_warning_rated_below_the_floor_blocks(tmp_path: Path) -> None:
     report = _write(tmp_path, _sarif(("cpp/some-quality-rule", "warning", "6.9")))
+    _, blocking, total = gate.audit([report])
+    assert (blocking, total) == (1, 1)
+    assert gate.main([str(report)]) == 1
+
+
+def test_the_note_that_reached_main_blocks(tmp_path: Path) -> None:
+    """The measured miss: py/print-during-import is a note with no rating, and
+    the gate passed it on main at ef5cb414 (job 128133109808)."""
+    report = _write(tmp_path, _sarif(("py/print-during-import", "note", None)))
     failures, blocking, total = gate.audit([report])
-    assert (failures, blocking, total) == ([], 0, 1)
-    assert gate.main([str(report)]) == 0
+    assert (blocking, total) == (1, 1)
+    assert "[note] py/print-during-import" in failures[0]
+    assert gate.main([str(report)]) == 1
 
 
-def test_the_floor_itself_blocks(tmp_path: Path) -> None:
-    report = _write(tmp_path, _sarif(("py/x", "note", str(gate.SECURITY_SEVERITY_FLOOR))))
+def test_a_level_none_result_does_not_block(tmp_path: Path) -> None:
+    report = _write(tmp_path, _sarif(("py/x", "none", None)))
+    assert gate.audit([report]) == ([], 0, 1)
+
+
+def test_the_floor_itself_blocks_at_level_none(tmp_path: Path) -> None:
+    report = _write(tmp_path, _sarif(("py/x", "none", str(gate.SECURITY_SEVERITY_FLOOR))))
     assert gate.audit([report])[1] == 1
 
 
@@ -80,9 +100,9 @@ def test_an_error_level_result_blocks_without_a_rating(tmp_path: Path) -> None:
     assert gate.audit([report])[1] == 1
 
 
-def test_an_unrated_warning_does_not_block(tmp_path: Path) -> None:
+def test_an_unrated_warning_blocks(tmp_path: Path) -> None:
     report = _write(tmp_path, _sarif(("cpp/style", "warning", None)))
-    assert gate.audit([report]) == ([], 0, 1)
+    assert gate.audit([report])[1:] == (1, 1)
 
 
 def test_a_rating_on_an_extension_rule_is_honoured(tmp_path: Path) -> None:
@@ -113,7 +133,7 @@ def test_a_rating_on_an_extension_rule_is_honoured(tmp_path: Path) -> None:
 
 
 def test_a_non_numeric_rating_is_ignored_not_fatal(tmp_path: Path) -> None:
-    report = _write(tmp_path, _sarif(("cpp/odd", "warning", "n/a")))
+    report = _write(tmp_path, _sarif(("cpp/odd", "none", "n/a")))
     assert gate.audit([report]) == ([], 0, 1)
 
 
@@ -126,12 +146,12 @@ def test_a_directory_with_no_sarif_fails(tmp_path: Path) -> None:
     assert gate.main([str(tmp_path)]) == 1
 
 
-@pytest.mark.parametrize("level", ["error", "warning"])
-def test_result_level_overrides_the_rule_default(tmp_path: Path, level: str) -> None:
-    sarif = _sarif(("cpp/r", "note", None))
+@pytest.mark.parametrize("default, level", [("none", "error"), ("note", "none")])
+def test_result_level_overrides_the_rule_default(tmp_path: Path, default: str, level: str) -> None:
+    sarif = _sarif(("cpp/r", default, None))
     sarif["runs"][0]["results"][0]["level"] = level
     blocking = gate.audit([_write(tmp_path, sarif)])[1]
-    assert blocking == (1 if level == "error" else 0)
+    assert blocking == (0 if level == "none" else 1)
 
 
 def test_the_static_analysis_workflow_invokes_the_gate() -> None:
@@ -146,11 +166,11 @@ def test_a_non_blocking_result_is_printed_not_only_counted(
 ) -> None:
     """The log is where a reviewer without ``security-events: read`` sees the
     findings; a count alone ("1 result(s)") names nothing to review."""
-    report = _write(tmp_path, _sarif(("py/unused-import", "note", None)))
+    report = _write(tmp_path, _sarif(("py/unused-import", "none", None)))
     assert gate.main([str(report)]) == 0
     out = capsys.readouterr().out
     assert "1 non-blocking result(s):" in out
-    assert "src/c/x.c:1: [note] py/unused-import: finding 0" in out
+    assert "src/c/x.c:1: [none] py/unused-import: finding 0" in out
 
 
 def test_a_blocking_result_is_not_listed_twice(

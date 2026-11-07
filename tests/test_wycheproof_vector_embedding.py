@@ -29,14 +29,17 @@ TC_ID = 90
 
 
 def _embedded_arrays() -> dict[str, bytes]:
-    """The five ``static const uint8_t NAME[N] = { ... };`` arrays of the
-    Wycheproof function, parsed from the C source."""
+    """The five file-scope ``static const uint8_t tc90_NAME[N] = { ... };``
+    arrays the Wycheproof function reads, parsed from the C source and keyed
+    by NAME."""
     source = C_TEST.read_text(encoding="utf-8")
-    start = source.index("static void test_wycheproof_tc90_long_message(void)")
+    start = source.index("static const uint8_t tc90_key[32]")
     end = source.index("static void test_scalar_vs_dispatched_sweep(void)")
     body = source[start:end]
     arrays: dict[str, bytes] = {}
-    for match in re.finditer(r"static const uint8_t (\w+)\[(\d+)\] = \{(.*?)\};", body, re.DOTALL):
+    for match in re.finditer(
+        r"static const uint8_t tc90_(\w+)\[(\d+)\] = \{(.*?)\};", body, re.DOTALL
+    ):
         name, declared, initialiser = match.group(1), int(match.group(2)), match.group(3)
         data = bytes(int(tok, 16) for tok in re.findall(r"0x([0-9a-fA-F]{2})", initialiser))
         assert len(data) == declared, f"{name}: {len(data)} bytes in a [{declared}] array"

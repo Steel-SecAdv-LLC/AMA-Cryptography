@@ -44,6 +44,18 @@
  * is a superset of the line it replaces. */
 #define _XOPEN_SOURCE 700
 
+/* Apple libc hides O_NOFOLLOW (and mkdtemp) behind
+ * `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`, and the
+ * feature-test macro above puts it in strict-POSIX mode; the
+ * `C Library (macos-latest, clang)` lane failed on exactly that
+ * (`use of undeclared identifier 'O_NOFOLLOW'`).  _DARWIN_C_SOURCE
+ * re-exposes the BSD surface without lowering the POSIX baseline, as
+ * src/c/dispatch/ama_dispatch.c does for issetugid().  No-op elsewhere. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,12 +327,20 @@ int main(void) {
      * the env var is honoured here — but we DO assert that the cache
      * file is owned by the running user, which is the corollary of
      * the mode 0600 + user-only-create contract above. */
+    /* Checked on the opened file, not on the name: fstat() of a descriptor
+     * opened with O_NOFOLLOW describes the very object the cache code wrote,
+     * where a stat() of the path describes whatever the name points at by
+     * then (and follows a symlink planted in its place). */
     struct stat st;
-    if (stat(cache_path, &st) != 0 || st.st_uid != geteuid()) {
+    const int own_fd = open(cache_path, O_RDONLY | O_NOFOLLOW);
+    const int own_ok = own_fd >= 0 && fstat(own_fd, &st) == 0 && st.st_uid == geteuid();
+    if (own_fd >= 0) (void)close(own_fd);
+    if (!own_ok) {
         fprintf(stderr,
             "FAIL: cache file '%s' is not owned by effective uid %ld "
-            "(actual uid %ld)\n", cache_path,
-            (long)geteuid(), (long)st.st_uid);
+            "(%s)\n", cache_path, (long)geteuid(),
+            own_fd < 0 ? "could not be opened without following a link"
+                       : "owned by another uid");
         (void)unlink(cache_path);
         return 1;
     }

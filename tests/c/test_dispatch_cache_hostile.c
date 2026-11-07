@@ -68,8 +68,18 @@ int main(void) {
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
 #endif
+/* Apple libc puts strict-POSIX mode on the macros above and gates its
+ * BSD surface on `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`;
+ * test_dispatch_cache_file.c failed the `C Library (macos-latest, clang)`
+ * lane on `O_NOFOLLOW` for exactly that.  This file's mkdtemp(), nftw() and
+ * open() calls are kept on the same footing, as src/c/dispatch/ama_dispatch.c
+ * does for issetugid().  No-op on non-Apple platforms. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,6 +103,36 @@ static int read_all(const char *path, char *buf, size_t buflen) {
     fclose(f);
     buf[n] = '\0';
     return (int)n;
+}
+
+/* Create or truncate `path` and write `text`, owner-only (0600) when the file
+ * is created.  fopen(..., "wb") would create it 0666 & ~umask; the scratch
+ * directory is 0700, but the file's own mode is not left to the umask. */
+static int write_private(const char *path, const char *text) {
+    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) return -1;
+    const size_t len = strlen(text);
+    size_t off = 0;
+    while (off < len) {
+        const ssize_t n = write(fd, text + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            (void)close(fd);
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    return close(fd);
+}
+
+/* nftw() callback for the scratch-directory cleanup: depth-first, so every
+ * entry is gone before its directory, and FTW_PHYS, so a planted symlink is
+ * removed itself and never followed. */
+static int remove_entry(const char *path, const struct stat *sb, int type, struct FTW *ftw) {
+    (void)sb;
+    (void)type;
+    (void)ftw;
+    return remove(path);
 }
 
 /* ---- child modes ------------------------------------------------------ */
@@ -301,10 +341,11 @@ int main(int argc, char **argv) {
         return run_child(argv[2], argv[3], argc >= 5 ? argv[4] : "");
     }
 
-    char dir[128];
-    snprintf(dir, sizeof(dir), "/tmp/ama-cache-hostile-%ld", (long)getpid());
-    if (mkdir(dir, 0700) != 0) {
-        fprintf(stderr, "FAIL: mkdir(%s): %s\n", dir, strerror(errno));
+    /* mkdtemp: a fresh, unpredictable, 0700 directory, so no other user can
+     * pre-create or race the name (a pid-derived name could be). */
+    char dir[] = "/tmp/ama-cache-hostile-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fprintf(stderr, "FAIL: mkdtemp(%s): %s\n", dir, strerror(errno));
         return 1;
     }
 
@@ -353,8 +394,7 @@ int main(int argc, char **argv) {
         static const char original[] = "VICTIM ORIGINAL CONTENT -- must survive\n";
         snprintf(victim, sizeof(victim), "%s/victim.txt", dir);
         snprintf(cache, sizeof(cache), "%s/cache", dir);
-        FILE *f = fopen(victim, "wb");
-        if (!f || fputs(original, f) == EOF || fclose(f) != 0) {
+        if (write_private(victim, original) != 0) {
             fprintf(stderr, "FAIL: could not write %s\n", victim);
             failures++;
         } else if (spawn_checked(argv[0], "symlink", cache, victim, "symlink") != 0) {
@@ -456,9 +496,7 @@ int main(int argc, char **argv) {
                         garbled ? "" : "keccak_x4_simd_ns");
                 ok = 0;
             }
-            FILE *f = ok ? fopen(cache, "wb") : NULL;
-            if (ok && (!f || fputs(edited, f) == EOF)) ok = 0;
-            if (f && fclose(f) != 0) ok = 0;
+            if (ok && write_private(cache, edited) != 0) ok = 0;
         }
         if (ok && spawn_checked(argv[0], "verbose", cache, log, "partial-read") != 0) {
             ok = 0;
@@ -492,10 +530,9 @@ int main(int argc, char **argv) {
 
     /* Best-effort cleanup of the planted temp link(s). */
     {
-        char cmd[256];
-        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
-        if (system(cmd) != 0) {
-            /* best-effort cleanup of a scratch directory */
+        if (nftw(dir, remove_entry, 16, FTW_DEPTH | FTW_PHYS) != 0) {
+            fprintf(stderr, "note: could not remove scratch directory %s: %s\n", dir,
+                    strerror(errno));
         }
     }
 

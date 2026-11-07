@@ -18,6 +18,14 @@
 #include "ama_cryptography.h"
 #include "kat_slot_guard.h"
 
+/* x4-kernel test hooks, defined in the AMA_TESTING_MODE build of
+ * src/c/dispatch/ama_dispatch.c and declared there rather than in a public
+ * header.  Declared once here, at file scope, for every helper that pins a
+ * lane. */
+void ama_test_force_x25519_x4_scalar(void);
+void ama_test_force_x25519_x4_avx2(void);
+void ama_test_restore_x25519_x4_avx2(void);
+
 #define TEST_ASSERT(condition, message)                          \
     do {                                                         \
         if (!(condition)) {                                      \
@@ -108,10 +116,6 @@ static const uint8_t expected_shared[32] = {
  * helper.
  * ---------------------------------------------------------------------- */
 static int batch_random_cross_check_1024(void) {
-    extern void ama_test_force_x25519_x4_scalar(void);
-    extern void ama_test_force_x25519_x4_avx2(void);
-    extern void ama_test_restore_x25519_x4_avx2(void);
-
     const size_t N = 1024;
     int rc = 0;
     uint8_t (*scs)[32]   = malloc(N * 32);
@@ -301,9 +305,6 @@ int main(void) {
      * Each sub-test must produce byte-identical output to the
      * single-shot `ama_x25519_key_exchange` reference.
      * ====================================================================== */
-    extern void ama_test_force_x25519_x4_scalar(void);
-    extern void ama_test_force_x25519_x4_avx2(void);
-    extern void ama_test_restore_x25519_x4_avx2(void);
 
     /* RFC 7748 §5.2 TVs broadcast across all four lanes — exercises
      * the kernel directly with known-answer vectors. */
