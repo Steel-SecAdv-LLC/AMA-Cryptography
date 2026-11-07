@@ -2978,6 +2978,43 @@ def _measure(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, 
     return measured
 
 
+def build_driver(
+    source_text: str, lib: Path, include: Path, cc: str, workdir: Path
+) -> tuple[Optional[Path], str]:
+    """Compile a measurement driver against ``lib``; ``(path, "")`` or ``(None, why)``.
+
+    One function, shared with ``tools/check_ct_operand.py``, so that the
+    secret-operand gate links exactly the program the taint and count lanes
+    link: same flags, same rpath rule, same libraries.
+    """
+    source = workdir / "driver.c"
+    source.write_text(source_text, encoding="utf-8")
+    driver = workdir / "driver"
+    compile_cmd = [
+        cc,
+        "-O2",
+        str(source),
+        f"-I{include}",
+        "-o",
+        str(driver),
+        str(lib),
+        "-lpthread",
+        "-lm",
+    ]
+    # A shared library named on the command line links fine but is not
+    # found at load time without an rpath, which is how this check came to
+    # report PASS over a driver that never started.  The exit-status check
+    # in _measure() now catches that; embedding the rpath means
+    # the caller does not hit it in the first place.  CI passes the static
+    # archive, for which this is a no-op.
+    if ".so" in lib.name or lib.suffix in (".dylib", ".so"):
+        compile_cmd.append(f"-Wl,-rpath,{lib.resolve().parent}")
+    compiled = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+    if compiled.returncode != 0:
+        return None, f"{' '.join(compile_cmd)}\n{compiled.stderr}"
+    return driver, ""
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -3078,37 +3115,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="ama-ghash-ct-") as tmp:
         workdir = Path(tmp)
-        source = workdir / "driver.c"
-        source.write_text(
+        driver, build_error = build_driver(
             _TAINT_DRIVERS[args.target] if args.taint else _DRIVERS[args.target],
-            encoding="utf-8",
-        )
-        driver = workdir / "driver"
-
-        compile_cmd = [
+            args.lib,
+            args.include,
             args.cc,
-            "-O2",
-            str(source),
-            f"-I{args.include}",
-            "-o",
-            str(driver),
-            str(args.lib),
-            "-lpthread",
-            "-lm",
-        ]
-        # A shared library named on the command line links fine but is not
-        # found at load time without an rpath, which is how this check came to
-        # report PASS over a driver that never started.  The exit-status check
-        # in _measure() now catches that; embedding the rpath means
-        # the caller does not hit it in the first place.  CI passes the static
-        # archive, for which this is a no-op.
-        if ".so" in args.lib.name or args.lib.suffix in (".dylib", ".so"):
-            compile_cmd.append(f"-Wl,-rpath,{args.lib.resolve().parent}")
-        compiled = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
-        if compiled.returncode != 0:
+            workdir,
+        )
+        if driver is None:
             print(
-                "CONSTANT-TIME CHECK INCONCLUSIVE — the driver did not build.\n"
-                f"{' '.join(compile_cmd)}\n{compiled.stderr}",
+                "CONSTANT-TIME CHECK INCONCLUSIVE — the driver did not build.\n" + build_error,
                 file=sys.stderr,
             )
             return 2

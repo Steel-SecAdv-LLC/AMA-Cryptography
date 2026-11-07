@@ -57,6 +57,8 @@ on:
       # re-run dudect, or the change ships unexercised (audit Low).
       - 'tools/check_ghash_constant_time.py'
       - 'tools/check_secret_division.py'
+      - 'tools/check_ct_operand.py'
+      - 'tools/ct_operand/**'
       - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
@@ -119,6 +121,8 @@ jobs:
             CMakeLists.txt
             tools/check_ghash_constant_time.py
             tools/check_secret_division.py
+            tools/check_ct_operand.py
+            tools/ct_operand/**
             tools/check_avx_scoping.py
             tools/constant_time/**
             .github/workflows/dudect.yml
@@ -1165,6 +1169,99 @@ jobs:
           python tools/check_avx_scoping.py \
             --lib build-shared/lib/libama_cryptography.so
 
+  secret-operand-check:
+    # INVARIANT-12, leakage class (c): a secret-derived value reaching an
+    # instruction whose latency may depend on its operands.  The lanes above
+    # see branches and addresses (Memcheck taint) and instruction-sequence
+    # differences (callgrind counts); none of them sees a secret operand of a
+    # fixed instruction sequence, which is where KyberSlash lived.
+    #
+    # tools/ct_operand/ctoperand.c is a Valgrind tool on VEX IR that runs the
+    # SAME taint drivers as the Memcheck lane (and honours the same
+    # AMA_CT_DECLASSIFY points), records every instruction that consumes a
+    # tainted operand, and classifies each one twice:
+    #   - BLOCKING: the secret reached a division, floating-point or
+    #     square-root IR operation -- the classes neither Intel's DOIT list nor
+    #     Arm's DIT list admits.  Zero exemptions.
+    #   - INVENTORY: the consuming mnemonic is absent from the vendor list
+    #     (tools/ct_operand/allowlists.json).  Printed, not blocking: the
+    #     residue on this tree is compiler instruction selection (leave, cwde,
+    #     shufps, movhlps, rep movsq) that would need a standing exemption list
+    #     to block on, which AGENTS.md section 10 rejects.  The reviewed
+    #     classification is in docs/constant-time-testing.md.
+    #
+    # Verified by mutation (2026-11-07): a divide, a double multiply and a
+    # square root planted in kyber_compress_d_impl each fail this job at the
+    # planted instructions on the archive, the divide also on the LTO shared
+    # object; a planted multiply passes, as the vendor lists admit integer
+    # multiply, and is reported at its 24 inlined copies once IMUL/MUL/MULX
+    # are denied.
+    name: Secret-operand instruction gate (Intel DOIT / Arm DIT lists)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    # The archive sweep is eighteen instrumented runs (slhdsa-sign, two
+    # parameter sets, the longest), the shared-object sweep ten more, plus two
+    # library builds.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        # valgrind ships the tool headers and the libcoregrind/libvex
+        # archives the gate links its tool against; binutils supplies `as`
+        # (mnemonic-spelling probes), objdump and readelf.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake valgrind binutils
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        # Same configuration as ghash-scalar-invariance: Release, LTO off.
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      - name: No secret reaches a division, floating-point or square-root instruction
+        # Every taint driver check_ghash_constant_time.py defines.
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign; do
+            python tools/check_ct_operand.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target"
+          done
+
+      - name: Build the shipped shared library (LTO on, as the wheel ships it)
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      - name: Secret-operand gate on the shipped shared object
+        # The targets the Memcheck shipped-object lane runs: their drivers use
+        # only public symbols and carry no declassification point.
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
+                        secp256k1-scalarmult \
+                        kyber-decaps consttime ascon-encrypt agent-binding \
+                        argon2id-verify; do
+            python tools/check_ct_operand.py \
+              --lib build-shared/lib/libama_cryptography.so \
+              --optimized-witness build-shared/CMakeCache.txt \
+              --target "$target"
+          done
+
   aead-verify-invariance:
     # The AEAD accept/reject pair at ct_len == 0, pinned by retired
     # instruction counts.  Runs on the ARM runner deliberately: the
@@ -1238,6 +1335,7 @@ jobs:
       - dudect-x25519-avx2-batch
       - dudect-simd-sweep
       - ghash-scalar-invariance
+      - secret-operand-check
       - aead-verify-invariance
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -1274,6 +1372,7 @@ jobs:
         R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
         R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
+        R_CTOPND:  ${{ needs['secret-operand-check'].result }}
         R_AEADVER: ${{ needs['aead-verify-invariance'].result }}
       run: |
         set -euo pipefail
@@ -1336,6 +1435,7 @@ jobs:
         # No trigger condition of their own: success whenever the change is
         # relevant, skipped when it is not.
         check ghash-scalar-invariance   "${R_GHASH}"   "${always_expected}"
+        check secret-operand-check      "${R_CTOPND}"  "${always_expected}"
         check aead-verify-invariance    "${R_AEADVER}" "${always_expected}"
 
         if [ "${rc}" -ne 0 ]; then

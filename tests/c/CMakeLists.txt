@@ -96,6 +96,10 @@ add_ama_test(test_sha512_kat test_sha512_kat.c)
 # rather than passing silently (Copilot review #322 follow-up).
 add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
 set_tests_properties(test_aes_gcm_backend_introspect PROPERTIES SKIP_RETURN_CODE 77)
+# Hardware data-independent-timing mode (Intel DOITM / Arm PSTATE.DIT): the
+# runtime half of tools/check_ct_operand.py, checked against probes the test
+# makes itself (CPUID on x86-64, HWCAP_DIT and a direct MRS on AArch64).
+add_ama_test(test_ct_hw_mode test_ct_hw_mode.c)
 
 # Audit Issue 3 close-out (2026-05): per-slot AMA_DISPATCH_ONLY contract
 # test.  Single executable, one CTest case per known slot.  Each case
