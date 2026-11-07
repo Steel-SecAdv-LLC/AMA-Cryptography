@@ -410,8 +410,9 @@ int main(void) {
     platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe's expectations are written for the x86-64 lifting",
 )
+@pytest.mark.parametrize("encoding", [[], ["-mavx"]], ids=["sse", "vex"])
 def test_the_tool_reports_each_class_on_the_secret_sites_only(
-    gate: ModuleType, tmp_path: Path
+    gate: ModuleType, tmp_path: Path, encoding: list[str]
 ) -> None:
     if (
         not shutil.which("valgrind")
@@ -422,7 +423,9 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
     src = tmp_path / "probe.c"
     exe = tmp_path / "probe"
     src.write_text(_PROBE, encoding="utf-8")
-    subprocess.run(["gcc", "-O2", "-g", str(src), "-o", str(exe), "-lm"], check=True)
+    # Both encodings on every host: `-mavx` makes gcc emit the VEX forms
+    # (vdivsd, vmulsd, vsqrtsd ...) a newer default target produces anyway.
+    subprocess.run(["gcc", "-O2", "-g", *encoding, str(src), "-o", str(exe), "-lm"], check=True)
     text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
     assert text is not None
     report = gate.parse_report(text)
@@ -463,8 +466,20 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
         if s.symbol.startswith("h_branch+") and not s.classes & gate.CLASS_BITS["BRANCH"]
     ]
     assert compare and all(s.classes & gate.CLASS_BITS["OTHER"] for s in compare)
-    blocking = {name for _, name, _ in verdict.class_violations}
-    assert {"DIV", "CVTSI2SD", "MULSD", "SQRTSD"} <= blocking, blocking
+    # The verdict, by function and class rather than by mnemonic: which
+    # encoding carries the operation (SSE `mulsd` or VEX `vmulsd`) is the
+    # compiler's choice -- CI's Ubuntu 26.04 toolchain emits the VEX forms --
+    # and the gate's blocking rule is the IR class, so that is what is held.
+    blocking: dict[str, set[str]] = {}
+    for site, _, _ in verdict.class_violations:
+        function = site.symbol.split("+", 1)[0]
+        blocking.setdefault(function, set()).update(
+            c for c in gate.class_names(site.classes) if c in gate.BLOCKING_CLASSES
+        )
+    assert "DIV" in blocking.get("f_div", set()), blocking
+    assert "FP" in blocking.get("f_fp", set()), blocking
+    assert "SQRT" in blocking.get("f_sqrt", set()), blocking
+    assert not {"f_mul", "g_div", "h_branch"} & set(blocking), blocking
 
 
 # ---------------------------------------------------------------------------
