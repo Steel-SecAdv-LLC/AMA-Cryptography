@@ -858,6 +858,22 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target agent-binding
 
+      - name: Argon2id legacy verify instruction count must not depend on the verdict
+        # The deterministic counterpart to the `Argon2id legacy verify`
+        # wall-clock lane, which had none.  That lane turned main red at
+        # 9bbb9f7: |t| 14.86 in 3 of 3 rounds, class0-class1 negative (reject
+        # slower) in every round.  The call it times returned through a
+        # ternary that gcc 13 compiled to a branch on the verdict, two
+        # instructions per call more on reject; the verdict is now selected
+        # arithmetically.  Two VERDICTS, as for `agent-binding`.
+        #
+        # Measured here: 1,415,002 retired instructions, byte-identical
+        # whether the verify accepts or rejects — delta 0, noise floor 0.  With
+        # the ternary restored this step fails (I refs by 8, four calls).
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target argon2id-verify
+
       # The four steps below are the deterministic counterparts for the
       # constant-time utility primitives beyond `ama_consttime_memcmp`
       # (which the `consttime` target already covers).  Each has a strict
@@ -1044,8 +1060,8 @@ jobs:
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
-                        consttime ghash ascon-encrypt agent-binding aead-verify \
-                        base64 secp256k1-seckey slhdsa-sign; do
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done
@@ -1072,7 +1088,8 @@ jobs:
           set -euo pipefail
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
                         secp256k1-scalarmult \
-                        kyber-decaps consttime ascon-encrypt agent-binding; do
+                        kyber-decaps consttime ascon-encrypt agent-binding \
+                        argon2id-verify; do
             python tools/check_ghash_constant_time.py \
               --lib build-shared/lib/libama_cryptography.so \
               --optimized-witness build-shared/CMakeCache.txt \

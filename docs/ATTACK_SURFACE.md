@@ -19,7 +19,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 - Declared / exported entry points: **196**
 - Referenced by C tests: **194**
 - Referenced by Fuzz: **78**
-- Referenced by CT gate: **41**
+- Referenced by CT gate: **43**
 - Referenced by Python layer: **140**
 - Reached by neither a C test nor a fuzz harness: **0**
 
@@ -39,8 +39,8 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_agent_binding_encode` | 1 | 1 | — | 1 |
 | `ama_agent_binding_init` | 2 | 1 | 1 | 1 |
 | `ama_argon2id` | 2 | 1 | — | 1 |
-| `ama_argon2id_legacy` | 2 | — | — | 1 |
-| `ama_argon2id_legacy_verify` | 2 | — | — | 1 |
+| `ama_argon2id_legacy` | 2 | — | 1 | 1 |
+| `ama_argon2id_legacy_verify` | 2 | — | 1 | 1 |
 | `ama_ascon_aead128_decrypt` | 3 | 1 | 1 | 1 |
 | `ama_ascon_aead128_encrypt` | 4 | 1 | 2 | 1 |
 | `ama_ascon_hash256` | 2 | 1 | 2 | 1 |

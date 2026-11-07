@@ -72,7 +72,7 @@ compiler that does perform the conversion, not as a signal this gate reproduces 
 today's toolchain; the operative measurement is the per-target limits below (all
 zero), which the gate DOES reproduce on both gcc 13 and clang 18.
 
-Per-target limits are set from measurement, not from headroom: all TWENTY-TWO
+Per-target limits are set from measurement, not from headroom: all TWENTY-THREE
 targets measure a cross-class delta of exactly zero under both gcc 13 and
 clang 18 at -O3, with a same-class floor of exactly zero, and every limit is
 0.  `ecdsa` was the last holdout — it carried a limit of 64 for the DER
@@ -262,6 +262,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: ascon-hash            0 / 0               0 / 0                0
 #: ascon-encrypt         0 / 0               0 / 0                0
 #: agent-binding         0 / 0               0 / 0                0
+#: argon2id-verify       0 / 0               0 / 0                0
 #: kyber-decaps          0 / 0               0 / 0                0
 #: sha3-256              0 / 0               0 / 0                0
 #: ed25519-sign          0 / 0               0 / 0                0
@@ -279,7 +280,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: secp256k1-seckey      0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All twenty-two are exactly zero, on both compilers, with a same-class floor of
+#: All twenty-three are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
@@ -325,7 +326,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
 #:
-#: `x25519-batch` is the thirteenth of the twenty-two, and it exists because a
+#: `x25519-batch` is the thirteenth of the twenty-three, and it exists because a
 #: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers seven info-only wall-clock lanes, and each one that names a reason
@@ -367,7 +368,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
 #: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the twenty-two is invariant by construction and measures
+    # Every one of the twenty-three is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -378,6 +379,11 @@ THRESHOLDS = {
     "ascon-hash": 0,
     "ascon-encrypt": 0,
     "agent-binding": 0,
+    # `ama_argon2id_legacy_verify`: accept and reject must retire the same
+    # instructions.  Added 2026-11-07 after the verdict branch it pins was
+    # found behind main's red `Argon2id legacy verify` wall-clock lane; see
+    # the driver comment for the measurement.
+    "argon2id-verify": 0,
     "kyber-decaps": 0,
     "sha3-256": 0,
     "ed25519-sign": 0,
@@ -428,9 +434,9 @@ THRESHOLDS = {
 }
 
 #: The prose above states this inventory's size in five present-tense places
-#: ("all TWENTY-TWO", "All twenty-two are exactly zero", "the thirteenth
-#: of the twenty-two", "Every one of the twenty-two", "across all
-#: twenty-two targets" / "the inventory is twenty-two" below MISS_THRESHOLD) — past-tense
+#: ("all TWENTY-THREE", "All twenty-three are exactly zero", "the thirteenth
+#: of the twenty-three", "Every one of the twenty-three", "across all
+#: twenty-three targets" / "the inventory is twenty-three" below MISS_THRESHOLD) — past-tense
 #: records such as "the other thirteen sat at 0" describe the inventory at
 #: the moment they were measured and stay as written.  The count drifted
 #: before this check existed: at one point the same dict was
@@ -444,7 +450,7 @@ THRESHOLDS = {
 #: seventeen" while the table held twenty — so they no longer state a count
 #: at all, and tests/test_ghash_constant_time_gate.py fails if a comment
 #: under src/c or include that names this tool states one again.
-_DOCUMENTED_TARGET_COUNT = 22
+_DOCUMENTED_TARGET_COUNT = 23
 if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
     raise SystemExit(
         f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
@@ -623,6 +629,15 @@ _REMEDY = {
         "comparison result before the return. Look for a conditional that skips\n"
         "work on the reject path; see src/c/internal/ama_ct_barrier.h and the\n"
         "masked-return pattern in ama_chacha20poly1305.c."
+    ),
+    "argon2id-verify": (
+        "ama_argon2id_legacy_verify in src/c/ama_argon2.c must compare the\n"
+        "derived tag in constant time and return an ARITHMETICALLY selected\n"
+        "verdict, so accepting and rejecting retire the same instructions. A\n"
+        "delta here is a verdict oracle on a password-hash check, and the shape it\n"
+        "has had is a ternary on the comparison result compiled to a branch\n"
+        "(gcc 13; clang 18 emitted the same source branch-free). Look at the\n"
+        "return statement; ama_agent_binding_check has the masked-return form."
     ),
     "kyber-decaps": (
         "kyber_decapsulate_internal in src/c/ama_kyber.c must compute BOTH the\n"
@@ -1269,6 +1284,60 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 2000; i++) {
         ama_error_t rc = ama_agent_binding_check(b, authority_key,
                                                  sizeof authority_key);
+        sink = sink ^ (unsigned)rc;
+    }
+    return 0;
+}
+"""
+
+_ARGON2ID_VERIFY_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* ama_argon2id_legacy_verify on a MATCHING and a MISMATCHING stored tag.
+ *
+ * Like `agent-binding`, the two classes are two VERDICTS rather than two
+ * secrets: class 'A' verifies the tag the legacy derivation produces, every
+ * other class verifies the same tag with its first byte flipped.  Accepting
+ * and rejecting must retire the same instructions; a delta is a verdict
+ * oracle on a password-hash check.
+ *
+ * Why this target exists.  The wall-clock lane `Argon2id legacy verify` in
+ * tests/c/test_dudect.c failed main at 9bbb9f7 (|t| 14.86, 3 of 3 rounds,
+ * reject slower in every round), and the call it times then ended in
+ * `return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;`, which gcc 13
+ * compiled to a conditional branch on the verdict: rejecting retired two more
+ * instructions per call than accepting.  No deterministic instrument covered
+ * the call, so the only witness was a timing lane on shared hardware.
+ *
+ * Minimal Argon2 cost (t = 1, m = 8 KiB, p = 1), as the wall-clock lane uses:
+ * the property is the compare-and-return after the derivation, which the cost
+ * parameters do not change.  The whole driver retires 1,415,002 instructions
+ * (gcc 13, the setup derivation and four verifies), and four calls amplify a
+ * one-instruction divergence to four.  The return value goes to a sink and is
+ * never branched on. */
+int main(int argc, char **argv) {
+    static const uint8_t password[16] = "dudect-arg2pass";
+    static const uint8_t salt[16] = "dudect-arg2salt!";
+    uint8_t tag_good[32], tag_bad[32];
+    unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+
+    if (ama_argon2id_legacy(password, sizeof password, salt, sizeof salt,
+                            1, 8, 1, tag_good, sizeof tag_good) != AMA_SUCCESS)
+        return 1;
+    memcpy(tag_bad, tag_good, sizeof tag_bad);
+    tag_bad[0] = (uint8_t)(tag_bad[0] ^ 0x01u);
+
+    /* Selected ONCE, outside the measured loop. */
+    const uint8_t *tag = (fill == 0x41u) ? tag_good : tag_bad;
+
+    static volatile unsigned sink;
+    for (int i = 0; i < 4; i++) {
+        ama_error_t rc = ama_argon2id_legacy_verify(password, sizeof password,
+                                                    salt, sizeof salt, 1, 8, 1,
+                                                    tag, sizeof tag_good);
         sink = sink ^ (unsigned)rc;
     }
     return 0;
@@ -2162,6 +2231,38 @@ int main(void) {
     return (rc_good == AMA_SUCCESS && rc_bad != AMA_SUCCESS) ? 0 : 1;
 }
 """,
+    "argon2id-verify": _TAINT_PRELUDE
+    + r"""
+/* Secret: the stored tag, and so the comparison result derived from it.  A
+ * matching and a mismatching tag are both verified; the verdict must be
+ * selected arithmetically, never by a branch on the comparison.  The password
+ * is NOT tainted: Argon2id's second half-pass indexes memory by the data it
+ * has computed (RFC 9106 Sec 3.4.1.3), which is the algorithm's design, not a
+ * defect this check could act on. */
+int main(void) {
+    static const uint8_t password[16] = "dudect-arg2pass";
+    static const uint8_t salt[16] = "dudect-arg2salt!";
+    uint8_t tag_good[32], tag_bad[32];
+    if (ama_argon2id_legacy(password, sizeof password, salt, sizeof salt,
+                            1, 8, 1, tag_good, sizeof tag_good) != AMA_SUCCESS)
+        return 1;
+    memcpy(tag_bad, tag_good, sizeof tag_bad);
+    tag_bad[0] ^= 0x01u;
+    TAINT(tag_good, sizeof tag_good);
+    TAINT(tag_bad, sizeof tag_bad);
+    ama_error_t rc_good = ama_argon2id_legacy_verify(password, sizeof password, salt,
+                                                     sizeof salt, 1, 8, 1, tag_good,
+                                                     sizeof tag_good);
+    ama_error_t rc_bad = ama_argon2id_legacy_verify(password, sizeof password, salt,
+                                                    sizeof salt, 1, 8, 1, tag_bad,
+                                                    sizeof tag_bad);
+    UNTAINT(&rc_good, sizeof rc_good);
+    UNTAINT(&rc_bad, sizeof rc_bad);
+    static volatile unsigned sink;
+    sink ^= (unsigned)rc_good ^ (unsigned)rc_bad;
+    return (rc_good == AMA_SUCCESS && rc_bad == AMA_ERROR_VERIFY_FAILED) ? 0 : 1;
+}
+""",
     "aead-verify": _TAINT_PRELUDE
     + r"""
 /* Secret: the key.  The accept and the reject path are both driven; a branch
@@ -2580,6 +2681,7 @@ _DRIVERS = {
     "ascon-hash": _ASCON_HASH_DRIVER,
     "ascon-encrypt": _ASCON_ENCRYPT_DRIVER,
     "agent-binding": _AGENT_BINDING_DRIVER,
+    "argon2id-verify": _ARGON2ID_VERIFY_DRIVER,
     "kyber-decaps": _KYBER_DECAPS_DRIVER,
     "sha3-256": _SHA3_256_DRIVER,
     "ed25519-sign": _ED25519_SIGN_DRIVER,
@@ -2659,11 +2761,11 @@ def _limit_for(metric: str, count_threshold: int) -> int:
 
 
 #: Miss-count threshold.  Zero, and that is measured rather than aspirational:
-#: across all twenty-two targets at gcc 13 -O3 and clang 18 -O3, every
+#: across all twenty-three targets at gcc 13 -O3 and clang 18 -O3, every
 #: cross-class miss delta and every same-class noise floor is exactly 0.  (An
 #: earlier revision of this note said "all ten targets" and cited ecdsa as
 #: "the one target with a legitimate public-data spread ... 24 instructions
-#: and 8 data references".  Both were stale: the inventory is twenty-two, and
+#: and 8 data references".  Both were stale: the inventory is twenty-three, and
 #: ecdsa's spread went to zero when the target moved to
 #: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists

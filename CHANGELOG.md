@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-11-06 |
+| Last Updated | 2026-11-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -28,6 +28,46 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > them to 5.0.0 was a claim that does not resolve against the published
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
+
+### Argon2id legacy verify: the verdict was a branch — 2026-11-07
+
+`main` went red at `9bbb9f7` on one lane, `dudect - Utility Functions`:
+`Argon2id legacy verify` over the threshold in 3 of 3 rounds (|t| 14.86,
+8,192 measurements per round), reported UNUSABLE because the winning rung's
+t changed sign between rounds. The effect did not: class0 - class1 was
+negative, reject slower, in every round (-90.7, -25.7, -62.3 ns), and in the
+one earlier excursion on record (`40152977431`, -31.4 ns, 1 of 3 rounds).
+
+- **Cause, measured.** `ama_argon2id_legacy_verify` ended in
+  `return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;`, which gcc 13
+  at -O3 compiled to `test; jne` to a separate `mov $-4; jmp` block: under
+  callgrind, rejecting retired two instructions per call more than accepting.
+  clang 18 emitted the same source branch-free. The verdict is now selected
+  arithmetically, the form `ama_agent_binding_check` already uses. What is
+  established is that deterministic difference and its direction, which is
+  the direction of every recorded excursion. That it accounts for the whole
+  wall-clock effect on the runner is not: the lane passes on this
+  development host before and after the change, so the runner result is
+  not reproducible here.
+- **Missing gate, built.** No deterministic instrument covered the call;
+  the only witness was a wall-clock lane on shared runners.
+  `tools/check_ghash_constant_time.py --target argon2id-verify` (instruction
+  count, and secret taint on the stored tag) now does, in `dudect.yml` on the
+  archive and on the LTO shared object. Measured 0 / 0 across eight classes,
+  same-class floor 0, under gcc 13 and clang 18 (1,415,002 and 1,395,427
+  I refs); taint clean on the archive and on the shipped `.so`.
+- **PIN, by mutation.** With the ternary restored the count gate fails
+  (I refs by 8 over four calls, reproduced in the reversed sweep) and the
+  taint gate reports the jump in `ama_argon2id_legacy_verify`, on the gcc
+  archive and on the gcc LTO `.so`. Under clang 18 both pass, because clang
+  emits no branch there. A value barrier on the mismatch bit was also tried
+  and measured redundant on all three builds, so it is not carried.
+- **Diagnostics.** `tests/c/dudect/dudect.h` printed, beside "rung N", the
+  effect size the verdict uses, which is the uncropped difference when that is
+  larger: the red run logged `t = +6.3194 ... rung 2, class0-class1 =
+  -25.679 ns`. The rung's own difference is now printed there, with the
+  uncropped one beside it when they differ. `tests/c/test_dudect.c` said the
+  Argon2id fail path was straight-line; corrected (AGENTS.md section 6.6).
 
 ### CodeQL: every result blocks, and the source CodeQL never saw — 2026-11-06
 
