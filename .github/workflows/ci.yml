@@ -683,7 +683,7 @@ jobs:
 
   code-quality:
     name: Code Quality Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
 
     steps:
@@ -932,7 +932,7 @@ jobs:
     # at PR time, not on the post-merge auto-docs job whose failure does
     # not block the merge that introduced it.
     name: Sphinx Docs Build (Python API)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     env:
       APT_TOTAL_BUDGET: "150"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -981,7 +981,7 @@ jobs:
 
   security-checks:
     name: Security Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 10 -> 15: this job now compiles the native library so it can run the
     # semgrep gate's end-to-end assertion (see the build step below).  The
     # scans themselves take ~4 minutes; the build adds ~2.
@@ -1774,7 +1774,7 @@ jobs:
 
   benchmark-regression:
     name: Benchmark Regression Detection (${{ matrix.runner_cpu_class }})
-    # x86_64 entry uses ubuntu-latest; arm64 entry uses ubuntu-24.04-arm
+    # x86_64 entry uses ubuntu-26.04; arm64 entry uses ubuntu-24.04-arm
     # (GitHub-hosted Cortex-A78 / Graviton-class AArch64 runner).  The
     # arm-baseline.json arm entry exercises the NEON paths wired by this
     # PR (AES-GCM, ChaCha20, Argon2) end-to-end so any byte-level
@@ -1784,7 +1784,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             runner_cpu_class: x86_64
             baseline_path: benchmarks/baseline.json
           - os: ubuntu-24.04-arm
@@ -1817,7 +1817,7 @@ jobs:
         # treat as the source of truth.  Pin the value into the runner
         # matrix entry so a benchmark JSON produced by ubuntu-24.04-arm
         # is unambiguously distinguishable from one produced by
-        # ubuntu-latest x86_64 (the regression detector keys off this).
+        # ubuntu-26.04 x86_64 (the regression detector keys off this).
         ARCH=$(lscpu | awk -F: '/^Architecture:/ {gsub(/^ +/, "", $2); print $2}')
         echo "arch=${ARCH}"   >> "$GITHUB_OUTPUT"
         echo "matrix_class=${{ matrix.runner_cpu_class }}" >> "$GITHUB_OUTPUT"
@@ -1926,7 +1926,7 @@ jobs:
 
   constant-time-check:
     name: Constant-Time Verification (Smoke Test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -2004,7 +2004,8 @@ jobs:
   # This lane asserts the in-house AVX-512 4-way Keccak kernel is byte-identical
   # to the scalar and AVX2 kernels.  It used to probe /proc/cpuinfo and put
   # EVERY build/test step behind `if: have_avx512 == '1'`.  GitHub-hosted
-  # ubuntu-latest rarely exposes AVX-512, so on almost every run all steps
+  # x86-64 runners (ubuntu-latest then, ubuntu-26.04 now) rarely expose
+  # AVX-512, so on almost every run all steps
   # skipped, the job — which carries no job-level `if:` — went green having done
   # nothing, and `ci-gate` (which needs this job) counted that as success.  A
   # required check that never executed proved nothing about the kernel: the
@@ -2012,9 +2013,12 @@ jobs:
   #
   # It now runs UNCONDITIONALLY under Intel SDE — the same "emulate the ISA the
   # host lacks" approach arm-qemu.yml uses for the AArch64 and SVE2 kernels.
-  # qemu is not usable here: qemu 8.2 (ubuntu-latest) has no AVX-512 in its
-  # linux-user TCG — `-cpu max` reports AVX512F=0 and leaves XCR0 bits 5-7
-  # clear — so ama_cpuid_has_avx512_keccak() would self-skip under it.  SDE
+  # qemu is not usable here: qemu has no AVX-512 in its linux-user TCG.  8.2
+  # (the ubuntu-latest image when this was measured) reports AVX512F=0 under
+  # `-cpu max` and leaves XCR0 bits 5-7 clear, and 10.2.1 (the ubuntu-26.04
+  # image) lists AVX2 and no AVX-512 bit in target/i386/cpu.c's
+  # TCG_7_0_EBX_FEATURES — so ama_cpuid_has_avx512_keccak() would self-skip
+  # under it.  SDE
   # presents AVX-512F + AVX-512VL and enables the AVX-512 save area, and it
   # executes the real EVEX opcodes the compiler emitted, so the CPUID bundle
   # passes, the kernel actually runs, and a divergence fails the build.  Byte-
@@ -2031,7 +2035,7 @@ jobs:
   # ============================================================================
   test-avx512:
     name: AVX-512 SHA3 4-way KAT
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: test
     timeout-minutes: 20
     steps:
@@ -2104,7 +2108,7 @@ jobs:
 
   c-consumer:
     name: C consumer (install + link, gcc & clang, shared & static)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -2197,7 +2201,7 @@ jobs:
       - constant-time-check
       - test-avx512
       - c-consumer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
     - name: Fail unless every required job succeeded

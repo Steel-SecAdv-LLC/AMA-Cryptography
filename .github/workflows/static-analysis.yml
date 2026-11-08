@@ -52,7 +52,7 @@ concurrency:
 jobs:
   cppcheck:
     name: Cppcheck Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       APT_TOTAL_BUDGET: "300"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -139,7 +139,7 @@ jobs:
 
   clang-analyzer:
     name: Clang Static Analyzer (scan-build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -189,7 +189,7 @@ jobs:
 
   codeql:
     name: CodeQL Security Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       # The same two choices the codeql-variants job states, so both CodeQL
@@ -282,7 +282,7 @@ jobs:
     # configuration main files its alerts under (see the codeql job), and a
     # result here fails this job, which static-analysis-gate requires.
     name: CodeQL (${{ matrix.variant }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -362,7 +362,7 @@ jobs:
 
   compiler-warnings:
     name: Strict Compiler Warnings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Three full builds per compiler now (unoptimized, Release+LTO, and the
     # AMA_USE_NATIVE_PQC=OFF configuration), so the 10-minute budget that
     # covered one no longer fits.
@@ -560,7 +560,7 @@ jobs:
 
   compiler-warnings-aarch64:
     name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # The x86-64 job above cannot see src/c/neon/** or src/c/sve2/** at all:
     # on x86 both collapse to a placeholder typedef in their `#else` branch.
@@ -679,7 +679,7 @@ jobs:
     # root INVARIANTS.md is canonical, while .github/INVARIANTS.md must
     # remain a short pointer so a second divergent copy cannot reappear.
     name: Version / Invariants Consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
       - name: Checkout code
@@ -690,7 +690,7 @@ jobs:
 
   address-sanitizer:
     name: AddressSanitizer + UBSan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 25, not 15.  This job runs `ctest --output-on-failure` over the WHOLE C
     # suite under ASan+UBSan, which is the same command `memory-sanitizer`
     # below runs under a HEAVIER sanitizer with a 25-minute budget — the two
@@ -772,7 +772,7 @@ jobs:
     # pull_request and push, and this lane runs on all of them (an `if:` that
     # enumerated every trigger used to say so in a way that read as a
     # restriction).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - name: Checkout code
@@ -847,7 +847,7 @@ jobs:
     # 1-4 minutes under both sanitizers, which is well inside the job budget.
     # Unconditional, like memory-sanitizer above: every trigger this workflow
     # has runs this lane.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -907,7 +907,7 @@ jobs:
     # misses (different implementation strategy) and giving a second opinion on
     # the ASan reports for free.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - name: Checkout code
@@ -972,7 +972,7 @@ jobs:
   clang-tidy:
     name: clang-tidy (security + correctness, fail-closed)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # FAIL-CLOSED (audit Issue 9 close-out).  The codebase is
     # clang-tidy-clean against the enabled check inventory in
@@ -1127,7 +1127,7 @@ jobs:
     # for the native-artefact diff we exclude RECORD explicitly and
     # rely on the .py check above to catch any drift in inputs.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       # PINNED manylinux_2_28 image (audit Issue 10 close-out).  This
       # is the toolchain anchor that makes native-artefact byte-equality
@@ -1623,7 +1623,7 @@ jobs:
     # -fsanitize-memory-track-origins=2, SIMD off), so a green nightly implies a
     # green fast lane and vice-versa. No schedule `if:` guard — this one runs on
     # every push/PR; the heavier full-suite MSan/TSan/Valgrind stay nightly-only.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 12
     env:
       APT_TOTAL_BUDGET: "360"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -1704,7 +1704,7 @@ jobs:
       - clang-tidy
       - reproducible-build
       - memory-sanitizer-kat
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
       - name: Fail unless every job reached the state this trigger requires

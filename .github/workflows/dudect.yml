@@ -97,7 +97,7 @@ jobs:
   # failed detection is a failure, never "not relevant".
   changes:
     name: Relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.match.outputs.relevant }}
@@ -147,7 +147,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
     # margin above the schedule the verdict rule can demand.
@@ -220,7 +220,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The weekly schedule run does a high-N reading (see the run step) and needs
     # more wall-clock than a PR run; 40 min covers build + the 30-min test cap.
     timeout-minutes: ${{ (github.event_name == 'schedule' && 40) || 20 }}
@@ -275,7 +275,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -334,7 +334,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
     # margin above the schedule the verdict rule can demand.
@@ -394,7 +394,7 @@ jobs:
   #
   # Matrix:
   #
-  #   os = ubuntu-latest     (x86-64 host)
+  #   os = ubuntu-26.04      (x86-64 host)
   #        ubuntu-24.04-arm  (AArch64 / NEON / [SVE2 if available] host)
   #
   #   slot — the full dispatch-table-routable SIMD inventory.  The
@@ -430,7 +430,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-26.04, ubuntu-24.04-arm]
         slot:
           - sha3-avx512x4
           # The AVX2 4-way Keccak and the two x86 AES-GCM hardware kernels had
@@ -466,28 +466,28 @@ jobs:
           - dilithium-ntt-sve2
           - x25519-avx2
         exclude:
-          # x86-64 hosts (ubuntu-latest): exclude NEON + SVE2 slots.
+          # x86-64 hosts (ubuntu-26.04): exclude NEON + SVE2 slots.
           # The kernels are AArch64-only; the dispatcher will report
           # the slot unsupported and CTest will treat the cell as a
           # silent pass — wasting compute and producing a confusing
           # green run.  Skip them at the matrix level instead.
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: aes-gcm-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: chacha20-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: sha3-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: kyber-ntt-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: dilithium-ntt-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: argon2-g-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: kyber-sve2
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: sha3-sve2
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: dilithium-ntt-sve2
           # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
           # the AVX2 X25519 lane.  Same rationale as above, with
@@ -667,7 +667,7 @@ jobs:
     name: Scalar AES-GCM instruction-count invariance
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20 covered the callgrind targets alone; the secret-taint lane (seventeen
     # Memcheck runs, `slhdsa-sign` the longest at roughly a minute of CPU for
     # its two parameter sets) and the shipped-shared-object lane (an LTO build
@@ -1218,7 +1218,7 @@ jobs:
     name: Secret-operand instruction gate (Intel DOIT / Arm DIT lists)
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - name: Checkout code
@@ -1484,7 +1484,7 @@ jobs:
       - secret-operand-check
       - secret-operand-check-arm64
       - aead-verify-invariance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
     - name: Fail unless every job reached the state this trigger requires

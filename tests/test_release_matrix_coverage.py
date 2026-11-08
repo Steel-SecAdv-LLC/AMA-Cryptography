@@ -44,15 +44,19 @@ WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workfl
 #: rather than being guessed at.
 RUNNER_ARCH: dict[str, str] = {
     "ubuntu-latest": "linux-x86_64",
+    "ubuntu-26.04": "linux-x86_64",
     "ubuntu-24.04": "linux-x86_64",
     "ubuntu-24.04-arm": "linux-aarch64",
+    "ubuntu-26.04-arm": "linux-aarch64",
     "ubuntu-22.04-arm": "linux-aarch64",
     "windows-latest": "windows-x86_64",
+    "windows-2025-vs2026": "windows-x86_64",
     "windows-2025": "windows-x86_64",
     "macos-latest": "macos-arm64",
     "macos-15": "macos-arm64",
     "macos-26": "macos-arm64",
     "macos-15-intel": "macos-x86_64",
+    "macos-26-intel": "macos-x86_64",
 }
 
 

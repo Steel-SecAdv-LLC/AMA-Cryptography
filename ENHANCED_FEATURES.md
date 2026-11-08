@@ -479,7 +479,7 @@ Location: `fuzz/`
 
 The OSS-Fuzz submission files in `oss-fuzz/` are built and checked by
 OSS-Fuzz's own driver on every push (`tools/test_oss_fuzz_build.sh`), and
-ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-latest`,
+ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-26.04`,
 `.github/workflows/clusterfuzzlite.yml`), building the fuzzers in OSS-Fuzz's
 `base-builder` image, with the corpus persisted between runs as workflow
 artifacts. The project is not onboarded to OSS-Fuzz itself, so nothing runs on

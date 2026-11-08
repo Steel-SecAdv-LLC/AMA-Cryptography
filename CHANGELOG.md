@@ -29,6 +29,90 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### Runner images pinned where the ruleset does not bind the job's name; the label table refreshed — 2026-11-08
+
+Every job of pull request #434's runs carried one of two GitHub notices as a
+check-run annotation. On 92 of the 129 check runs of head `a30e848`: "The
+ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026". On
+the seven `macos-latest` jobs: a capacity notice about arm64 queue times.
+Measured by the `Runner Image` group of the job logs (runs 42503992041,
+42503992064 and 42503992236): all eight sampled `ubuntu-latest` jobs — the
+lint, strict-warnings, secret-operand, C Library gcc, two Python test legs,
+the AArch64 QEMU and the x86-64 benchmark lanes — ran on `ubuntu-26.04`
+(image 20261101.186.1: gcc 15.2.0, clang 21.1.8, qemu 10.2.1, valgrind
+3.26.0), while GitHub's runner-images table that day still named Ubuntu 24.04
+(gcc 13.3, clang 18) as the label's target; both sampled `macos-latest` jobs
+ran on `macos-26-arm64`; all three sampled `windows-latest` jobs on
+`windows-2025-vs2026`, the Visual Studio 2026 image. Three floating labels
+had each moved under this tree within weeks, with no commit here, and the
+2026-11-06 entry below records what the first move did to `main`. The order
+of precedence (AGENTS.md §2) puts reproducibility above convenience: a
+toolchain that changes without a commit is a defect, and the notice was its
+symptom.
+
+**Cure.** Every job pins the image it was measured on: 77 `runs-on:
+ubuntu-latest` lines and the `dudect.yml` SIMD-sweep, `release.yml` wheel and
+`ci.yml` benchmark-regression matrices are `ubuntu-26.04`; the release wheel
+matrix's Windows row is `windows-2025-vs2026`, its `wheels-ubuntu-latest`
+artefact reference follows the row, and `tests/test_release_matrix_coverage.py`
+knows the new labels' architectures. No lane's toolchain changes on the day of
+the pin; the next image move is a reviewed commit. The `ubuntu-24.04-arm`,
+`macos-15` and `macos-15-intel` rows were already pinned and are unchanged.
+The macOS capacity notice is a statement about GitHub's arm64 fleet; nothing
+in the tree causes it and nothing in the tree can cure it. Comments that named
+the label were corrected where the files were touched: the ci.yml AVX-512 lane
+now cites both qemu versions (8.2's measured `-cpu max` and 10.2.1's
+`TCG_7_0_EBX_FEATURES`, which lists AVX2 and no AVX-512 bit), and
+`ENHANCED_FEATURES.md` and `tools/check_crypto_construction_docs.py` name
+ClusterFuzzLite's pinned label.
+
+**What stays floating, and why.** The `main` ruleset's 55 required status
+checks are job names, and three matrices — `ci.yml::test`,
+`ci-build-test.yml::c-library` and `ci-build-test.yml::python-package` —
+render `${{ matrix.os }}` into theirs: 24 required contexts carry
+`ubuntu-latest`, `macos-latest` or `windows-latest`. Pinning those renames a
+required context, and a renamed context makes every pull request wait for a
+check that never reports until an administrator edits ruleset 10508467. That
+authority is not in the tree, so those seven (job, label) pairs keep their
+labels here; their C Library lane still installs gcc-13 and clang-18 by name
+(13.4.0 from the 26.04 image's own package lists, measured), so the README's
+compiler claims for it hold. The remedy is one coordinated change: the
+administrator replaces the 24 contexts with the pinned spellings,
+`python tools/check_required_contexts.py --live --write` refreshes the
+snapshot, and the three matrices are pinned in the same pull request — at
+which point the check below fails them until they are.
+
+**Gate (INVARIANT-25, sixth class).** `check_floating_labels` in
+`tools/check_workflow_commands.py` fails any `*-latest` label unless a
+rendered name of its job that contains the label is a required context in
+`.github/required-status-checks.json`, the snapshot
+`check_required_contexts.py --live` keeps equal to the ruleset. The tolerance
+is read from that file and nothing else: there is no exemption list, and a
+name the checker cannot render holds nothing. The tolerated labels are listed
+in the summary ("7 floating, held by the main ruleset"). The curated label
+table was re-verified against the runner-images README the same day:
+`macos-14` — every macOS 14 image retired on 2026-11-02 — moved from
+supported to retired, so a job naming it fails here instead of queueing to
+its timeout with the checker green (the first historical class), and
+`ubuntu-26.04`, `ubuntu-26.04-arm`, `ubuntu-slim`, `windows-2025-vs2026`, the
+`-large`/`-xlarge` macOS labels and the Windows arm64 labels were added;
+preview labels (`xcode-27*`) were left out so that an unknown label still
+fails closed. No retired label's replacement is a floating label.
+
+**Mutation (§6.2):**
+
+| Mutation | Result | Class |
+|---|---|---|
+| Un-pin one job (`security.yml::security-audit`) in a copy of the tree | one finding, that job | PIN |
+| Remove `ci.yml::test`'s name template, so no required name carries its labels | two findings on that job, `ubuntu-latest` and `windows-latest` | PIN |
+| `_is_floating` always false | 10 tests fail | PIN |
+| Hold whenever the label is in the name (ruleset ignored) | 4 tests fail, the tree sweep with an empty ruleset among them | PIN |
+| Hold whenever any required context exists (name ignored) | 1 test fails | PIN |
+
+`tools/check_workflow_commands.py` passes on the tree (97 labels, 7 held),
+`check_required_contexts.py` still finds every required context produced,
+and the 546 tests of the workflow-reading modules pass.
+
 ### The tail-call scan reads cold partitions and GOT jumps; three CI alerts cured — 2026-11-08
 
 Copilot's review of `b41913c` kept one note open after every thread was

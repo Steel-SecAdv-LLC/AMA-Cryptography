@@ -1313,7 +1313,9 @@ passing.
 ## INVARIANT-25 — Workflow Runner Labels and Command Strings Must Be Valid
 
 **Statement.** Every runner label named in `.github/workflows/**` must be a
-GitHub-hosted image that currently exists, every embedded `python -c` payload
+GitHub-hosted image that currently exists, pinned to a versioned image
+wherever the `main` ruleset does not bind the job's name to a floating one,
+every embedded `python -c` payload
 must compile, every command string destined for `cmd.exe` must use quoting
 `cmd.exe` actually honours, and every release-creating step must be safe under
 immutable releases and under a re-run for a tag already published.
@@ -1357,8 +1359,9 @@ tag is pushed:
 
 **Enforcement.** `tools/check_workflow_commands.py` runs in CI on every PR. It
 resolves `runs-on:` through `strategy.matrix` (including `include:` entries),
-compiles every extracted `python -c` payload after applying the shell's own
-double-quote unescaping, rejects POSIX single-quoting in `*_WINDOWS`
+fails a floating `*-latest` label the ruleset snapshot does not hold (the
+sixth class, below), compiles every extracted `python -c` payload after
+applying the shell's own double-quote unescaping, rejects POSIX single-quoting in `*_WINDOWS`
 cibuildwheel variables and `shell: cmd` steps, and checks every step using a
 release-creating action for the three properties above. A `${{ ... }}`
 expression counts as neither true nor false there: a step that drives `draft:`
@@ -1389,6 +1392,40 @@ long a hung `auto-docs.yml` or `wiki-sync.yml` job would have held its
 `contents: write` token. Both are pinned in both directions by
 `tests/test_workflow_command_checks.py`, the first against the pre-fix
 `release.yml` job graph replanted verbatim.
+
+**A sixth class: an image that moves without a commit.** A `*-latest` label
+names whichever image GitHub points it at. Measured on pull request #434's
+runs of 2026-11-08 (42503992041, 42503992064 and 42503992236; head
+`a30e848`), by the `Runner Image` group of the job logs: all eight sampled
+`ubuntu-latest` jobs ran on `ubuntu-26.04` (gcc 15.2.0, clang 21.1.8, qemu
+10.2.1) while GitHub's own table still named 24.04 (gcc 13.3, clang 18) as the
+label's target, both sampled `macos-latest` jobs ran on `macos-26-arm64`, and
+all three sampled `windows-latest` jobs on `windows-2025-vs2026`. `main` at
+the signed v5.0.0 commit had stopped passing its own CI across the first of
+those moves (CHANGELOG, 2026-11-06), and GitHub's migration notice sat as an
+annotation on 92 of the run's 129 check runs. The rule: every job pins the
+image it runs on, and a floating label is tolerated only where the `main`
+ruleset holds it — its required status checks are job names, and the three
+matrices `ci.yml::test`, `ci-build-test.yml::c-library` and
+`ci-build-test.yml::python-package` render `${{ matrix.os }}` into theirs, so
+pinning those renames 24 required contexts, which only an administrator can
+do. Everything else is pinned to the measured image: 77 `runs-on:` lines and
+the `dudect.yml`, `release.yml` and `ci.yml::benchmark-regression` matrices to
+`ubuntu-26.04`, and the release wheel matrix's Windows row to
+`windows-2025-vs2026`. `check_floating_labels` in
+`tools/check_workflow_commands.py` fails any other floating label, reads the
+tolerance from `.github/required-status-checks.json` (the snapshot
+`check_required_contexts.py --live` keeps equal to the ruleset) and lists what
+it tolerates, so the day the administrator replaces those 24 contexts and the
+snapshot is refreshed, the three matrices fail here until they are pinned in
+the same change. A `-latest` label in the curated table is a label that
+exists, not one a job should name. Both directions are pinned by
+`tests/test_workflow_command_checks.py`, including a sweep of the tree with an
+empty ruleset that names exactly the seven (job, label) pairs the ruleset
+holds. The curated label table was re-verified against the runner-images
+README the same day: `macos-14` (every macOS 14 image retired on 2026-11-02)
+moved from supported to retired, and `ubuntu-26.04`, `ubuntu-26.04-arm`,
+`windows-2025-vs2026` and the other current labels were added.
 
 **Stated limitation.** GitHub publishes no API enumerating available hosted
 labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source

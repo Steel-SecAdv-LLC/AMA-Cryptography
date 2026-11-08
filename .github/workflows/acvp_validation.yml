@@ -110,7 +110,7 @@ env:
 jobs:
   acvp-vectors:
     name: NIST ACVP Vector Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
 
     steps:
@@ -636,7 +636,7 @@ jobs:
     if: always()
     needs:
       - acvp-vectors
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
     - name: Fail if any required job did not succeed

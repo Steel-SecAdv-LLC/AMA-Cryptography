@@ -178,7 +178,7 @@ jobs:
   # pass rather than merely compile.  Fail-closed: no continue-on-error.
   c-library-no-native-pqc:
     name: C Library (AMA_USE_NATIVE_PQC=OFF configuration guard)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -792,7 +792,7 @@ jobs:
   # Linting and Code Quality
   lint:
     name: Lint and Format Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -843,7 +843,7 @@ jobs:
   # Security Audit
   security:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -914,7 +914,7 @@ jobs:
   # The two checks must remain independently required in branch rulesets.
   benchmark-regression:
     name: Benchmark Regression Detection (Wheel Install)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     needs: [c-library]
     steps:
@@ -1019,7 +1019,7 @@ jobs:
   # exactly the class of regression it exists to catch.
   instruction-count-regression:
     name: Instruction Count Regression (A/B)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     needs: [c-library]
     # Retired instruction count is a property of the binary and its input, not
@@ -1043,7 +1043,8 @@ jobs:
     # acknowledgements file records such a move with its cause; the band is
     # not widened for it.
     #
-    # A/B rather than a stored baseline: ubuntu-latest spans two CPU classes
+    # A/B rather than a stored baseline: GitHub's x86-64 fleet (ubuntu-latest when
+    # this was measured, ubuntu-26.04 now) spans two CPU classes
     # about 1.45x apart, and a recorded baseline would fail closed on whichever
     # class did not record it. Both builds are measured on THIS runner in THIS
     # job, so the machine cancels out entirely.
@@ -1217,7 +1218,7 @@ jobs:
 
   docker:
     name: Docker Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # Job-level env carries only a BOOLEAN, never the secrets themselves.
     # `secrets.*` is not allowed in a step-level `if:`, so the optional-login
@@ -1370,7 +1371,7 @@ jobs:
       - benchmark-regression
       - instruction-count-regression
       - docker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
       - name: Fail unless every required job succeeded

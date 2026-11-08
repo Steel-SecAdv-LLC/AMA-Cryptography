@@ -56,6 +56,21 @@ What is checked
     otherwise — a label this checker cannot resolve is never silently passed
     off as verified, it is counted separately and reported.
 
+``floating runner labels``
+    A ``*-latest`` label names whichever image GitHub points it at, and GitHub
+    moves it without a commit here: between 2026-10-19 and 2026-11-08
+    ``ubuntu-latest`` went from Ubuntu 24.04 (gcc 13.3, clang 18) to 26.04
+    (gcc 15.2, clang 21.1), ``macos-latest`` from macOS 15 to 26 and
+    ``windows-latest`` to the Visual Studio 2026 image.  Every job pins the
+    image it runs on.  The one thing that may hold a label floating is the
+    ``main`` ruleset: its required status checks are job names, three matrices
+    render ``${{ matrix.os }}`` into theirs, and pinning those renames a
+    required context, which only an administrator can do.  So a floating label
+    is a finding unless a rendered name of its job that contains the label is
+    a context in ``.github/required-status-checks.json`` -- the snapshot
+    ``tools/check_required_contexts.py`` keeps equal to the live ruleset.  See
+    :func:`check_floating_labels`.
+
 ``inline python payloads``
     Any ``python -c "<payload>"`` appearing in a ``run:`` block or in an
     environment value is extracted and handed to :func:`compile`.  A payload
@@ -131,54 +146,98 @@ import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Collection, Iterator, Optional, Sequence
 
 import yaml
+
+# Direct invocation (`python tools/check_workflow_commands.py`) puts tools/ on
+# sys.path, not the repository root; the ruleset snapshot reader and the
+# job-name renderer live in a sibling gate and are not duplicated here.  ruff
+# permits the import below a sys.path edit; mypy resolves it because the name
+# is the package path tests/ already import by.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from tools.check_required_contexts import (
+    job_contexts,
+    load_snapshot,
+)
 
 # --------------------------------------------------------------------------
 # Runner labels.
 #
 # Verified against https://github.com/actions/runner-images#available-images
 # and https://docs.github.com/en/actions/reference/runners/github-hosted-runners
-# on 2026-07-25.  Keep the two sets disjoint: a label may be supported or
-# retired, never both.
+# on 2026-11-08.  Keep the two sets disjoint: a label may be supported or
+# retired, never both.  Preview labels (xcode-27*) are left out on purpose: a
+# label this table does not know fails closed, and a preview image can go away
+# without a retirement notice.
 # --------------------------------------------------------------------------
 SUPPORTED_LABELS: frozenset[str] = frozenset(
     {
         # Linux — x86_64
         "ubuntu-latest",
+        "ubuntu-26.04",
         "ubuntu-24.04",
         "ubuntu-22.04",
+        "ubuntu-slim",
         # Linux — arm64
+        "ubuntu-26.04-arm",
         "ubuntu-24.04-arm",
         "ubuntu-22.04-arm",
-        # macOS — Apple Silicon (arm64)
+        # macOS — Apple Silicon (arm64); -xlarge is the larger runner
         "macos-latest",
         "macos-26",
+        "macos-26-xlarge",
         "macos-15",
-        "macos-14",
-        # macOS — Intel (x86_64)
+        "macos-15-xlarge",
+        # macOS — Intel (x86_64); -large is the larger runner
+        "macos-latest-large",
         "macos-26-intel",
+        "macos-26-large",
         "macos-15-intel",
-        # Windows
+        "macos-15-large",
+        # Windows — x64
         "windows-latest",
         "windows-2025",
+        "windows-2025-vs2026",
         "windows-2022",
+        # Windows — arm64
+        "windows-11-arm",
+        "windows-11-vs2026-arm",
     }
 )
 
 #: Labels GitHub has withdrawn, mapped to what a build should use instead.
 #: A job naming one of these does not fail fast — it waits for a runner that
 #: will never arrive, which is why the replacement matters more than the
-#: diagnosis.
+#: diagnosis.  The replacements are pinned images: a ``*-latest`` label is
+#: what :func:`check_floating_labels` reports.
 RETIRED_LABELS: dict[str, str] = {
+    # Every macOS 14 image was retired on 2026-11-02 (runner-images README).
+    "macos-14": "macos-15 or macos-26 (Apple Silicon arm64)",
+    "macos-14-xlarge": "macos-15-xlarge or macos-26-xlarge (Apple Silicon arm64)",
+    "macos-14-large": "macos-15-intel or macos-26-intel (Intel x86_64)",
     "macos-13": "macos-15-intel (Intel x86_64) or macos-15 (Apple Silicon arm64)",
     "macos-12": "macos-15-intel (Intel x86_64) or macos-15 (Apple Silicon arm64)",
     "macos-11": "macos-15-intel (Intel x86_64) or macos-15 (Apple Silicon arm64)",
-    "ubuntu-20.04": "ubuntu-24.04 or ubuntu-latest",
-    "ubuntu-18.04": "ubuntu-24.04 or ubuntu-latest",
-    "windows-2019": "windows-2025 or windows-latest",
-    "windows-2016": "windows-2025 or windows-latest",
+    "ubuntu-20.04": "ubuntu-26.04 or ubuntu-24.04",
+    "ubuntu-18.04": "ubuntu-26.04 or ubuntu-24.04",
+    "windows-2019": "windows-2025 or windows-2025-vs2026",
+    "windows-2016": "windows-2025 or windows-2025-vs2026",
+}
+
+#: The image each floating label resolved to on 2026-11-08, read from the
+#: ``Runner Image`` group of the job logs on workflow runs 42503992041,
+#: 42503992064 and 42503992236 (pull request #434, head a30e848): eight
+#: ``ubuntu-latest`` jobs, two ``macos-latest`` and three ``windows-latest``,
+#: every one on the image named here.  Advisory: the remedy names it so that a
+#: pin made today changes nothing.  Re-read a recent job log before trusting
+#: it later.
+FLOATING_LABEL_IMAGE: dict[str, str] = {
+    "ubuntu-latest": "ubuntu-26.04",
+    "macos-latest": "macos-26",
+    "macos-latest-large": "macos-26-intel",
+    "windows-latest": "windows-2025-vs2026",
 }
 
 #: Actions that create or update a GitHub Release.  The step-security fork is
@@ -279,6 +338,7 @@ class Report:
     findings: list[Finding] = field(default_factory=list)
     labels_checked: int = 0
     labels_unresolved: list[str] = field(default_factory=list)
+    labels_floating_bound: list[str] = field(default_factory=list)
     payloads_checked: int = 0
     expressions_checked: int = 0
     windows_commands_checked: int = 0
@@ -452,6 +512,65 @@ def check_runner_labels(path: Path, document: Any, report: Report) -> None:
                         ),
                     )
                 )
+
+
+def _is_floating(label: str) -> bool:
+    """``ubuntu-latest``, ``macos-latest-large``, ...: a label GitHub re-points."""
+    return "-latest" in label
+
+
+def check_floating_labels(
+    path: Path, document: Any, report: Report, required: Collection[str]
+) -> None:
+    """A ``*-latest`` label is a finding unless the ``main`` ruleset holds it.
+
+    GitHub moves a floating label between images on its own schedule: on this
+    repository ``ubuntu-latest`` served Ubuntu 24.04 (gcc 13.3, clang 18) until
+    2026-10 and Ubuntu 26.04 (gcc 15.2, clang 21.1) from 2026-11, and ``main``
+    at the signed v5.0.0 commit stopped passing its own CI across that move
+    (CHANGELOG, 2026-11-06).  A pinned label moves only by a commit.
+
+    The one authority that may hold a label floating is the ruleset's list of
+    required status checks, ``required``: those are job names, and a matrix
+    job whose ``name:`` renders ``${{ matrix.os }}`` puts the label into its
+    context.  Pinning that label renames a required context, which only an
+    administrator can do, so such a label is tolerated and listed in
+    ``report.labels_floating_bound`` -- and the moment the snapshot stops
+    naming the context, it is a finding here.  A name this checker cannot
+    render holds nothing: a job whose contexts cannot be read fails closed.
+    """
+    for job_id, job in _iter_jobs(document):
+        resolved, _unresolved = _resolve_runs_on(job.get("runs-on"), job)
+        floating = [label for label in dict.fromkeys(resolved) if _is_floating(label)]
+        if not floating:
+            continue
+        names, _unrendered = job_contexts(job_id, job)
+        for label in floating:
+            bound = sorted(name for name in names if label in name and name in required)
+            if bound:
+                report.labels_floating_bound.append(
+                    f"{path.name}:{job_id}: {label} is in {len(bound)} required "
+                    f"context(s), e.g. {bound[0]!r}"
+                )
+                continue
+            image = FLOATING_LABEL_IMAGE.get(label)
+            today = f" ({image} on 2026-11-08)" if image else ""
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"job '{job_id}'",
+                    message=(
+                        f"runner label {label!r} floats: GitHub re-points it to a new "
+                        "image without a commit here"
+                    ),
+                    remedy=(
+                        f"pin it to the image it resolves to today{today}; the Runner "
+                        "Image group of any recent job log names it.  A floating label "
+                        "is held only where the main ruleset requires a job name that "
+                        "contains it (.github/required-status-checks.json)."
+                    ),
+                )
+            )
 
 
 def _iter_command_strings(document: Any) -> Iterator[tuple[str, str]]:
@@ -1685,8 +1804,18 @@ def check_job_timeouts(path: Path, document: Any, report: Report) -> None:
 MIN_WORKFLOWS = 14
 
 
-def sweep(workflows_dir: Path) -> Report:
-    """Run every check across every workflow file."""
+def sweep(workflows_dir: Path, required: Collection[str] | None = None) -> Report:
+    """Run every check across every workflow file.
+
+    ``required`` is the ruleset's required-status-check list that
+    :func:`check_floating_labels` consults.  By default it is read from the
+    snapshot beside the workflow directory
+    (``.github/required-status-checks.json``); a directory with no snapshot
+    gets an empty list, so every floating label in it is a finding.
+    """
+    if required is None:
+        snapshot = workflows_dir.parent / "required-status-checks.json"
+        required = load_snapshot(snapshot) if snapshot.is_file() else []
     report = Report()
     paths = sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))
     for path in paths:
@@ -1703,6 +1832,7 @@ def sweep(workflows_dir: Path) -> Report:
             )
             continue
         check_runner_labels(path, document, report)
+        check_floating_labels(path, document, report, required)
         check_inline_python(path, document, report)
         check_windows_quoting(path, document, report)
         check_shell_parseable(path, document, report)
@@ -1752,7 +1882,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report = sweep(args.workflows_dir)
 
     print(
-        f"Checked {report.labels_checked} runner label(s), "
+        f"Checked {report.labels_checked} runner label(s) "
+        f"({len(report.labels_floating_bound)} floating, held by the main ruleset), "
         f"{report.payloads_checked} inline python payload(s), "
         f"{report.windows_commands_checked} Windows command string(s), "
         f"{report.release_steps_checked} release-publishing step(s), "
@@ -1770,6 +1901,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("\nRunner labels this checker could not resolve statically:")
         for entry in report.labels_unresolved:
             print(f"  ?  {entry}")
+    if report.labels_floating_bound:
+        # Tolerated, not verified as pinned: each one is a required context's
+        # name, and pinning it is the administrator's ruleset edit plus this
+        # tree's matrix edit in one change.
+        print("\nFloating runner labels the main ruleset holds (pin with the ruleset):")
+        for entry in report.labels_floating_bound:
+            print(f"  ~  {entry}")
 
     if report.ok:
         print("\nWORKFLOW COMMAND CHECK PASSED.")
