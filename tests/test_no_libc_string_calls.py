@@ -137,7 +137,7 @@ def test_the_analyzer_exception_is_confined_to_the_string_ops_header() -> None:
     under analysis.
     """
     users = sorted(
-        str(p.relative_to(REPO_ROOT))
+        p.relative_to(REPO_ROOT).as_posix()
         for root in ("src/c", "include")
         for p in (REPO_ROOT / root).rglob("*")
         if p.suffix in (".c", ".h") and "__clang_analyzer__" in p.read_text(encoding="utf-8")
