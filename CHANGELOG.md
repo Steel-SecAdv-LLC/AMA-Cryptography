@@ -29,6 +29,69 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### The tail-call scan reads cold partitions and GOT jumps; three CI alerts cured — 2026-11-08
+
+Copilot's review of `b41913c` kept one note open after every thread was
+resolved: `tests/test_public_exits_clear_registers.py` read an export's hot
+part only, so a tail call GCC places in the export's `.cold` partition was
+missed. Measured: a cold-attributed callee on an unlikely path is reached by
+`jmp` from inside `ama_control_export.cold` (gcc 13.3 and 14.2), and the scan
+returned nothing for it. Fixed, and the sweep that followed, over every built
+image (x86-64 gcc/clang, LTO and `-O0`, AVX-512; AArch64 gcc/clang LTO and
+`-O0`), found two more defects in the scan and one refinement:
+
+* **Attribution is by symbol size, not by label.** objdump labels every byte
+  after a function with its name until the next symbol, and the AArch64
+  linker places erratum-843419 stubs there, under a `$x` mapping symbol
+  only. Read by label, `ama_chacha20poly1305_decrypt` appeared to jump to
+  `nistp_jac_double.constprop.0` and `ama_sha384` to `ama_sha512_rotr64`;
+  both branches were stubs 0x290 and 0x128 bytes into functions of exactly
+  those sizes. The scan now bounds each export, and its `.cold` partition,
+  by its ELF symbol size. Mach-O has no sizes and no such stubs, so the next
+  label bounds a function there.
+* **A jump to another export's entry is not a violation**, because that
+  export carries `AMA_API` and clears at its own return. gcc's
+  identical-code folding makes `ama_shake256_inc_absorb` a two-instruction
+  forwarder to `ama_sha3_update` in the AVX-512 build, which the first scan
+  would have reported. A jump into another export's middle is still one.
+  An erratum veneer (`e843419@...`) branches back into its function; a
+  long-branch veneer (`__name_veneer`) stands for `name`; a PLT entry
+  stands for what it resolves to.
+* **GOT-indirect tail calls are read:** x86-64 `jmp *disp(%rip)` and
+  AArch64 `ldr xN, [xN, #imm]` then `br xN`, both measured from `-fno-plt`
+  builds. Jump tables (`notrack jmp *%rax`; AArch64 branches through a
+  register other than the one it loaded the table entry into) are not
+  reported. A register-indirect tail call of another shape is the one form
+  the scan does not read; the flag removes it with the rest.
+
+Each rule has a control that fails without it, measured by mutation: the
+cold-partition control (owner rule reverted: the scan returns `{}`), the
+`-fno-plt` forwarder (GOT rule removed), the export-to-export forwarder
+(exemption removed: it is reported), and an assembled export followed by an
+orphan jump (size attribution removed: `ama_orphan_export -> orphan_internal`).
+Correction per section 6.6: the figures the first scan recorded (32 / 47 / 41
+exports) counted forwards to other exports as violations. Re-measured on a
+sibling-call build of this tree (x86-64 gcc 13.3, Release with LTO): 30
+exports left by a direct jump, 20 of them to a function without the clearing.
+
+Three alerts the CI check runs carried on every PR, each cured at source:
+
+* **CodeQL (variants):** the job held `contents: read` only, so the Action
+  logged "does not have permission to access the CodeQL Action API
+  endpoints" and fell back to its bundled CLI, while the main CodeQL job,
+  which has `security-events: write`, took the API's default CLI version:
+  two CodeQL jobs, two CLI versions. The variants job now holds
+  `security-events: read`, the least the API needs; nothing it does uploads.
+* **CodeQL (both jobs):** the Action warned on every PR that it will stop
+  computing file coverage on pull requests unless a repository chooses.
+  Nothing here reads file coverage (the gate reads results), so both jobs
+  set `CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS`, the same analysis on a pull
+  request and on `main`, less the coverage pass.
+* **ACVP validation:** the evidence artifact asked for 365 days' retention;
+  the repository's maximum is 90, and GitHub clamped every upload with a
+  warning. It asks for 90, and the comment that promised a year is
+  corrected.
+
 ### Register clearing on AArch64, and through tail calls — 2026-11-08
 
 Review on PR #434 pointed out that `tests/c/test_register_residue.c` skipped

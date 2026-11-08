@@ -34,7 +34,12 @@ on:
 # security-events: write is granted on the codeql job alone, not here — a
 # workflow-level grant hands SARIF-upload rights to every job in the file
 # when exactly one needs it (least privilege, same rule as the other
-# workflows' contents: read default).
+# workflows' contents: read default).  The codeql-variants job holds
+# security-events: read, the least the CodeQL Action needs to reach its own
+# API (feature flags and the default CLI version); without it every variant
+# logged "does not have permission to access the CodeQL Action API
+# endpoints" and fell back to the CLI bundled with the Action, so the two
+# CodeQL jobs could analyse with different CLI versions (run 42481396441).
 permissions:
   contents: read
 
@@ -186,6 +191,10 @@ jobs:
     name: CodeQL Security Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # The same choice the codeql-variants job states, so both CodeQL jobs
+      # run the same analysis on a pull request.
+      CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS: "true"
     # The one job that uploads SARIF carries the one write grant the
     # workflow used to hand to all of its jobs.
     permissions:
@@ -276,8 +285,15 @@ jobs:
     timeout-minutes: 20
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
+      # File coverage is a code-scanning dashboard figure; nothing here reads
+      # it (the gate reads results), and the Action is changing its PR
+      # default to skip it, warning on every PR analysis until a repository
+      # chooses.  This is the choice, stated once: the same analysis on
+      # pull requests and on main, less the coverage pass.
+      CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS: "true"
     permissions:
       contents: read
+      security-events: read  # the Action's own API; nothing is uploaded (see the header)
     strategy:
       fail-fast: false
       matrix:
