@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""The built x86-64 library imports no libc copy routine (INVARIANT-6).
+"""The built library imports no libc copy routine (INVARIANT-6).
 
-glibc selects EVEX forms of memcpy/memmove on every AVX-512 CPU. Those copy
-through %ymm16-31, which a baseline x86-64 epilogue cannot clear, so a secret
-the library moved that way is still in a register when the public call
-returns (``AMA_API``'s ``zero_call_used_regs("all")`` reaches only
+x86-64: glibc selects EVEX forms of memcpy/memmove on every AVX-512 CPU.
+Those copy through %ymm16-31, which a baseline x86-64 epilogue cannot clear, so
+a secret the library moved that way is still in a register when the public
+call returns (``AMA_API``'s ``zero_call_used_regs("all")`` reaches only
 %xmm0-15). The next lazy-binding trampoline or signal frame then saves it onto
 unscrubbed stack. Measured 2026-11-08, clang 18.1: ``ama_hkdf``,
 ``ama_hkdf_sha256``, ``ama_pbkdf2_hmac_sha512`` and ``ama_argon2id`` returned
 with their output in %zmm16/%zmm17 (``tests/c/test_register_residue.c``).
 
+AArch64: the portable sources compile with ``-mgeneral-regs-only``, so the same
+attribute clears x0-x18 and no SIMD register, and libc's memcpy copies through
+q0-q3 on every core without FEAT_MOPS. Measured 2026-11-08, gcc 13.3 under
+qemu-aarch64 as Neoverse N1/N2/V1 and Cortex-A72: the same KDF outputs were
+left in q0-q3.
+
 The library therefore makes no such call:
 
-* ``src/c/internal/ama_string_ops.h`` expands every source-level
-  memcpy/memmove/memset inline.
-* Clang's loop-idiom pass is off for these routines
-  (``-fno-builtin-memcpy`` and friends, ``CMakeLists.txt``).
+* ``src/c/internal/ama_string_ops.h`` expands every source-level memcpy and
+  memmove inline (and memset on x86-64).
+* The compilers' own loop-to-memcpy rewrites are off: clang's loop idiom
+  (``-fno-builtin-memcpy`` and friends) and, on AArch64, GCC's loop
+  distribution (``-fno-tree-loop-distribute-patterns``, ``CMakeLists.txt``).
+  The residue rows do not catch the latter; this test does.
 * Struct copies that clang would lower to a call are written as explicit
   copies.
 
 This test holds the result where it can be read: the dynamic symbol table of
-the shipped image.
+the shipped image (ELF, or thin Mach-O, whose names carry a leading
+underscore).
 
 memset is not on the list: a fill leaves only its constant fill byte in a
 register, never a secret.
@@ -63,7 +72,10 @@ COPY_ROUTINES = frozenset(
     }
 )
 
-_EM_X86_64 = 62
+#: ELF e_machine and Mach-O cputype values of the two analysed targets.
+_ELF_MACHINES = {62: "x86-64", 183: "aarch64"}
+_MACHO_CPUTYPES = {0x01000007: "x86-64", 0x0100000C: "aarch64"}
+_MACHO_MAGIC_64_LE = 0xFEEDFACF
 
 
 def _built_libraries() -> list[Path]:
@@ -80,36 +92,46 @@ def _built_libraries() -> list[Path]:
     return images
 
 
-def _elf_machine(path: Path) -> int | None:
+def _target(path: Path) -> str | None:
+    """``"x86-64"`` or ``"aarch64"`` for a little-endian ELF or thin 64-bit
+    Mach-O image of that target, else ``None``."""
     head = path.read_bytes()[:20]
-    if head[:4] != b"\x7fELF" or head[5] != 1:  # little-endian only
-        return None
-    machine: int = struct.unpack_from("<H", head, 18)[0]
-    return machine
+    if head[:4] == b"\x7fELF":
+        if head[5] != 1:  # little-endian only
+            return None
+        machine: int = struct.unpack_from("<H", head, 18)[0]
+        return _ELF_MACHINES.get(machine)
+    if len(head) >= 8 and struct.unpack_from("<I", head, 0)[0] == _MACHO_MAGIC_64_LE:
+        cputype: int = struct.unpack_from("<I", head, 4)[0]
+        return _MACHO_CPUTYPES.get(cputype)
+    return None
 
 
 def _imported_copy_routines(path: Path) -> set[str]:
     info = gate.parse_binary(path)
     names = {sym.split("@", 1)[0] for sym in info.undefined_symbols}
+    if info.fmt == "Mach-O":
+        names = {name[1:] if name.startswith("_") else name for name in names}
     return names & COPY_ROUTINES
 
 
-def test_the_x86_64_library_imports_no_libc_copy_routine() -> None:
+def test_the_library_imports_no_libc_copy_routine() -> None:
     images = _built_libraries()
     if not images:
         pytest.skip("native library not built in this tree")
-    elf = [image for image in images if _elf_machine(image) == _EM_X86_64]
-    if not elf:
+    analysed = [image for image in images if _target(image) is not None]
+    if not analysed:
         pytest.skip(
-            f"{images[0].name} is not an x86-64 ELF image; glibc's EVEX routines are x86-64"
+            f"{images[0].name} is neither an x86-64 nor an AArch64 ELF/Mach-O image; "
+            "the register-residue analysis covers those two targets"
         )
-    offending = {str(image): sorted(_imported_copy_routines(image)) for image in elf}
+    offending = {str(image): sorted(_imported_copy_routines(image)) for image in analysed}
     offending = {image: names for image, names in offending.items() if names}
     assert not offending, (
-        f"{offending}: a secret copied by glibc's EVEX form is left in "
-        "%ymm16-31, which the public epilogue cannot clear. Route the copy "
-        "through src/c/internal/ama_string_ops.h (an explicit memcpy, not a "
-        "struct assignment or a copy loop)."
+        f"{offending}: a secret copied by libc is left in a SIMD register the "
+        "public epilogue cannot clear (%ymm16-31 on x86-64, q0-q3 on AArch64). "
+        "Route the copy through src/c/internal/ama_string_ops.h (an explicit "
+        "memcpy, not a struct assignment or a copy loop)."
     )
 
 
@@ -154,7 +176,7 @@ def test_the_check_sees_an_import(tmp_path: Path) -> None:
         text=True,
         check=False,
     )
-    if proc.returncode != 0 or _elf_machine(so) is None:
+    if proc.returncode != 0 or _target(so) is None:
         pytest.skip(f"the control object could not be built as ELF here: {proc.stderr[-300:]}")
     assert _imported_copy_routines(so) == {"memcpy"}
 

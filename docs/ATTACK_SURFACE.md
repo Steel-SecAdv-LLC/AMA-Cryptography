@@ -114,9 +114,9 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_kem_decapsulate` | 1 | — | — | 1 |
 | `ama_kem_encapsulate` | 1 | — | — | 1 |
 | `ama_keypair_generate` | 4 | — | — | 1 |
-| `ama_kyber_decapsulate` | 5 | 1 | 1 | 1 |
-| `ama_kyber_encapsulate` | 4 | 1 | 1 | 1 |
-| `ama_kyber_keypair` | 4 | 1 | — | 1 |
+| `ama_kyber_decapsulate` | 6 | 1 | 1 | 1 |
+| `ama_kyber_encapsulate` | 5 | 1 | 1 | 1 |
+| `ama_kyber_keypair` | 5 | 1 | — | 1 |
 | `ama_kyber_keypair_from_seed` | — | 1 | 1 | 1 |
 | `ama_lms_pubkey_params` | 1 | 1 | — | 1 |
 | `ama_lms_signature_length` | 1 | 1 | — | 1 |

@@ -6,7 +6,8 @@
  *        register, or in its dead stack, when the call returns (INVARIANT-6).
  *
  * WHY A REGISTER, AND WHY THIS IS A MEMORY DEFECT.  The System V x86-64 ABI
- * makes every vector register call-clobbered, so a secret a callee leaves in
+ * makes every vector register call-clobbered (AAPCS64 all but the low halves
+ * of v8-v15), so a secret a callee leaves in
  * one is the caller's to overwrite, and nothing makes the caller do it soon.
  * The next save of the register file writes it to memory nobody scrubs: the
  * dynamic linker's lazy-binding trampoline (_dl_runtime_resolve_xsavec saves
@@ -56,12 +57,36 @@
  * register) is what keeps that copy from being made; the probe of
  * residue_probe.h pins it (poison, call below a gap, scan).
  *
- * CONTROLS: a word the harness itself loads into %xmm8 must be found in the
- * dump, and the stack probe's sentinel must be found in its window, or the
- * instrument is broken and every verdict is void.
+ * AARCH64 (added 2026-11-08, after review asked for it).  The same rows dump
+ * x0-x18, q0-q31 and, where the kernel reports SVE, z0-z31 at the vector
+ * length.  Measured there before the cures (gcc 13.3, qemu-aarch64 8.2):
+ *   - As Neoverse N1/N2/V1 and Cortex-A72, glibc's memcpy left the HKDF,
+ *     HKDF-SHA256 and PBKDF2 outputs in q0-q3 (z0-z3 in its SVE form).
+ *     As "max", glibc picks its FEAT_MOPS memcpy, which uses no SIMD
+ *     register, and the rows passed: run under one CPU model only, this
+ *     harness would have missed it.
+ *   - The NEON AEAD kernels left key words in q21/q28-q30 and plaintext in
+ *     q4/q25.  AMA_API's attribute cannot reach them: the portable sources
+ *     compile with -mgeneral-regs-only.
+ *   - Under clang 18 with LTO, ama_kyber_encapsulate returned a word of the
+ *     shared secret in x10.  It ended in a tail call to an internal
+ *     function, so its own clearing return never ran.
+ * The cures, each of which fails rows when removed: the AArch64 branch of
+ * src/c/internal/ama_string_ops.h (5 rows on N2 and A72),
+ * AMA_SIMD_CLEAR_REGS on every NEON/SVE2 kernel (4 rows on every model), and
+ * -fno-optimize-sibling-calls (the ML-KEM row under clang).  The ML-KEM rows
+ * are otherwise SMOKE: no other mutation fails them.
+ * tests/test_public_exits_clear_registers.py reads every export for a tail
+ * call, which these rows sample.
  *
- * x86-64 System V with GNU C inline assembly only; elsewhere, and under a
- * sanitizer that moves locals off the real frame, it skips (77).
+ * CONTROLS: a word the harness itself loads into %xmm8 (v8) must be found in
+ * the dump, and the stack probe's sentinel must be found in its window, or
+ * the instrument is broken and every verdict is void.  The control clears the
+ * register again: the low half of v8 is callee-saved, and a planted value
+ * left there would be read back by a later row.
+ *
+ * x86-64 and AArch64 with GNU C inline assembly, not Windows; elsewhere, and
+ * under a sanitizer that moves locals off the real frame, it skips (77).
  */
 #include "ama_cryptography.h"
 
@@ -69,9 +94,23 @@
 #include <stdio.h>
 #include <string.h>
 
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#if defined(__x86_64__)
+#define RESIDUE_X86_64 1
+#elif defined(__aarch64__)
+#define RESIDUE_AARCH64 1
+#if defined(__linux__)
+#include <sys/auxv.h>
+#if defined(HWCAP_SVE)
+#define RESIDUE_SVE_DUMP 1 /* z0-z31 too, where the kernel reports SVE */
+#endif
+#endif
+#endif
+#endif
+
 /* The probe header only where it is used: on any other target its helpers
  * would be compiled and never called (-Werror=unused-function). */
-#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#if defined(RESIDUE_X86_64) || defined(RESIDUE_AARCH64)
 #include "residue_probe.h"
 #endif
 
@@ -79,14 +118,16 @@
  * AMA_USE_NATIVE_PQC source group (X25519, Argon2id, ChaCha20-Poly1305) is
  * built; without it those rows are not compiled, and the rest still run. */
 
-#if !(defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))) || \
-    defined(_WIN32) || AMA_PROBE_IS_INSTRUMENTED
+#if !(defined(RESIDUE_X86_64) || defined(RESIDUE_AARCH64)) || AMA_PROBE_IS_INSTRUMENTED
 int main(void) {
-    printf("SKIP: x86-64 System V with GNU C inline assembly, uninstrumented, only\n");
+    printf("SKIP: x86-64 or AArch64 with GNU C inline assembly, uninstrumented, only\n");
     return 77;
 }
 #else
 
+static int g_failures;
+
+#if defined(RESIDUE_X86_64)
 #define REG_STRIDE 32
 static uint8_t g_regs[16 * REG_STRIDE];
 static uint8_t g_hi[16 * 64];
@@ -146,6 +187,176 @@ static int g_have_avx512;
         }                                       \
     } while (0)
 
+/* The control: sixteen bytes of src loaded into %xmm8, then the dump, then
+ * %xmm8 cleared again, so that the planted bytes cannot be read back by a
+ * later row as the library's residue. */
+static void plant_and_dump(const uint8_t *src) {
+    memset(g_regs, 0, sizeof(g_regs));
+    if (g_have_avx) {
+        __asm__ volatile("vmovdqu (%0), %%xmm8" : : "r"(src) : "xmm8");
+        DUMP_YMM();
+    } else {
+        __asm__ volatile("movdqu (%0), %%xmm8" : : "r"(src) : "xmm8");
+        DUMP_XMM();
+    }
+    __asm__ volatile("pxor %%xmm8, %%xmm8" : : : "xmm8");
+}
+#define PLANTED_SLOT (g_regs + 8 * REG_STRIDE)
+#define PLANTED_NAME "%xmm8"
+
+/* The register that holds byte `off` of the dump (`hi`: of g_hi). */
+static void slot_name(int hi, size_t off, char *buf, size_t len) {
+    if (hi) {
+        snprintf(buf, len, "zmm%u", (unsigned)(16 + off / 64));
+    } else {
+        snprintf(buf, len, "%s%u", g_have_avx ? "ymm" : "xmm", (unsigned)(off / REG_STRIDE));
+    }
+}
+
+static void detect_registers(void) {
+    __builtin_cpu_init();
+    g_have_avx = __builtin_cpu_supports("avx");
+    g_have_avx512 = __builtin_cpu_supports("avx512f");
+    printf("register dump: %s\n", g_have_avx512 ? "ymm0-15, zmm16-31"
+                                  : g_have_avx  ? "ymm0-15"
+                                                : "xmm0-15");
+}
+
+#else /* RESIDUE_AARCH64 */
+
+/* AAPCS64: x0-x18 and all of v0-v31 but the low 64 bits of v8-v15 are the
+ * caller's to overwrite, and the full SVE z0-z31 beyond them.  Everything is
+ * dumped: x0-x18, q0-q31 whole, and z0-z31 at the vector length where SVE is
+ * present.  The base address lives in x19, which is callee-saved: the
+ * compiler sets it before the call (or after it, into x19 itself), so no
+ * dumped register is written between the return and the stores. */
+#define A64_GPR_BYTES 160 /* x0-x18, 8 bytes each, padded to 16 */
+#define A64_Z_OFFSET 672 /* A64_GPR_BYTES + 32 * 16: z0-z31 follow q31 */
+static struct {
+    uint8_t regs[A64_Z_OFFSET];
+    uint8_t hi[32 * 256]; /* z0-z31 at up to VL = 2048 bits */
+} g_a64;
+#define g_regs g_a64.regs
+#define g_hi g_a64.hi
+static int g_have_sve;
+
+#define A64_DUMP_GPR_Q                                                     \
+    "stp x0, x1, [x19, #0]\n\tstp x2, x3, [x19, #16]\n\t"                   \
+    "stp x4, x5, [x19, #32]\n\tstp x6, x7, [x19, #48]\n\t"                  \
+    "stp x8, x9, [x19, #64]\n\tstp x10, x11, [x19, #80]\n\t"                \
+    "stp x12, x13, [x19, #96]\n\tstp x14, x15, [x19, #112]\n\t"             \
+    "stp x16, x17, [x19, #128]\n\tstr x18, [x19, #144]\n\t"                 \
+    "stp q0, q1, [x19, #160]\n\tstp q2, q3, [x19, #192]\n\t"                \
+    "stp q4, q5, [x19, #224]\n\tstp q6, q7, [x19, #256]\n\t"                \
+    "stp q8, q9, [x19, #288]\n\tstp q10, q11, [x19, #320]\n\t"              \
+    "stp q12, q13, [x19, #352]\n\tstp q14, q15, [x19, #384]\n\t"            \
+    "stp q16, q17, [x19, #416]\n\tstp q18, q19, [x19, #448]\n\t"            \
+    "stp q20, q21, [x19, #480]\n\tstp q22, q23, [x19, #512]\n\t"            \
+    "stp q24, q25, [x19, #544]\n\tstp q26, q27, [x19, #576]\n\t"            \
+    "stp q28, q29, [x19, #608]\n\tstp q30, q31, [x19, #640]\n\t"
+
+#if defined(RESIDUE_SVE_DUMP)
+#define A64_DUMP_Z                                                         \
+    ".arch_extension sve\n\tadd x0, x19, #672\n\t"                                 \
+    "str z0, [x0, #0, mul vl]\n\tstr z1, [x0, #1, mul vl]\n\t"              \
+    "str z2, [x0, #2, mul vl]\n\tstr z3, [x0, #3, mul vl]\n\t"              \
+    "str z4, [x0, #4, mul vl]\n\tstr z5, [x0, #5, mul vl]\n\t"              \
+    "str z6, [x0, #6, mul vl]\n\tstr z7, [x0, #7, mul vl]\n\t"              \
+    "str z8, [x0, #8, mul vl]\n\tstr z9, [x0, #9, mul vl]\n\t"              \
+    "str z10, [x0, #10, mul vl]\n\tstr z11, [x0, #11, mul vl]\n\t"          \
+    "str z12, [x0, #12, mul vl]\n\tstr z13, [x0, #13, mul vl]\n\t"          \
+    "str z14, [x0, #14, mul vl]\n\tstr z15, [x0, #15, mul vl]\n\t"          \
+    "str z16, [x0, #16, mul vl]\n\tstr z17, [x0, #17, mul vl]\n\t"          \
+    "str z18, [x0, #18, mul vl]\n\tstr z19, [x0, #19, mul vl]\n\t"          \
+    "str z20, [x0, #20, mul vl]\n\tstr z21, [x0, #21, mul vl]\n\t"          \
+    "str z22, [x0, #22, mul vl]\n\tstr z23, [x0, #23, mul vl]\n\t"          \
+    "str z24, [x0, #24, mul vl]\n\tstr z25, [x0, #25, mul vl]\n\t"          \
+    "str z26, [x0, #26, mul vl]\n\tstr z27, [x0, #27, mul vl]\n\t"          \
+    "str z28, [x0, #28, mul vl]\n\tstr z29, [x0, #29, mul vl]\n\t"          \
+    "str z30, [x0, #30, mul vl]\n\tstr z31, [x0, #31, mul vl]\n\t"          \
+    ".arch_extension nosve"
+
+/* The call, then the dump as the very next instructions. */
+#define CALL_THEN_DUMP(rc, call)                                                   \
+    do {                                                                           \
+        memset(g_regs, 0, sizeof(g_regs));                                         \
+        memset(g_hi, 0, sizeof(g_hi));                                             \
+        if (g_have_sve) {                                                          \
+            register uint8_t *a64_base_ __asm__("x19") = g_regs;                   \
+            (rc) = (call);                                                         \
+            __asm__ volatile(A64_DUMP_GPR_Q A64_DUMP_Z                             \
+                             : : "r"(a64_base_) : "x0", "memory");                 \
+        } else {                                                                   \
+            register uint8_t *a64_base_ __asm__("x19") = g_regs;                   \
+            (rc) = (call);                                                         \
+            __asm__ volatile(A64_DUMP_GPR_Q : : "r"(a64_base_) : "memory");        \
+        }                                                                          \
+    } while (0)
+#else
+#define CALL_THEN_DUMP(rc, call)                                                   \
+    do {                                                                           \
+        register uint8_t *a64_base_ __asm__("x19") = g_regs;                       \
+        memset(g_regs, 0, sizeof(g_regs));                                         \
+        (rc) = (call);                                                             \
+        __asm__ volatile(A64_DUMP_GPR_Q : : "r"(a64_base_) : "memory");            \
+    } while (0)
+#endif /* RESIDUE_SVE_DUMP */
+
+_Static_assert(sizeof(g_a64.regs) == A64_GPR_BYTES + 32 * 16, "q31 ends where z0 begins");
+
+/* The control: sixteen bytes of src loaded into v8, then the dump, then v8
+ * cleared in the same statement.  The low half of v8 is callee-saved, so
+ * every later library call would preserve the planted bytes, and a later row
+ * would read them as residue (measured under clang 18, which inlined this
+ * into main: the AEAD plaintext rows reported plaintext word 0 in q8). */
+static void plant_and_dump(const uint8_t *src) {
+    register uint8_t *a64_base_ __asm__("x19") = g_regs;
+    memset(g_regs, 0, sizeof(g_regs));
+    memset(g_hi, 0, sizeof(g_hi));
+    __asm__ volatile("ldr q8, [%1]\n\t" A64_DUMP_GPR_Q "movi v8.16b, #0"
+                     : : "r"(a64_base_), "r"(src) : "v8", "memory");
+}
+#define PLANTED_SLOT (g_regs + A64_GPR_BYTES + 8 * 16)
+#define PLANTED_NAME "v8"
+
+static size_t g_sve_vl; /* bytes per z register */
+
+/* The register that holds byte `off` of the dump (`hi`: of g_hi). */
+static void slot_name(int hi, size_t off, char *buf, size_t len) {
+    if (hi) {
+        snprintf(buf, len, "z%u", (unsigned)(g_sve_vl ? off / g_sve_vl : 0));
+    } else if (off < A64_GPR_BYTES) {
+        snprintf(buf, len, "x%u", (unsigned)(off / 8));
+    } else {
+        snprintf(buf, len, "q%u", (unsigned)((off - A64_GPR_BYTES) / 16));
+    }
+}
+
+static void detect_registers(void) {
+#if defined(RESIDUE_SVE_DUMP)
+    g_have_sve = (getauxval(AT_HWCAP) & HWCAP_SVE) != 0;
+    if (g_have_sve) {
+        uint64_t vl;
+        __asm__ volatile(".arch_extension sve\n\trdvl %0, #1\n\t.arch_extension nosve"
+                         : "=r"(vl));
+        g_sve_vl = (size_t)vl;
+        if (g_sve_vl == 0 || g_sve_vl > 256) {
+            printf("FAIL SVE vector length %zu bytes is outside the dump\n", g_sve_vl);
+            g_have_sve = 0;
+            g_sve_vl = 0;
+            g_failures++;
+        }
+    }
+#endif
+    printf("register dump: x0-x18, q0-q31%s", g_have_sve ? ", z0-z31" : "");
+    if (g_have_sve) {
+        printf(" (VL %zu bytes)", g_sve_vl);
+    }
+    printf("\n");
+}
+
+#endif /* RESIDUE_AARCH64 */
+
 static int count_in(const uint8_t *dump, size_t dump_len, const uint8_t *s, size_t len) {
     int hits = 0;
     for (size_t w = 0; w + 8 <= len; w += 8) {
@@ -163,7 +374,22 @@ static int words_in_dump(const uint8_t *s, size_t len) {
     return count_in(g_regs, sizeof(g_regs), s, len) + count_in(g_hi, sizeof(g_hi), s, len);
 }
 
-static int g_failures;
+/* Which registers hold a word of s, for the log. */
+static void where(const uint8_t *s, size_t len) {
+    char reg[16];
+    for (int hi = 0; hi < 2; hi++) {
+        const uint8_t *dump = hi ? g_hi : g_regs;
+        size_t dump_len = hi ? sizeof(g_hi) : sizeof(g_regs);
+        for (size_t w = 0; w + 8 <= len; w += 8) {
+            for (size_t off = 0; off + 8 <= dump_len; off++) {
+                if (memcmp(dump + off, s + w, 8) == 0) {
+                    slot_name(hi, off, reg, sizeof(reg));
+                    printf("       word %zu in %s\n", w / 8, reg);
+                }
+            }
+        }
+    }
+}
 
 static void verdict(const char *name, int rc, const uint8_t *s, size_t len) {
     int hits = words_in_dump(s, len);
@@ -171,10 +397,11 @@ static void verdict(const char *name, int rc, const uint8_t *s, size_t len) {
         printf("FAIL %-40s rc=%d\n", name, rc);
         g_failures++;
     } else if (hits != 0) {
-        printf("FAIL %-40s %d secret word(s) left in vector registers\n", name, hits);
+        printf("FAIL %-40s %d secret word(s) left in registers\n", name, hits);
+        where(s, len);
         g_failures++;
     } else {
-        printf("ok   %-40s 0 secret words in vector registers\n", name);
+        printf("ok   %-40s 0 secret words in registers\n", name);
     }
 }
 
@@ -188,6 +415,14 @@ static const uint8_t g_nonce[16] = {7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6, 7,
 static uint8_t g_pt[64], g_ct[64], g_tag[16], g_out[64];
 #if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
 static uint8_t g_pk1[32], g_sk1[32], g_pk2[32], g_sk2[32], g_ss[32];
+static uint8_t g_kem_pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+static uint8_t g_kem_sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+static uint8_t g_kem_ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+static uint8_t g_kem_ss[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+/* FIPS 203 dk = dk_PKE || ek || H(ek) || z: the secret parts are the first
+ * 1536 bytes and the last 32. */
+#define KEM_DK_PKE_BYTES 1536u
+#define KEM_Z_OFFSET (AMA_KYBER_1024_SECRET_KEY_BYTES - 32u)
 #endif
 
 /* --- dead stack: the X25519 shared secret and the HKDF-SHA3-256 output. */
@@ -227,32 +462,21 @@ int main(void) {
     int rc;
     uint8_t sentinel[32];
 
-    __builtin_cpu_init();
-    g_have_avx = __builtin_cpu_supports("avx");
-    g_have_avx512 = __builtin_cpu_supports("avx512f");
-    printf("register dump: %s\n", g_have_avx512 ? "ymm0-15, zmm16-31"
-                                  : g_have_avx  ? "ymm0-15"
-                                                : "xmm0-15");
+    detect_registers();
     for (size_t i = 0; i < sizeof(g_pt); i++) {
         g_pt[i] = (uint8_t)(0x3cu ^ (i * 41u));
     }
 
-    /* CONTROL (registers): sixteen bytes the harness loads into %xmm8 are in
-     * slot 8 and are counted (the scan may count more: the compiler is free
-     * to have built the array in another register as well). */
-    memset(g_regs, 0, sizeof(g_regs));
-    if (g_have_avx) {
-        __asm__ volatile("vmovdqu (%0), %%xmm8" : : "r"(g_pt) : "xmm8");
-        DUMP_YMM();
-    } else {
-        __asm__ volatile("movdqu (%0), %%xmm8" : : "r"(g_pt) : "xmm8");
-        DUMP_XMM();
-    }
-    if (memcmp(g_regs + 8 * REG_STRIDE, g_pt, 16) != 0 || words_in_dump(g_pt, 16) < 2) {
-        printf("FAIL control: the dump did not see a planted %%xmm8\n");
+    /* CONTROL (registers): sixteen bytes the harness loads into %xmm8 (v8 on
+     * AArch64) are in that register's slot and are counted (the scan may
+     * count more: the compiler is free to have built the array in another
+     * register as well). */
+    plant_and_dump(g_pt);
+    if (memcmp(PLANTED_SLOT, g_pt, 16) != 0 || words_in_dump(g_pt, 16) < 2) {
+        printf("FAIL control: the dump did not see a planted %s\n", PLANTED_NAME);
         return 1;
     }
-    printf("ok   control: a planted %%xmm8 is seen\n");
+    printf("ok   control: a planted %s is seen\n", PLANTED_NAME);
 
     /* CONTROL (stack): a sentinel left in a frame at the probed depth is
      * seen, and the window reads what the poison wrote. */
@@ -313,6 +537,28 @@ int main(void) {
     if (ama_x25519_key_exchange(g_ss, g_sk1, g_pk2) != AMA_SUCCESS) {
         printf("FAIL x25519 key exchange\n");
         return 1;
+    }
+
+    /* --- ML-KEM-1024: the shared secret (SHA-3 kernels) and the secret key
+     * (NTT kernels on the secret vector). */
+    {
+        size_t ct_len = sizeof(g_kem_ct);
+        uint8_t ss_enc[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+        CALL_THEN_DUMP(rc, ama_kyber_keypair(g_kem_pk, sizeof(g_kem_pk), g_kem_sk,
+                                             sizeof(g_kem_sk)));
+        verdict("ama_kyber_keypair (dk_PKE)", rc, g_kem_sk, KEM_DK_PKE_BYTES);
+        verdict("ama_kyber_keypair (z)", rc, g_kem_sk + KEM_Z_OFFSET, 32);
+        CALL_THEN_DUMP(rc, ama_kyber_encapsulate(g_kem_pk, sizeof(g_kem_pk), g_kem_ct, &ct_len,
+                                                 ss_enc, sizeof(ss_enc)));
+        verdict("ama_kyber_encapsulate (shared secret)", rc, ss_enc, sizeof(ss_enc));
+        memset(g_kem_ss, 0, sizeof(g_kem_ss));
+        CALL_THEN_DUMP(rc, ama_kyber_decapsulate(g_kem_ct, ct_len, g_kem_sk, sizeof(g_kem_sk),
+                                                 g_kem_ss, sizeof(g_kem_ss)));
+        verdict("ama_kyber_decapsulate (shared secret)", rc, g_kem_ss, sizeof(g_kem_ss));
+        if (memcmp(ss_enc, g_kem_ss, sizeof(ss_enc)) != 0) {
+            printf("FAIL ML-KEM shared secrets differ\n");
+            g_failures++;
+        }
     }
 #endif
 

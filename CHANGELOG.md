@@ -29,6 +29,89 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### Register clearing on AArch64, and through tail calls — 2026-11-08
+
+Review on PR #434 pointed out that `tests/c/test_register_residue.c` skipped
+outside x86-64, so the AArch64 builds had no check of the register clearing
+`AMA_API` was said to provide there. The harness now runs on AArch64 too: it
+dumps `x0-x18`, `q0-q31` and, under SVE, `z0-z31`, after each public call.
+Measured with gcc 13.3 and clang 18 under qemu-aarch64 8.2 as Cortex-A72,
+Neoverse N1/N2/V1, A64FX and `max`, the clearing did not hold there, and
+one gap it found holds on x86-64 as well:
+
+* **No SIMD register was cleared on AArch64.** The portable sources compile
+  with `-mgeneral-regs-only`, so `zero_call_used_regs("all")` there clears
+  `x0-x18` and nothing else. The header comment that said it cleared
+  "v0-v31's caller-saved state" was false and is corrected.
+  * glibc's `memcpy` copies through `q0-q3` (`z0-z3` in its SVE form). It
+    left the HKDF, HKDF-SHA256 and PBKDF2 outputs there on every model
+    without FEAT_MOPS. Under `max`, glibc selects its MOPS `memcpy`, and
+    every row passed. `src/c/internal/ama_string_ops.h` now has an AArch64
+    branch that copies through `x` registers (LDP/STP, then 8, then 1
+    byte). GCC's loop distribution is off (`-fno-tree-loop-distribute-patterns`);
+    it had turned ten copy loops in six functions back into `memcpy` calls.
+    The library now imports no `memcpy` or `memmove` on AArch64, and
+    `tests/test_no_libc_string_calls.py` checks AArch64 and Mach-O images too.
+  * The NEON AEAD kernels returned with key words in `q21`/`q28-q30` and
+    plaintext in `q4`/`q25`. Every NEON and SVE2 kernel entry point is now
+    declared `AMA_SIMD_CLEAR_REGS` (`src/c/internal/ama_simd_clear_regs.h`,
+    `zero_call_used_regs("all")`). It is a function attribute because a
+    per-file `-fzero-call-used-regs` was tried first and measured to do
+    nothing in the default LTO build, where GCC applies it at link time.
+    `"used"` would save almost nothing: 41 against 43 zeroing instructions
+    for SHA-256, and the same count for Keccak, the ML-KEM NTT and ChaCha20.
+* **A tail call skips the clearing, on every target.** The attribute acts at
+  the function's own return, and a public function that ends in a tail call
+  never executes one. Before this change, 32 of the 199 exports left that
+  way under gcc 13.3 x86-64, 47 under aarch64 gcc with LTO and 41 under
+  clang 18 with LTO. Among them were `ama_ml_kem_decapsulate` and
+  `ama_ml_dsa_keypair`. Under clang, `ama_kyber_encapsulate` returned a word
+  of the shared secret in `x10`. The library builds with
+  `-fno-optimize-sibling-calls`, and
+  `tests/test_public_exits_clear_registers.py` reads every export of the
+  built image for a direct jump to another function; a control object pins
+  that the scan sees one. The stale package-local image built before this
+  change fails it.
+* **New rows:** ML-KEM-1024 keypair (`dk_PKE` and `z`), encapsulation and
+  decapsulation shared secrets, on both architectures.
+* **The harness's own control** left its planted bytes in `v8`, whose low
+  half is callee-saved. Under clang, which inlined the control into `main`,
+  later AEAD plaintext rows read them back. The control now clears the
+  register.
+
+Mutation (each cure removed alone; LTO build, the default):
+
+| Removed | Rows that fail | Class |
+|---|---|---|
+| `AMA_SIMD_CLEAR_REGS` | 4 AEAD rows, on every model | PIN |
+| AArch64 string ops | 5 KDF rows on N2 and A72; none under `max` (MOPS) | PIN |
+| `-fno-tree-loop-distribute-patterns` | none; the import test fails | PIN (import table) |
+| `AMA_CLEAR_REGS` | 7 rows (general registers) | PIN |
+| `-fno-optimize-sibling-calls` | the ML-KEM encapsulation row under clang; the tail-call test on every build | PIN |
+
+The ML-KEM rows are otherwise SMOKE: no other mutation fails them.
+
+Cost:
+* x86-64, `benchmarks/measure_instruction_counts.py` with gcc 13.3 against
+  `2cf3cf6`: every gated operation is within +0.08%.
+* AArch64 was not measured dynamically; QEMU gives no instruction counts. A
+  kernel call now ends with 35-52 zeroing instructions. That is +24% retired
+  instructions for one SHA-256 block on the SHA2-instruction kernel, which
+  is 177 instructions straight-line. It is a small fraction of an NTT or a
+  Keccak permutation.
+
+**gcc 15.2's 36 VSHUFPS in the VAES kernel, corrected per section 6.6.** The
+entry below attributed them to the GCM counter's byte assembly. CI on
+`2cf3cf6` listed the same 36 with the new counter in place, so that
+attribution was wrong. Immediate `0x88` is the auto-vectoriser's 64-to-32-bit
+narrowing, and gcc 14 already SLP-vectorised the GCM length block in this
+file. The VAES and AVX-512 SHA-3 kernels are the objects the secret-operand
+gate checks statically, because Valgrind cannot execute them. They now
+compile without the auto-vectoriser, like the NEON kernels, so their only
+vector code is their own intrinsics. gcc 13/14 and clang listings pass, and
+37/37 AES-GCM and SHA-3 tests pass on a VAES host; gcc 15 is checked by CI.
+The counter change is kept: it is bit-identical, and it is an intrinsic form.
+
 ### Secrets left in registers at return: cleared at the ABI boundary, pinned — 2026-11-08
 
 CI's `test_secret_residue.py` failed on the Python 3.12 lane with one live
@@ -187,8 +270,11 @@ gone. It found four more defects, each cured:
 * **Windows:** the analyzer-confinement test compared host-separator paths;
   it now compares POSIX paths.
 * **The static AVX-512/VAES listing under CI's gcc 15.2** found 36 VSHUFPS
-  in `ama_aes_gcm_vaes_avx2.c.o`, the GCM counter's scalar byte assembly
-  vectorised by the compiler. The listing checks every instruction in that
+  in `ama_aes_gcm_vaes_avx2.c.o`, attributed here to the GCM counter's scalar
+  byte assembly vectorised by the compiler. *(Corrected per AGENTS.md section
+  6.6: CI on `2cf3cf6` listed the same 36 with the counter below in place, so
+  the attribution was wrong; see "Register clearing on AArch64" above for the
+  cause and the cure.)* The listing checks every instruction in that
   object, because Valgrind cannot run VAES, so it holds the public counter to
   the list too. `gcm_inc_counter_xmm` is now PSHUFB, PADDD and PSHUFB. It is
   bit-identical to the old form over the 2^32 wrap, the other edge values and

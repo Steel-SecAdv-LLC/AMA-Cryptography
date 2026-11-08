@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1161,
       "Key Management\n& Rotation": 282,
       "Memory Security\n& Fuzzing": 367,
-      "Other": 4312,
+      "Other": 4314,
       "PQC Backends\n& Integration": 828,
       "Performance\n& Monitoring": 381
     },
-    "n_files": 294,
-    "total_tests": 7331,
+    "n_files": 295,
+    "total_tests": 7333,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -142,6 +142,7 @@
       "test_private_key_structural.py",
       "test_property_based_crypto.py",
       "test_public_api_export_declarations.py",
+      "test_public_exits_clear_registers.py",
       "test_public_generator.py",
       "test_published_benchmark_artefacts_are_current.py",
       "test_pyc_cache_liveness.py",

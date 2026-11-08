@@ -391,9 +391,11 @@ static inline void ghash_mul_4lanes_ymm(
 /* In integer SIMD only: PSHUFB byte-swaps the big-endian counter dword
  * (bytes 12..15) into a little-endian lane, PADDD adds 1 to that lane modulo
  * 2^32 (GCM's inc32), and the same PSHUFB swaps it back; bytes 0..11 pass
- * through unchanged.  The byte-assembly form this replaces was left to the
- * compiler, and CI's gcc 15.2 vectorised it into VSHUFPS (FP domain, not on
- * Intel's DOIT list: 36 sites in the static listing of this object). */
+ * through unchanged.  (This comment used to say that the byte-assembly form
+ * this replaces was where CI's gcc 15.2 emitted 36 VSHUFPS.  It was not: CI
+ * on 2cf3cf6 listed the same 36 with this form in place.  They came from the
+ * auto-vectoriser's narrowing of other scalar byte loops in this file, which
+ * now compiles without it; CMakeLists.txt.) */
 static inline __m128i gcm_inc_counter_xmm(__m128i cb) {
     const __m128i swap_ctr = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7,
                                            8, 9, 10, 11, 15, 14, 13, 12);

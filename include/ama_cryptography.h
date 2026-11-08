@@ -40,8 +40,14 @@ extern "C" {
 /* AMA_CLEAR_REGS: while the library itself is compiled, every exported
  * function clears every call-clobbered register on return
  * (zero_call_used_regs("all"): the general registers but the return value,
- * %xmm0-15 / v0-v31's caller-saved state, and the x87 stack), whatever its
- * callees, SIMD kernels and libc left there.  A secret left in one is not in
+ * %xmm0-15 and the x87 stack on x86-64; x0-x18 on AArch64, where the portable
+ * sources compile with -mgeneral-regs-only and cannot name a SIMD register,
+ * so each NEON and SVE2 kernel clears its own on return instead:
+ * AMA_SIMD_CLEAR_REGS, src/c/internal/ama_simd_clear_regs.h), whatever its
+ * callees and libc left there.  The clearing runs at the function's own
+ * return, so the library is built without sibling calls (CMakeLists.txt):
+ * a public function ending in a tail call would leave through its callee's
+ * return instead, uncleared.  A secret left in one is not in
  * memory yet, but the next save of the register file puts it there, where
  * nothing scrubs it: the lazy-binding trampoline (_dl_runtime_resolve_xsavec),
  * a signal frame, a ucontext switch.  Measured 2026-11-08: PBKDF2-SHA512,

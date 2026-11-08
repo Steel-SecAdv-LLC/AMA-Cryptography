@@ -312,9 +312,18 @@ zero-on-failure draws) and `tools/measure_secret_residue.py` with
 of a secret after its holder has wiped it.  Below the Python layer,
 `tests/c/test_register_residue.c` holds the native half that scan can only
 see by chance: no public C entry point returns with a word of its secret in a
-call-clobbered vector register, where the next lazy-binding trampoline or
-signal frame would save it onto unscrubbed stack (`AMA_API` carries
-`zero_call_used_regs("all")` while the library is compiled).
+call-clobbered register, where the next lazy-binding trampoline or signal
+frame would save it onto unscrubbed stack.  It runs on x86-64 (`%xmm0-15`,
+`%ymm0-15`, `%zmm16-31`) and on AArch64 (`x0-x18`, `q0-q31`, and `z0-z31`
+where SVE is present).  What holds it: `AMA_API` carries
+`zero_call_used_regs("all")` while the library is compiled; the library is
+built with `-fno-optimize-sibling-calls`, because a public function that ends
+in a tail call never runs that clearing (`tests/test_public_exits_clear_registers.py`
+reads every export for one); every AArch64 NEON and SVE2 kernel clears its
+own SIMD registers on return (`AMA_SIMD_CLEAR_REGS`), because the portable
+code there is compiled without SIMD registers and cannot; and no copy goes
+through libc's SIMD `memcpy` (`src/c/internal/ama_string_ops.h`,
+`tests/test_no_libc_string_calls.py`).
 
 ## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 

@@ -59,6 +59,7 @@
 #include <stdint.h>
 
 #include "ama_cryptography.h"
+#include "../internal/ama_simd_clear_regs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -89,7 +90,7 @@ extern "C" {
 /* ============================================================================
  * SHA-3 / Keccak — dispatch-facing
  * ============================================================================ */
-void        ama_keccak_f1600_neon(uint64_t state[25]);
+AMA_SIMD_CLEAR_REGS void        ama_keccak_f1600_neon(uint64_t state[25]);
 
 /* ============================================================================
  * Kyber (ML-KEM)
@@ -103,8 +104,8 @@ void        ama_keccak_f1600_neon(uint64_t state[25]);
  * kyber poly_pointwise, scalar code under a NEON name for a slot
  * (dispatch_table.kyber_pointwise) that is NULL on every tier.
  * ============================================================================ */
-void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
+AMA_SIMD_CLEAR_REGS void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
+AMA_SIMD_CLEAR_REGS void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
 
 /* ============================================================================
  * Dilithium (ML-DSA)
@@ -116,9 +117,9 @@ void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
  * scalar dil_power2round (audit Low).  A future dispatch-graph extension must
  * add a correct, tested slot rather than resurrect them.
  * ============================================================================ */
-void ama_dilithium_ntt_neon(int32_t poly[256], const int32_t zetas[256]);
-void ama_dilithium_invntt_neon(int32_t poly[256], const int32_t zetas[256]);
-void ama_dilithium_poly_pointwise_neon(int32_t r[256],
+AMA_SIMD_CLEAR_REGS void ama_dilithium_ntt_neon(int32_t poly[256], const int32_t zetas[256]);
+AMA_SIMD_CLEAR_REGS void ama_dilithium_invntt_neon(int32_t poly[256], const int32_t zetas[256]);
+AMA_SIMD_CLEAR_REGS void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                        const int32_t a[256],
                                        const int32_t b[256]);
 
@@ -131,11 +132,11 @@ void ama_dilithium_poly_pointwise_neon(int32_t r[256],
  * accidentally reference them either — that mismatch is what made every MSVC
  * ARM64 build fail to link. */
 #ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
-void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
+AMA_SIMD_CLEAR_REGS void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
                                  const uint8_t *aad, size_t aad_len,
                                  const uint8_t key[32], const uint8_t nonce[12],
                                  uint8_t *ciphertext, uint8_t tag[16]);
-ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext,
+AMA_SIMD_CLEAR_REGS ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext,
                                         size_t ciphertext_len,
                                         const uint8_t *aad, size_t aad_len,
                                         const uint8_t key[32],
@@ -152,11 +153,11 @@ ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext,
  * [counter, counter+3] and [counter+4, counter+7].  (This note used to call
  * it a two-block building block that nothing calls.)
  * ============================================================================ */
-void ama_chacha20_block_x4_neon(const uint8_t key[32],
+AMA_SIMD_CLEAR_REGS void ama_chacha20_block_x4_neon(const uint8_t key[32],
                                 const uint8_t nonce[12],
                                 uint32_t counter,
                                 uint8_t out[256]);
-void ama_chacha20_block_x8_neon(const uint8_t key[32],
+AMA_SIMD_CLEAR_REGS void ama_chacha20_block_x8_neon(const uint8_t key[32],
                                 const uint8_t nonce[12],
                                 uint32_t counter,
                                 uint8_t out[512]);
@@ -164,7 +165,7 @@ void ama_chacha20_block_x8_neon(const uint8_t key[32],
 /* ============================================================================
  * Argon2 BlaMka G function
  * ============================================================================ */
-void ama_argon2_g_neon(uint64_t out[128],
+AMA_SIMD_CLEAR_REGS void ama_argon2_g_neon(uint64_t out[128],
                        const uint64_t x[128],
                        const uint64_t y[128]);
 
@@ -178,7 +179,7 @@ void ama_argon2_g_neon(uint64_t out[128],
  * matched neither FIPS 205 F nor the scalar reference in
  * tests/c/test_sphincs_simd_equiv.c.
  * ============================================================================ */
-void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
+AMA_SIMD_CLEAR_REGS void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
 
 
 #endif /* __aarch64__ || _M_ARM64 */

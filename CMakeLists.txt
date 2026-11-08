@@ -135,6 +135,20 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat=2 -Wformat-security")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
+    # No sibling calls: AMA_API's zero_call_used_regs("all")
+    # (include/ama_cryptography.h) clears registers at the function's own
+    # return.  A public function that ends in a tail call never executes that
+    # return, because the internal callee, which has no such attribute,
+    # returns straight to the caller with whatever it left in registers.
+    # Measured 2026-11-08: 32 of the 199 exports left by a tail call under
+    # gcc 13.3 x86-64, 47 under aarch64 gcc 13.3 with LTO and 41 under
+    # clang 18 with LTO, among them ama_ml_kem_decapsulate ->
+    # kyber_decapsulate_internal and ama_ml_dsa_keypair ->
+    # dil_keygen_internal.  Under clang, ama_kyber_encapsulate returned one
+    # word of the shared secret in x10 (tests/c/test_register_residue.c).
+    # tests/test_public_exits_clear_registers.py reads every export of the
+    # built image for a tail call.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-optimize-sibling-calls")
 
     # x86-64 ISA baseline, pinned -- not inherited from the compiler.
     #
@@ -538,9 +552,19 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             # gating in ama_cpuid_has_vaes_aesgcm() prevents these
             # opcodes from ever executing on a host without the
             # corresponding feature bits.
+            #
+            # No auto-vectoriser here, nor in the AVX-512 SHA3 kernel below:
+            # these two objects are the ones Valgrind cannot execute, so the
+            # secret-operand gate checks every instruction in them statically
+            # (tools/check_ct_operand.py --static), and their only vector
+            # code is their own intrinsics.  gcc 15.2 SLP-vectorised scalar
+            # byte assembly in this file into 36 VSHUFPS (FP domain, not on
+            # Intel's DOIT list; CI job 128704139405, gcc 14 already
+            # vectorised the GCM length block).  The same rule the NEON
+            # kernels follow.
             set_source_files_properties(src/c/avx2/ama_aes_gcm_vaes_avx2.c
                 PROPERTIES COMPILE_FLAGS
-                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul")
+                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul -fno-tree-vectorize -fno-tree-slp-vectorize")
         endif()
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (9 algorithms incl. VAES AES-GCM and the Ed25519 comb select)")
         # Tell dispatch code that AVX2 implementations are linked in
@@ -574,7 +598,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
                 src/c/avx512/ama_sha3_x4_avx512.c
             )
             set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
-                COMPILE_FLAGS "-mavx512f -mavx512vl")
+                COMPILE_FLAGS "-mavx512f -mavx512vl -fno-tree-vectorize -fno-tree-slp-vectorize")
             add_compile_definitions(AMA_HAVE_AVX512_IMPL)
             message(STATUS "SIMD: AVX-512 SHA3 4-way kernel enabled (in-house, AVX-512F + AVX-512VL)")
         else()
@@ -1068,6 +1092,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND
     if(AMA_NEON_SOURCES)
         set_property(SOURCE ${AMA_NEON_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
                      -fno-tree-vectorize -fno-tree-slp-vectorize)
+    endif()
+    # Register residue.  Under -mgeneral-regs-only, AMA_API's
+    # zero_call_used_regs("all") clears x0-x18 and no SIMD register, so the
+    # kernels clear their own: every NEON and SVE2 entry point is declared
+    # with AMA_SIMD_CLEAR_REGS (src/c/internal/ama_simd_clear_regs.h).  It is
+    # a function attribute because a per-file -fzero-call-used-regs is
+    # applied by GCC at LTO link time, not per function, and was measured to
+    # have no effect in the default LTO build.
+    # Both compilers would turn copy loops back into libc memcpy calls, which
+    # copy through q0-q3: clang's loop-idiom pass (as on x86-64, above), and
+    # GCC's loop distribution, which made ten such calls in six functions
+    # (DER encoding, secp256k1 signing, the ML-DSA NEON NTT staging, SLH-DSA
+    # WOTS; gcc 13.3, read from the disassembly).  On x86-64 the string-op
+    # strategy pin expands those copies inline; AArch64 GCC has no such pin.
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-builtin-memcpy -fno-builtin-memmove")
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-tree-loop-distribute-patterns")
     endif()
 endif()
 
