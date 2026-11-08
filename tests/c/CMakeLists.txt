@@ -710,6 +710,11 @@ if(AMA_USE_NATIVE_PQC)
     # residue) held bit-identical to FIPS 203's signed form over every input
     # domain the library calls it with.  Fails on a dropped correction term.
     add_ama_test(test_kyber_montgomery test_kyber_montgomery.c)
+    # AMA_TESTING_ASSUME_ADX=1 (testing-mode only) selects the MULX+ADX
+    # kernels exactly when CPUID reports BMI2, so the constant-time gates can
+    # measure what production runs on ADX-capable CPUs under Valgrind, whose
+    # CPUID hides ADX.  Fails if the override is removed or ignores BMI2.
+    add_ama_test(test_cpuid_assume_adx test_cpuid_assume_adx.c)
     # FIPS 203 Sec 7.3 decapsulation input check 3 (the hash check) is
     # performed by every decapsulation entry point, for all three parameter
     # sets; implicit rejection and a dk_PKE-only mutation stay on the

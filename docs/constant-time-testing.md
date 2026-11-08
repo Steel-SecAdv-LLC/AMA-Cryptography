@@ -440,6 +440,10 @@ the tree before the cure the same command fails with the row named.
 | clang FP-domain moves and logic (`VMOVAPS`, `VMOVUPS`, `VXORPS`, `VANDNPS`, `VMOVLHPS`, `MOVAPD`, `MOVSD`, `SHUFPS`, `SHUFPD`, `ANDPS`, `VSHUFPS`, `VBLENDPS`) | clang's execution-domain pass puts load-to-store chains with no integer instruction in the FP domain, and auto-vectorises scalar secret loops with FP shuffles | AVX2 Keccak x4 restructured plane by plane with an integer pack/unpack (`src/c/avx2/ama_sha3_avx2.c`); Argon2 G with every XOR fused into a BlaMka round (`src/c/avx2/ama_argon2_avx2.c`); scalar secret loops pinned to general-purpose registers in the Kyber and ML-DSA decode, encode, pack and NTT-tail code, base64 `in_range`/`enc6` and Ed25519 `fe_cswap` (`internal/ama_ct_barrier.h`, `ama_ct_value_barrier_u32`) |
 | `DIV` (Argon2id `argon2_index_alpha`), **a real secret division** | `J2 % lanes` and `(start + z) % lane_length` on password-derived words | `src/c/ama_argon2.c`: Lemire-Kaser-Kurz `fastmod_u32` for the lane (exact for all 32-bit n and every lane count, checked exhaustively: 1,095,216,660,480 pairs) and one masked subtraction for the index; the reference-lane selection by mask. RFC 9106 vectors unchanged. |
 | `VMOVAPS`, `VMOVUPS`, `VXORPS`, `VMOVLHPS` (static, clang: VAES GCM, AVX-512 Keccak x4) | a stack copy of the broadcast YMM round keys; the `set_epi64x` pack; a load-xor-store theta pass | `src/c/avx2/ama_aes_gcm_vaes_avx2.c` broadcasts each round key at its use from a pointer re-read per call (`vaes_rk_fresh`: clang otherwise hoists the keys out of the block loops and spills them), and assembles partial blocks in general registers rather than through `memcpy`, whose call spilled the keystream; mutation: removing either brings back 10 and 3 unlisted moves; `src/c/avx512/ama_sha3_x4_avx512.c` packs in the integer domain and unrolls theta under clang (not under gcc, where unrolling realigns the frame and leaves through `LEAVE`) |
+| `MOVHLPS` (`x25519_scalarmult`, MULX+ADX ladder, gcc 13; found with `--assume-adx`) | gcc SLP-vectorised `fe64_cswap` (`PXOR`/`PAND` on limb pairs) and moved halves back to general registers: 4 sites, 510 times per scalar multiplication, on the path every ADX-capable CPU runs and Valgrind's CPUID never selected | `src/c/fe64.h` and `src/c/fe51.h`: each swap word through a value barrier, which keeps the swap scalar; mutation: the pre-fix tree fails at the 4 sites |
+| `MOVHLPS` (`x25519_scalarmult+0x12b`, CI gcc 15.2 only) | the 32-byte scalar copy and clamp moved through XMM registers | `src/c/ama_x25519.c` `x25519_copy_clamp`: four 64-bit words through value barriers; gcc 13/14 and clang never emitted the row, so locally the cure is SMOKE and CI's gcc 15 run is its pin |
+| `FMOV` general <-> SIMD (AArch64, gcc 13; first AArch64 run, `x25519`) | the auto-vectoriser and register allocator moved the portable C's secret words into the SIMD file: 514 such FMOVs over the library (static census of the cross-built archive), among them the X25519 ladder's output, its all-zero check, P-256 and ML-DSA signing, SHA-256 and bitsliced AES | `CMakeLists.txt`: every portable source on AArch64 GCC/Clang compiles with `-mgeneral-regs-only` (configure fails if refused), after which those objects contain no SIMD instruction at all; the NEON kernels compile without the auto-vectoriser; 514 -> 5, and the 5 left move public values (NTT zetas, the GCM length block, the ChaCha20 block counter) |
+| `FMOV` from NEON intrinsics (Keccak theta, AES-256 key schedule; clang: the GHASH multiply) | gcc lowers `vgetq_lane_u64/u32(v, 0)` to FMOV and `vcombine_u64(vcreate_u64(..))` to FMOV + INS; clang routed GHASH's Karatsuba halves (H and the accumulator) through general registers | `src/c/neon/ama_neon_dit.h` pins lane moves to UMOV, DUP and INS; `ghash_mul_neon` keeps every operand in its vector register (PMULL/PMULL2 on lanes in place); NEON AES-GCM equivalence and the SHA-3, ML-KEM, ML-DSA NEON KAT sweeps pass under QEMU |
 
 The instrument itself had two false positives, fixed and pinned: an `OR`
 with all ones or an `AND` with zero now yields an untainted result (gcc 14's
@@ -509,16 +513,30 @@ blocking class, and a divide of a declassified value is not recorded.
   plus the scalar AES-GCM the `ghash` and `aead-verify` drivers force and
   the AES-NI tier pinned; on the archive under gcc and clang and on the
   shipped `.so`.
+* **Analysed, dynamically, with `--assume-adx`:** the X25519 MULX+ADX ladder
+  and the P-256/384/521 MULX Montgomery multiply, the kernels production
+  selects on every ADX-capable x86-64 CPU. Valgrind 3.22 executes ADCX/ADOX
+  but reports CPUID ADX clear, so until 2026-11-08 no Valgrind lane (taint,
+  count or operand) had selected them. The AMA_TESTING_MODE archive honours
+  `AMA_TESTING_ASSUME_ADX=1` when CPUID reports BMI2 (`src/c/ama_cpuid.c`;
+  absent from every shipped object, `tests/c/test_cpuid_assume_adx.c`), and
+  a run is trusted only when the library confirms it and, for the operand
+  gate, a MULX consumed the secret. The first such run found gcc's
+  vectorised `fe64_cswap` (below). The Ed25519 MULX instantiation is an
+  opt-in benchmark override, off by default, and is not measured.
 * **Analysed, dynamically (AArch64, natively on `ubuntu-24.04-arm`):** the
   same targets against Arm's DIT list, on the NEON and Crypto Extensions
-  tiers that runner's dispatcher selects.
+  tiers that runner's dispatcher selects, under gcc (the runner's compiler).
+  clang on AArch64 (the macOS arm64 wheels) is not run under Valgrind; its
+  code shape was checked statically for the GPR <-> SIMD moves above.
 * **Analysed, statically:** the AVX-512 Keccak x4 and the VAES AES-GCM
   kernels, every instruction of their production objects, under gcc and
   clang. This settles class (c) for them as an over-approximation; their
   classes (a) and (b) are not dynamically checked, because nothing here
   executes them under taint. They are functionally checked on AVX-512
   hardware (`kat_sweep__sha3-avx512x4__*`, `test_aes_gcm_vaes_equiv`).
-* **Not analysed:** SVE2 (Valgrind implements no SVE); scalar tiers the
+* **Not analysed:** SVE2 (Valgrind implements no SVE); the opt-in Ed25519
+  MULX override (`ama_ed25519_set_mulx_override(1)`); scalar tiers the
   default wiring replaces, except where a `--dispatch-only` pin exists; the
   opt-in AVX2 X25519 batch kernel's alternative selections; MSVC builds.
 * **Argon2id** (`argon2id`, operand-only): its memory addressing is

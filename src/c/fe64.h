@@ -26,6 +26,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "internal/ama_ct_barrier.h"
 
 typedef uint64_t fe64[4];
 __extension__ typedef unsigned __int128 uint128_t;
@@ -72,6 +73,18 @@ static inline void fe64_frombytes(fe64 h, const uint8_t *s) {
           | ((uint64_t)s[26] << 16) | ((uint64_t)s[27] << 24)
           | ((uint64_t)s[28] << 32) | ((uint64_t)s[29] << 40)
           | ((uint64_t)s[30] << 48) | ((uint64_t)(s[31] & 0x7f) << 56);
+}
+
+/* One 64-bit little-endian store (byte-swapped first on a big-endian host).
+ * Byte-at-a-time stores of a secret word were vectorised by gcc on AArch64,
+ * which moved the words into SIMD registers with FMOV (general -> SIMD), an
+ * instruction Arm's DIT list does not name; a whole-word store is one STR.
+ * Same construction as store64_le in ama_sha3.c. */
+static inline void fe64_store64_le(uint8_t *p, uint64_t x) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    x = __builtin_bswap64(x);
+#endif
+    memcpy(p, &x, sizeof(x));
 }
 
 /**
@@ -131,16 +144,9 @@ static inline void fe64_tobytes(uint8_t *s, const fe64 h) {
     c += t[2]; t[2] = (uint64_t)c; c >>= 64;
     c += t[3]; t[3] = (uint64_t)c & 0x7FFFFFFFFFFFFFFFULL;
 
-    /* Store little-endian */
+    /* Store little-endian, one whole word at a time (see fe64_store64_le). */
     for (int i = 0; i < 4; i++) {
-        s[i*8 + 0] = (uint8_t)(t[i]);
-        s[i*8 + 1] = (uint8_t)(t[i] >> 8);
-        s[i*8 + 2] = (uint8_t)(t[i] >> 16);
-        s[i*8 + 3] = (uint8_t)(t[i] >> 24);
-        s[i*8 + 4] = (uint8_t)(t[i] >> 32);
-        s[i*8 + 5] = (uint8_t)(t[i] >> 40);
-        s[i*8 + 6] = (uint8_t)(t[i] >> 48);
-        s[i*8 + 7] = (uint8_t)(t[i] >> 56);
+        fe64_store64_le(s + 8 * i, t[i]);
     }
 }
 
@@ -212,12 +218,18 @@ static inline void fe64_neg(fe64 h, const fe64 f) {
  * never depend on the secret swap bit.
  */
 static inline void fe64_cswap(fe64 p, fe64 q, uint64_t b) {
-    uint64_t mask = (uint64_t)0 - b;
-    uint64_t t;
-    t = mask & (p[0] ^ q[0]); p[0] ^= t; q[0] ^= t;
-    t = mask & (p[1] ^ q[1]); p[1] ^= t; q[1] ^= t;
-    t = mask & (p[2] ^ q[2]); p[2] ^= t; q[2] ^= t;
-    t = mask & (p[3] ^ q[3]); p[3] ^= t; q[3] ^= t;
+    /* Each limb's swap word passes a value barrier, which holds it in a
+     * general register.  Without it gcc SLP-vectorised this swap (PXOR/PAND
+     * on limb pairs) and moved the halves back with MOVHLPS/MOVHPS, outside
+     * Intel's DOIT list, on the ladder's secret state: 4 sites, 510 times
+     * per X25519 scalar multiplication on the MULX+ADX ladder (measured,
+     * gcc 13.3, tools/check_ct_operand.py --target x25519 --assume-adx). */
+    const uint64_t mask = ama_ct_value_barrier_u64((uint64_t)0 - b);
+    for (int i = 0; i < 4; i++) {
+        const uint64_t t = ama_ct_value_barrier_u64(mask & (p[i] ^ q[i]));
+        p[i] ^= t;
+        q[i] ^= t;
+    }
 }
 
 /**

@@ -964,18 +964,30 @@ jobs:
         # instructions over four signatures, branching on the Montgomery
         # extra-reduction predicate. P-256, P-384 and P-521 share that
         # arithmetic, so this covers the family's scalar core.
+        # Twice: as dispatched under Valgrind (the portable path), and with
+        # --assume-adx, the MULX+ADX kernel production selects on every
+        # ADX-capable CPU and Valgrind's CPUID hides.
         run: |
+          set -euo pipefail
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa --assume-adx
 
       - name: X25519 instruction count must not depend on the scalar
         # The Montgomery ladder's conditional swap is predicated on one bit of
         # the secret scalar per step. The dudect lane for X25519 is wall-clock
         # on a shared runner; this is its deterministic counterpart, the same
         # pairing `ecdsa` has with the `secp256k1 ECDSA sign` lane.
+        # Twice: as dispatched under Valgrind (the portable path), and with
+        # --assume-adx, the MULX+ADX kernel production selects on every
+        # ADX-capable CPU and Valgrind's CPUID hides.
         run: |
+          set -euo pipefail
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target x25519
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519 --assume-adx
 
       - name: Batched X25519 instruction count must not depend on the scalars
         # `ama_x25519_scalarmult_batch` is a separate entry point from
@@ -1094,6 +1106,12 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target aead-bulk --taint \
             --dispatch-only aes-gcm-aesni
+          # The MULX+ADX kernels Valgrind's CPUID hides (--assume-adx).
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ghash_constant_time.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target" --taint \
+              --assume-adx
+          done
 
       # ---- Shipped machine code ------------------------------------------
       # Every gate above measures the AMA_TESTING_MODE archive with LTO off.
@@ -1228,6 +1246,7 @@ jobs:
       - name: Every secret operand reaches only a vendor-listed instruction (gcc)
         run: |
           set -euo pipefail
+          failed=""
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
@@ -1235,11 +1254,25 @@ jobs:
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
                         ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
             python tools/check_ct_operand.py \
-              --lib build/lib/libama_cryptography_test.a --target "$target"
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
           done
           python tools/check_ct_operand.py \
             --lib build/lib/libama_cryptography_test.a --target aead-bulk \
-            --dispatch-only aes-gcm-aesni
+            --dispatch-only aes-gcm-aesni \
+            || failed="$failed aead-bulk(aes-gcm-aesni)"
+          # The MULX+ADX kernels production selects on ADX-capable CPUs,
+          # which Valgrind's CPUID hides; --assume-adx selects them and the
+          # run is INCONCLUSIVE unless a MULX consumed the secret.
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ct_operand.py --assume-adx \
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target(assume-adx)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
       # clang builds the macOS wheels; its execution-domain pass chooses FP
       # encodings (VMOVAPS, VXORPS, SHUFPS ...) for integer data that gcc
@@ -1253,6 +1286,7 @@ jobs:
       - name: Every secret operand reaches only a vendor-listed instruction (clang)
         run: |
           set -euo pipefail
+          failed=""
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
@@ -1260,8 +1294,18 @@ jobs:
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
                         ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
             python tools/check_ct_operand.py --cc clang \
-              --lib build-clang/lib/libama_cryptography_test.a --target "$target"
+              --lib build-clang/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
           done
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ct_operand.py --cc clang --assume-adx \
+              --lib build-clang/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target(assume-adx)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
       # Valgrind executes neither AVX-512 nor VAES, so those kernels get the
       # static listing: every instruction of the production object, secret or
@@ -1269,6 +1313,7 @@ jobs:
       - name: AVX-512 and VAES kernels list only vendor-listed instructions (static)
         run: |
           set -euo pipefail
+          failed=""
           for cc in gcc clang; do
             cmake -B "build-avx512-${cc}" -DCMAKE_C_COMPILER="${cc}" \
               -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF \
@@ -1276,8 +1321,13 @@ jobs:
             cmake --build "build-avx512-${cc}" -j"$(nproc)" --target ama_cryptography_static
             python tools/check_ct_operand.py --static \
               --lib "build-avx512-${cc}/lib/libama_cryptography_static.a" \
-              --member ama_sha3_x4_avx512.c.o --member ama_aes_gcm_vaes_avx2.c.o
+              --member ama_sha3_x4_avx512.c.o --member ama_aes_gcm_vaes_avx2.c.o \
+              || failed="$failed static-${cc}"
           done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
       - name: Build the shipped shared library (LTO on, as the wheel ships it)
         run: |
@@ -1291,6 +1341,7 @@ jobs:
       - name: Secret-operand gate on the shipped shared object
         run: |
           set -euo pipefail
+          failed=""
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
                         secp256k1-scalarmult \
                         kyber-decaps consttime ascon-encrypt agent-binding \
@@ -1298,8 +1349,13 @@ jobs:
             python tools/check_ct_operand.py \
               --lib build-shared/lib/libama_cryptography.so \
               --optimized-witness build-shared/CMakeCache.txt \
-              --target "$target"
+              --target "$target" \
+              || failed="$failed $target"
           done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
   # The same gate on AArch64, against Arm's DIT list.  Native, not emulated:
   # Valgrind runs on the ubuntu-24.04-arm runners (aead-verify-invariance
@@ -1335,14 +1391,20 @@ jobs:
       - name: Every secret operand reaches only a DIT-listed instruction
         run: |
           set -euo pipefail
+          failed=""
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
                         ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
             python tools/check_ct_operand.py \
-              --lib build/lib/libama_cryptography_test.a --target "$target"
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
           done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
   aead-verify-invariance:
     # The AEAD accept/reject pair at ct_len == 0, pinned by retired

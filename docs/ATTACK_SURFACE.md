@@ -222,7 +222,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_version_string` | 1 | — | — | — |
 | `ama_x25519_field_path` | 3 | — | 1 | — |
 | `ama_x25519_get_mulx_override` | 1 | — | — | — |
-| `ama_x25519_key_exchange` | 3 | 1 | 1 | 1 |
+| `ama_x25519_key_exchange` | 4 | 1 | 1 | 1 |
 | `ama_x25519_keypair` | 3 | 1 | — | 1 |
 | `ama_x25519_scalarmult_batch` | 2 | — | 1 | 1 |
 | `ama_x25519_set_mulx_override` | 1 | — | — | — |

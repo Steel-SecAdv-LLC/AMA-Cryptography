@@ -63,6 +63,33 @@ AVX-512 and VAES kernels Valgrind cannot run.
   as irremovable "without deviating from RFC 9106"; that is withdrawn,
   and its `ama_argon2id_core` ceiling drops from 10 to the measured 5
   (gcc 14; gcc 13 emits 3), every one on public geometry.
+- **The MULX+ADX kernels, measured for the first time.** Valgrind 3.22
+  executes ADCX/ADOX but reports CPUID ADX clear, so no Valgrind lane had
+  ever selected the X25519 MULX ladder or the P-curve MULX Montgomery
+  multiply, which production runs on every ADX-capable x86-64 CPU. The
+  AMA_TESTING_MODE archive now honours `AMA_TESTING_ASSUME_ADX=1` when CPUID
+  reports BMI2 (`tests/c/test_cpuid_assume_adx.c`), and `--assume-adx` runs
+  both kernels through the operand, taint and count gates. The first run
+  found gcc's SLP-vectorised `fe64_cswap` moving the ladder's secret limbs
+  with `MOVHLPS` (4 sites, 510 times per scalar multiplication); both
+  cswaps (`fe64.h`, `fe51.h`) now keep each swap word in a general
+  register. The P-curve kernel passed.
+- **AArch64: no secret through a SIMD register by compiler choice.** The
+  first AArch64 run of the gate (after a 1-byte shadow put the arm64 VEX
+  backend could not lower was fixed in the tool) failed on FMOV between
+  general and SIMD registers, which Arm's DIT list does not name. A static
+  census of the cross-built archive found 514 of them in the portable C.
+  Every portable source on AArch64 GCC/Clang now compiles with
+  `-mgeneral-regs-only` (configure fails if refused) and contains no SIMD
+  instruction; the NEON kernels compile without the auto-vectoriser, and
+  the lane moves their intrinsics lowered to FMOV are pinned to UMOV, DUP
+  and INS (`src/c/neon/ama_neon_dit.h`). The 5 FMOVs left move public
+  values. clang's NEON GHASH multiply no longer routes H through general
+  registers. AArch64 ctest under QEMU: 159/159.
+- **CI reports every target.** Each operand loop records failures and
+  fails at the end, rather than stopping at the first: the gcc 15.2 run
+  stopped at `x25519` (a `MOVHLPS` in the scalar copy and clamp, now
+  `x25519_copy_clamp`) and said nothing about the 23 targets after it.
 - **New targets** (count and/or taint drivers in
   `tools/check_ghash_constant_time.py`): `ml-dsa-sign`, `ml-kem-keygen`,
   `hkdf`, `frost-sign`, `aead-bulk` (AES-NI GCM and AVX2 ChaCha20 x8, also

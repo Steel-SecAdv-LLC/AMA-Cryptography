@@ -52,6 +52,12 @@
 #include <cpuid.h>
 #endif
 
+#ifdef AMA_TESTING_MODE
+#include <stdio.h>   /* the AMA_TESTING_ASSUME_ADX confirmation line */
+#include <stdlib.h>  /* getenv */
+#include <string.h>  /* strcmp */
+#endif
+
 static AMA_ONCE_FLAG cpuid_once = AMA_ONCE_FLAG_INIT;
 static int has_aes_ni_cached = 0;
 static int has_pclmulqdq_cached = 0;
@@ -304,6 +310,32 @@ static void detect_x86_features(void) {
     has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
     has_avx512_zmm_state_cached =
         (osxsave && has_avx_osxsave_cached) ? xcr0_has_avx512_state() : 0;
+#endif
+#ifdef AMA_TESTING_MODE
+    /* Testing-mode only: compiled into the AMA_TESTING_MODE archive the
+     * constant-time gates link, absent from every shipped object.
+     *
+     * Valgrind 3.22 executes ADCX/ADOX but reports CPUID.7.EBX[19] (ADX) as
+     * clear, so under every Valgrind lane the X25519 MULX+ADX ladder and the
+     * P-256/384/521 MULX Montgomery multiply -- the kernels production
+     * selects on every ADX-capable x86-64 CPU -- were never chosen, and no
+     * taint, count or operand gate had measured them.  AMA_TESTING_ASSUME_ADX=1
+     * lets a gate select them; it is honoured only when CPUID reports BMI2,
+     * and it says so on stderr in the dispatcher's tag, which the gates
+     * require before they trust the run (`--assume-adx`). */
+    {
+        const char *assume = getenv("AMA_TESTING_ASSUME_ADX");
+        if (assume != NULL && strcmp(assume, "1") == 0) {
+            if (has_bmi2_cached) {
+                has_adx_cached = 1;
+                fprintf(stderr, "[AMA Dispatch] AMA_TESTING_ASSUME_ADX=1 honored: "
+                                "ADX assumed present (BMI2 reported)\n");
+            } else {
+                fprintf(stderr, "[AMA Dispatch] AMA_TESTING_ASSUME_ADX=1 refused: "
+                                "CPUID reports no BMI2\n");
+            }
+        }
+    }
 #endif
 }
 

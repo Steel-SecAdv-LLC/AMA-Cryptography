@@ -2801,6 +2801,19 @@ _TAINT_REPORT_RE = re.compile(
 #: implementation its numbers describe instead of inheriting the host's.
 _DISPATCH_ONLY: Optional[str] = None
 
+#: Select the MULX+ADX kernels Valgrind's CPUID hides (``--assume-adx``).
+#: Valgrind 3.22 executes ADCX/ADOX but reports CPUID ADX clear, so the X25519
+#: MULX ladder and the P-curve MULX Montgomery multiply -- what production runs
+#: on every ADX-capable x86-64 CPU -- were never selected under any Valgrind
+#: lane.  The AMA_TESTING_MODE archive honours AMA_TESTING_ASSUME_ADX=1 (see
+#: detect_x86_features in src/c/ama_cpuid.c); the run is trusted only when the
+#: library confirms it.
+_ASSUME_ADX: bool = False
+
+#: The library's confirmation, and its refusal, of AMA_TESTING_ASSUME_ADX=1.
+_ASSUME_ADX_HONOURED = "AMA_TESTING_ASSUME_ADX=1 honored"
+_ASSUME_ADX_REFUSED = "AMA_TESTING_ASSUME_ADX=1 refused"
+
 
 #: The dispatcher's own refusal line for an unrecognised AMA_DISPATCH_ONLY.
 #: Matched rather than parsed: it is the dispatcher that decides which names
@@ -2830,6 +2843,16 @@ def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
     passed as "honoured", which is not what ``--dispatch-only``'s help says
     ("The run FAILS if the dispatcher does not report the pin as honoured").
     """
+    if _ASSUME_ADX:
+        for line in wiring:
+            if _ASSUME_ADX_REFUSED in line:
+                return line
+        if not any(_ASSUME_ADX_HONOURED in line for line in wiring):
+            return (
+                f"the library never reported {_ASSUME_ADX_HONOURED!r}: the archive "
+                f"is not an AMA_TESTING_MODE build, or the target never read CPUID, "
+                f"so the MULX+ADX kernels were not selected"
+            )
     if _DISPATCH_ONLY is None:
         return None
     for line in wiring:
@@ -2867,6 +2890,8 @@ def _driver_env() -> dict[str, str]:
     env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
     if _DISPATCH_ONLY is not None:
         env["AMA_DISPATCH_ONLY"] = _DISPATCH_ONLY
+    if _ASSUME_ADX:
+        env["AMA_TESTING_ASSUME_ADX"] = "1"
     return env
 
 
@@ -3388,6 +3413,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "if the dispatcher does not report the pin as honoured.",
     )
     parser.add_argument(
+        "--assume-adx",
+        action="store_true",
+        help="Select the MULX+ADX kernels (X25519 ladder, P-curve Montgomery "
+        "multiply) that Valgrind's CPUID hides, via the AMA_TESTING_MODE-only "
+        "AMA_TESTING_ASSUME_ADX=1. The run FAILS if the library does not "
+        "report the assumption as honoured.",
+    )
+    parser.add_argument(
         "--taint",
         action="store_true",
         help="Run the target's TAINT driver under Memcheck instead of the "
@@ -3408,8 +3441,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # Apply the tier pin before any driver runs, so the callgrind path, the
     # taint path and the wiring probe all measure the same implementation.
-    global _DISPATCH_ONLY
+    global _DISPATCH_ONLY, _ASSUME_ADX
     _DISPATCH_ONLY = args.dispatch_only
+    _ASSUME_ADX = bool(args.assume_adx)
 
     if args.taint and args.target not in _TAINT_DRIVERS:
         print(
@@ -3516,10 +3550,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         refusal = _dispatch_pin_was_honoured(wiring)
         if refusal is not None:
             print(
-                f"CONSTANT-TIME CHECK INCONCLUSIVE — the dispatcher refused, or "
-                f"did not confirm, --dispatch-only={_DISPATCH_ONLY!r}, so this "
-                f"run could have measured the default wiring while claiming to "
-                f"measure that tier.\n  {refusal}",
+                f"CONSTANT-TIME CHECK INCONCLUSIVE — the library refused, or "
+                f"did not confirm, --dispatch-only={_DISPATCH_ONLY!r} / "
+                f"--assume-adx={_ASSUME_ADX}, so this run could have measured the "
+                f"default wiring while claiming to measure that tier.\n  {refusal}",
                 file=sys.stderr,
             )
             return 2

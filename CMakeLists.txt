@@ -1016,6 +1016,49 @@ endif()
 # CMake's Threads package resolves to -lpthread on Linux, nothing extra on
 # macOS (pthreads are in libSystem), and is a no-op on Windows (MSVC path
 # uses InitOnceExecuteOnce from synchapi.h, linked automatically).
+# AArch64: the portable C sources never use a SIMD/FP register.
+#
+# gcc 13 on AArch64 auto-vectorised and register-allocated the portable
+# (non-NEON) C into the SIMD file, moving secret words across with FMOV
+# (general <-> SIMD), which Arm's DIT list does not name: 514 such FMOVs over
+# the library, among them the X25519 ladder's output, P-256 signing, ML-DSA
+# signing, SHA-256 and bitsliced AES (static census, 2026-11-08), and the
+# secret-operand gate's first AArch64 run failed on them.  -mgeneral-regs-only
+# makes that impossible in these files: every portable source compiles under
+# it and then contains no SIMD instruction at all.  The NEON and SVE2 kernels
+# keep their own flags and are held to the DIT list by the same gate.  MSVC
+# has no equivalent switch and is not analysed (docs/constant-time-testing.md).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND
+   CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag(-mgeneral-regs-only AMA_HAVE_GENERAL_REGS_ONLY)
+    if(NOT AMA_HAVE_GENERAL_REGS_ONLY)
+        message(FATAL_ERROR
+            "${CMAKE_C_COMPILER_ID} rejected -mgeneral-regs-only: without it the "
+            "portable C moves secrets through SIMD registers with FMOV, which is "
+            "not on Arm's DIT list")
+    endif()
+    set(_ama_general_regs_sources ${AMA_SOURCES})
+    if(AMA_NEON_SOURCES)
+        list(REMOVE_ITEM _ama_general_regs_sources ${AMA_NEON_SOURCES})
+    endif()
+    if(AMA_SVE2_SOURCES)
+        list(REMOVE_ITEM _ama_general_regs_sources ${AMA_SVE2_SOURCES})
+    endif()
+    set_property(SOURCE ${_ama_general_regs_sources}
+                 APPEND PROPERTY COMPILE_OPTIONS -mgeneral-regs-only)
+    # The NEON kernels need the SIMD file, so they cannot take the flag above;
+    # what they must not have is the auto-vectoriser rewriting their scalar
+    # parts (it added FMOVs to the Kyber and ML-DSA NTT bodies on top of what
+    # the intrinsics ask for).  Their explicit intrinsics are unaffected, and
+    # the lane moves the intrinsics themselves lowered to FMOV are pinned to
+    # UMOV/DUP/INS in src/c/neon/ama_neon_dit.h.
+    if(AMA_NEON_SOURCES)
+        set_property(SOURCE ${AMA_NEON_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+                     -fno-tree-vectorize -fno-tree-slp-vectorize)
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 
 # OpenSSL: deliberately NOT probed.  Every cryptographic operation is a

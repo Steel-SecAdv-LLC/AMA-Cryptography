@@ -817,6 +817,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("--member", action="append", default=[], metavar="OBJECT")
     parser.add_argument("--dispatch-only", default=None, metavar="SLOT")
+    parser.add_argument(
+        "--assume-adx",
+        action="store_true",
+        help="Select the MULX+ADX kernels Valgrind's CPUID hides (see "
+        "check_ghash_constant_time.py --assume-adx); the run is INCONCLUSIVE "
+        "unless the library confirms it and a MULX consumed the secret.",
+    )
     parser.add_argument("--optimized-witness", type=Path, default=None)
     parser.add_argument(
         "--deny",
@@ -848,6 +855,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # The sibling gate reads its tier pin from a module global; set it there so
     # the wiring probe and the driver environment see the same pin.
     vars(ghash)["_DISPATCH_ONLY"] = args.dispatch_only
+    vars(ghash)["_ASSUME_ADX"] = bool(args.assume_adx)
 
     isa = host_isa()
     try:
@@ -983,6 +991,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"{head.get('tainted_bytes', 0)} byte(s) and saw {len(report.sites)} consuming "
             f"instruction(s), below the floor of {MIN_CONSUMING_SITES}. An instrument that "
             "observed nothing has cleared nothing.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.assume_adx and "MULX" not in verdict.by_mnemonic:
+        # The library confirmed the assumption, but that is a statement about
+        # CPUID, not about which kernel ran: no MULX consumed the secret, so
+        # this run measured the portable path it was meant to replace.
+        print(
+            f"\n{args.target.upper()} CT-OPERAND CHECK INCONCLUSIVE — --assume-adx was "
+            "honoured but no MULX instruction consumed the secret, so the MULX+ADX "
+            "kernel was not measured.",
             file=sys.stderr,
         )
         return 2

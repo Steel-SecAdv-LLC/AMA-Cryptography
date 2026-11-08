@@ -20,6 +20,7 @@
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 #include "ama_neon_internal.h"
+#include "ama_neon_dit.h"
 
 /* Keccak-f[1600] round constants */
 static const uint64_t RC[24] = {
@@ -76,8 +77,9 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
 
         uint64x2_t c01 = veorq_u64(veorq_u64(s01, s56),
                          veorq_u64(s1011, veorq_u64(s1516, s2021)));
-        C[0] = vgetq_lane_u64(c01, 0);
-        C[1] = vgetq_lane_u64(c01, 1);
+        /* Lanes out by UMOV, not FMOV (ama_neon_dit.h). */
+        C[0] = ama_neon_lane0_u64(c01);
+        C[1] = ama_neon_lane1_u64(c01);
 
         uint64x2_t s23 = vld1q_u64(&state[2]);
         uint64x2_t s78 = vld1q_u64(&state[7]);
@@ -87,8 +89,8 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
 
         uint64x2_t c23 = veorq_u64(veorq_u64(s23, s78),
                          veorq_u64(s1213, veorq_u64(s1718, s2223)));
-        C[2] = vgetq_lane_u64(c23, 0);
-        C[3] = vgetq_lane_u64(c23, 1);
+        C[2] = ama_neon_lane0_u64(c23);
+        C[3] = ama_neon_lane1_u64(c23);
 
         C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
 
@@ -103,9 +105,7 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
         for (int i = 0; i < 25; i += 2) {
             if (i + 1 < 25) {
                 uint64x2_t si = vld1q_u64(&state[i]);
-                uint64x2_t di = vcombine_u64(
-                    vcreate_u64(D[i % 5]),
-                    vcreate_u64(D[(i + 1) % 5]));
+                uint64x2_t di = ama_neon_u64x2(D[i % 5], D[(i + 1) % 5]);
                 vst1q_u64(&state[i], veorq_u64(si, di));
             } else {
                 state[i] ^= D[i % 5];

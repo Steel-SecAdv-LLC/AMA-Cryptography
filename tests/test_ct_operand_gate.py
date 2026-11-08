@@ -791,6 +791,102 @@ def test_the_job_is_fail_closed_and_aggregated(name: str) -> None:
     assert f"check {name} " in gate_script
 
 
+def test_assume_adx_is_trusted_only_when_the_library_confirms_it(
+    ghash: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--assume-adx` sets AMA_TESTING_ASSUME_ADX=1 and the run is trusted only
+    on the library's own confirmation line: a refusal, or no line at all (a
+    non-testing archive, a target that never read CPUID), is a reason."""
+    monkeypatch.setattr(ghash, "_ASSUME_ADX", True)
+    monkeypatch.setattr(ghash, "_DISPATCH_ONLY", None)
+    assert ghash._driver_env()["AMA_TESTING_ASSUME_ADX"] == "1"
+    honoured = "==1== [AMA Dispatch] AMA_TESTING_ASSUME_ADX=1 honored: ADX assumed present"
+    refused = "==1== [AMA Dispatch] AMA_TESTING_ASSUME_ADX=1 refused: CPUID reports no BMI2"
+    assert ghash._dispatch_pin_was_honoured([honoured]) is None
+    assert ghash._dispatch_pin_was_honoured([refused]) == refused
+    assert ghash._dispatch_pin_was_honoured([]) is not None
+    assert ghash._dispatch_pin_was_honoured(["[AMA Dispatch] AVX2=1"]) is not None
+    monkeypatch.setattr(ghash, "_ASSUME_ADX", False)
+    assert "AMA_TESTING_ASSUME_ADX" not in ghash._driver_env()
+    assert ghash._dispatch_pin_was_honoured([]) is None
+
+
+def test_the_mulx_adx_kernels_are_measured_by_every_x86_lane() -> None:
+    """Valgrind's CPUID hides ADX, so without --assume-adx no lane selected the
+    X25519 MULX ladder or the P-curve MULX multiply production runs on every
+    ADX-capable CPU.  On it the gate found gcc's vectorised fe64_cswap
+    (MOVHLPS x4, 510 times per scalar multiplication) that no other run saw.
+    Operand gate under gcc and clang, taint, and both count steps."""
+    runs = {s["name"]: s.get("run", "") for s in _job()["steps"]}
+    gcc = runs["Every secret operand reaches only a vendor-listed instruction (gcc)"]
+    clang = runs["Every secret operand reaches only a vendor-listed instruction (clang)"]
+    for text in (gcc, clang):
+        assert re.search(
+            r"for target in x25519 nistp-ecdsa; do\s+python tools/check_ct_operand"
+            r"\.py[^\n]*--assume-adx",
+            text,
+        ), text
+    workflow = yaml.safe_load(DUDECT.read_text(encoding="utf-8"))
+    steps = [s for job in workflow["jobs"].values() for s in job.get("steps", [])]
+    taint = next(
+        s["run"] for s in steps if s.get("name", "").startswith("Secret-taint - no control")
+    )
+    loop = taint.split("for target in x25519 nistp-ecdsa; do", 1)
+    assert len(loop) == 2, "the taint step has no MULX+ADX loop"
+    body = loop[1].split("\ndone", 1)[0]
+    assert "--taint" in body and "--assume-adx" in body, body
+    for target in ("x25519", "nistp-ecdsa"):
+        assert any(
+            f"--target {target} --assume-adx" in s.get("run", "")
+            and "check_ghash_constant_time.py" in s.get("run", "")
+            for s in steps
+        ), f"no count step measures {target} on the MULX+ADX kernel"
+
+
+def test_aarch64_portable_sources_are_built_without_simd_registers() -> None:
+    """The AArch64 cure is a build property, so it is pinned where it lives.
+
+    gcc 13 moved the portable C's secret words through SIMD registers with
+    FMOV, which Arm's DIT list does not name (514 sites, first AArch64 run).
+    CMakeLists.txt compiles every library source except the NEON and SVE2
+    kernels with -mgeneral-regs-only on AArch64 GCC/Clang, fails configure
+    if the compiler refuses it, and builds the NEON kernels without the
+    auto-vectoriser.  The behavioural pin is the blocking AArch64 lane; this
+    holds the mechanism in place between its runs."""
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    block = cmake.split('if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND\n', 1)
+    assert len(block) == 2, "the AArch64 general-registers block is gone"
+    body = block[1].split("\nendif()\n\nfind_package(Threads REQUIRED)", 1)[0]
+    assert "set(_ama_general_regs_sources ${AMA_SOURCES})" in body
+    assert "list(REMOVE_ITEM _ama_general_regs_sources ${AMA_NEON_SOURCES})" in body
+    assert "APPEND PROPERTY COMPILE_OPTIONS -mgeneral-regs-only" in body
+    assert "FATAL_ERROR" in body
+    assert "-fno-tree-vectorize -fno-tree-slp-vectorize" in body
+    assert cmake.index("set(AMA_SOURCES") < cmake.index("_ama_general_regs_sources")
+
+
+@pytest.mark.parametrize("name", ["secret-operand-check", "secret-operand-check-arm64"])
+def test_every_target_runs_and_any_failure_fails_the_step(name: str) -> None:
+    """A step runs every target and then fails if any failed.
+
+    Under `set -e` the first failing target ended the step, so one CI run
+    reported one finding: the gcc 15.2 run on dba6bf4 stopped at x25519 and
+    said nothing about the 23 targets after it.  Each gate call now records
+    its target in `failed` and the step exits 1 at the end when that is
+    non-empty; an inconclusive run (exit 2) counts as a failure too, since
+    `||` fires on any non-zero status."""
+    for step in _job(name)["steps"]:
+        run = step.get("run", "")
+        if "check_ct_operand.py" not in run:
+            continue
+        calls = run.replace("\\\n", " ").count("python tools/check_ct_operand.py")
+        assert run.count('|| failed="$failed') == calls, step["name"]
+        assert 'failed=""' in run.split("check_ct_operand.py")[0], step["name"]
+        verdict = run.rstrip().splitlines()[-4:]
+        assert verdict[0].strip() == 'if [ -n "$failed" ]; then', step["name"]
+        assert verdict[2].strip() == "exit 1" and verdict[3].strip() == "fi", step["name"]
+
+
 def test_the_instrument_tests_run_where_valgrind_is_provisioned() -> None:
     """The tests that build and run the tool skip without valgrind's tool
     headers, and no ordinary pytest lane installs them.  ci.yml's
