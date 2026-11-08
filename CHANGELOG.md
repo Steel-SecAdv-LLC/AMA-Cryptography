@@ -143,6 +143,25 @@ division-free by construction rather than by optimiser choice. `tools/check_secr
 none in the loop, and its ceiling falls from 5 to 4. The RFC 9106 KATs and
 the `argon2id` / `argon2id-verify` operand gate (gcc 13/14, clang) pass.
 
+CI on `15673d4` then failed the `argon2id` target on the shipped LTO library
+(gcc 15.2, job 128734018389). `ama_argon2_g_avx2`'s row loop exited on a
+`JNE` whose operands derived from the reference block's pointer. The
+reference block's address is password-derived by RFC 9106 section 3.4, so
+taint reached the branch, although its outcome is the same for every
+password. The testing archive declassifies the index, which is why the archive
+targets passed; the shipped library does not. gcc 13.3 also tests a pointer
+there, just not a derived one. The loop offsets in the AVX2 kernel and in the
+NEON kernel's X ^ Y loop now go through `ama_ct_value_barrier_u32`, so each
+loop exits on its counter (`cmp $8` / `cmp #128`, under gcc 13/14 and clang).
+
+Verified:
+- The `argon2id` target on the LTO `.so`, and `argon2id` and
+  `argon2id-verify` on the gcc 13/14 and clang archives: 7/7.
+- The KATs and G-kernel equivalence tests: 50/50 on x86-64, and 50/50
+  under QEMU as Neoverse N2.
+
+gcc 15 is validated in CI only.
+
 ### Secrets left in registers at return: cleared at the ABI boundary, pinned — 2026-11-08
 
 CI's `test_secret_residue.py` failed on the Python 3.12 lane with one live

@@ -51,6 +51,7 @@
 #include <immintrin.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* ============================================================================
  * BlaMka building blocks
@@ -187,9 +188,20 @@ void ama_argon2_g_avx2(uint64_t out[128],
     uint64_t R[128];
     uint64_t Z[128];
 
+    /* Each loop's offset goes through a value barrier, so that the loop exits
+     * on its own counter.  x and y are the previous and the reference block,
+     * and from the second half of pass 0 the reference block's ADDRESS is
+     * password-derived by RFC 9106 sec. 3.4's design.  Left to itself the
+     * compiler strength-reduces x + o into a pointer induction and tests that
+     * pointer against an end pointer derived from it.  The branch's outcome
+     * is the same for every password, but the secret-operand gate sees a
+     * branch on a password-derived value: gcc 15.2 picked y's pointer on the
+     * shipped LTO library (CI job 128734018389), and gcc 13.3 already tested
+     * a pointer here, just not a derived one.  With the offset opaque, the
+     * exit compares the counter. */
     /* Row pass: R = X ^ Y, then Z = blamka_round(R) row by row. */
     for (int row = 0; row < 8; row++) {
-        const int o = row * 16;
+        const int o = (int)ama_ct_value_barrier_u32((uint32_t)row) * 16;
         __m256i a = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o)),
                                      _mm256_loadu_si256((const __m256i *)(y + o)));
         __m256i b = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o + 4)),
@@ -213,7 +225,7 @@ void ama_argon2_g_avx2(uint64_t out[128],
      * (Z[2col + 16r], Z[2col + 16r + 1]) for r = 0..7, in row order, so the
      * quads are rows (0,1), (2,3), (4,5), (6,7).  out = R ^ round(...). */
     for (int col = 0; col < 8; col++) {
-        const int o = 2 * col;
+        const int o = 2 * (int)ama_ct_value_barrier_u32((uint32_t)col);
         __m256i a = load_pair2(Z + o, Z + o + 16);
         __m256i b = load_pair2(Z + o + 32, Z + o + 48);
         __m256i c = load_pair2(Z + o + 64, Z + o + 80);
