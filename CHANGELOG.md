@@ -87,6 +87,14 @@ Three alerts the CI check runs carried on every PR, each cured at source:
   Nothing here reads file coverage (the gate reads results), so both jobs
   set `CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS`, the same analysis on a pull
   request and on `main`, less the coverage pass.
+* **CodeQL (both jobs), after the grant above:** able to reach its API, the
+  Action tried an overlay (incremental) database on every pull request of
+  the variants job and warned that `build-mode` was not `none` before
+  falling back to a full database (job 128793351955). C is a traced language built
+  here by cmake, so an overlay database can never apply. Both jobs state
+  `CODEQL_OVERLAY_DATABASE_MODE: none`, which the Action logs at info level.
+  The main job did not warn only because its Python language has no overlay
+  flag yet, which is server state, not a choice.
 * **ACVP validation:** the evidence artifact asked for 365 days' retention;
   the repository's maximum is 90, and GitHub clamped every upload with a
   warning. It asks for 90, and the comment that promised a year is

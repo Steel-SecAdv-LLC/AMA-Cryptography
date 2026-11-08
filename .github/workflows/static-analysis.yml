@@ -192,9 +192,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # The same choice the codeql-variants job states, so both CodeQL jobs
-      # run the same analysis on a pull request.
+      # The same two choices the codeql-variants job states, so both CodeQL
+      # jobs run the same analysis on a pull request.
       CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS: "true"
+      CODEQL_OVERLAY_DATABASE_MODE: "none"
     # The one job that uploads SARIF carries the one write grant the
     # workflow used to hand to all of its jobs.
     permissions:
@@ -291,6 +292,14 @@ jobs:
       # chooses.  This is the choice, stated once: the same analysis on
       # pull requests and on main, less the coverage pass.
       CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS: "true"
+      # Overlay (incremental) databases need build-mode: none, and C is a
+      # traced language built here by cmake, so the Action can never use
+      # them: once it could reach its API it tried on every pull request
+      # and warned "Cannot build an overlay database because build-mode is
+      # set to undefined" before falling back to a full database (job
+      # 128793351955).  Stated as the mode, which the Action logs at info level;
+      # a full database is what a traced build analyses.
+      CODEQL_OVERLAY_DATABASE_MODE: "none"
     permissions:
       contents: read
       security-events: read  # the Action's own API; nothing is uploaded (see the header)
