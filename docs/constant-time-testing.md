@@ -421,7 +421,19 @@ reports `symbol+offset`, the object, the execution count and the call chain.
   the list, the gate re-runs the driver with `--ct-dump-ir-at` and prints the
   VEX IR under that instruction's IMark: which statement read the secret. It
   exists because the first AArch64 verdict named an `mrs` of DCZID_EL0, which
-  VEX lifts to a constant and which takes no data operand.
+  VEX lifts to a constant and which takes no data operand. Its first output
+  (CI, `fbefa4c`) answered that: VEX had chased a conditional branch in glibc's
+  memset and lifted the `mrs` as `PUT(x5) = ITE(guard, 0x10, GET(x5))`, and the
+  tool charged the unchanged arm, which held a secret from the caller.
+* **A guarded write is charged its own value only.** An ITE whose guard was
+  computed under an earlier instruction is a speculatively chased write, not a
+  select the instruction performs. For it, the arm that passes the register
+  through unchanged is not an operand, and the guard is the branch's. A CMOV or
+  CSEL computes its condition under its own IMark and keeps the ordinary rule,
+  under which every arm is an operand. amd64 VEX does not chase conditional
+  branches, so the rule acts on AArch64 only. CI's AArch64 lane is its pin, and
+  `test_a_guarded_write_does_not_charge_the_register_it_left_unchanged` probes
+  it on an arm64 host.
 * **`--static`** is the same rule, taken over every instruction of named
   archive members, for kernels Valgrind cannot execute (AVX-512, VAES): each
   must be on the list, a control transfer, or padding. Without taint it

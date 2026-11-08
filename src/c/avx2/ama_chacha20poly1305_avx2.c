@@ -28,6 +28,7 @@
 #include <immintrin.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* ChaCha20 constants: "expand 32-byte k" */
 #define CHACHA_C0 0x61707865
@@ -162,11 +163,18 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
                                  const uint8_t nonce[12],
                                  uint32_t counter,
                                  uint8_t out[512]) {
-    /* Load key words */
+    /* Load key words, each into a general register behind a value barrier.
+     * The byte-assembly loop this replaces was SLP-vectorised by gcc 15.2,
+     * which loaded key-word pairs with VMOVHPS (FP domain, not on Intel's
+     * DOIT list: CI's secret-operand gate, aead-bulk, ama_chacha20_block_x8
+     * _avx2+0x3e/+0x43).  A word that leaves a barrier exists only in a
+     * general register, so no compiler can assemble it in a vector one.  This
+     * file is x86-64 only, so the 32-bit load is already little-endian. */
     uint32_t k[8];
     for (int i = 0; i < 8; i++) {
-        k[i] = ((uint32_t)key[i*4]) | ((uint32_t)key[i*4+1] << 8) |
-               ((uint32_t)key[i*4+2] << 16) | ((uint32_t)key[i*4+3] << 24);
+        uint32_t w;
+        memcpy(&w, key + 4 * i, sizeof(w));
+        k[i] = ama_ct_value_barrier_u32(w);
     }
 
     uint32_t n[3];

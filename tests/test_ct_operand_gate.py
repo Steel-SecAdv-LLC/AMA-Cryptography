@@ -988,3 +988,72 @@ def test_the_gate_scripts_are_in_both_path_filters() -> None:
     for path in ("tools/check_ct_operand.py", "tools/ct_operand/**"):
         assert f"- '{path}'" in text, f"push filter omits {path}"
         assert f"            {path}\n" in text, f"WATCHED_PATHS omits {path}"
+
+
+_GUARDED_PROBE = r"""
+#include <stdint.h>
+#include <valgrind/memcheck.h>
+/* x5 holds the secret; a public test branches around `mrs x5, dczid_el0`,
+ * which writes a constant and reads no data operand. */
+__attribute__((noinline)) uint64_t guarded(uint64_t s, uint64_t p) {
+    uint64_t r;
+    __asm__ volatile("mov x5, %1\n\tcbz %2, 1f\n\tmrs x5, dczid_el0\n1:\n\tmov %0, x5"
+                     : "=r"(r) : "r"(s), "r"(p) : "x5");
+    return r;
+}
+int main(void) {
+    volatile uint64_t seed = 12345, one = 1;
+    uint64_t secret = seed;
+    VALGRIND_MAKE_MEM_UNDEFINED(&secret, sizeof secret);
+    volatile uint64_t r = guarded(secret, one);
+    (void)r;
+    return 0;
+}
+"""
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("aarch64", "arm64"),
+    reason="VEX chases conditional branches into guarded writes on its arm64 front end only",
+)
+def test_a_guarded_write_does_not_charge_the_register_it_left_unchanged(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """VEX lifts an instruction reached by speculatively chasing a conditional
+    branch as ``PUT(r) = ITE(guard, new, GET(r))``.  The unchanged arm is not an
+    operand of the instruction: charging it reported glibc memset's
+    ``mrs x5, dczid_el0`` -- a constant -- because x5 still held a secret
+    (CI, fbefa4c).  The probe recreates that, and first requires the IR to
+    show the guarded write, so a VEX that stopped chasing skips rather than
+    passing vacuously."""
+    if (
+        not shutil.which("valgrind")
+        or not Path("/usr/include/valgrind/pub_tool_tooliface.h").is_file()
+    ):
+        pytest.skip("valgrind or its tool headers are not installed")
+    stage = gate.build_tool("aarch64", tmp_path / "cache")
+    src = tmp_path / "probe.c"
+    exe = tmp_path / "probe"
+    src.write_text(_GUARDED_PROBE, encoding="utf-8")
+    subprocess.run(["gcc", "-O2", "-g", str(src), "-o", str(exe)], check=True)
+    dump = subprocess.run(
+        ["objdump", "-d", "--no-show-raw-insn", str(exe)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    mrs = [
+        int(line.split(":")[0], 16)
+        for line in dump.splitlines()
+        if "mrs" in line and "dczid_el0" in line and ":" in line
+    ]
+    assert len(mrs) == 1, mrs
+    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
+    assert text is not None
+    report = gate.parse_report(text)
+    ir = gate.explain_sites(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path, [mrs[0]])
+    if not any("ITE(" in line for line in ir):
+        pytest.skip("this VEX did not chase the branch; there is no guarded write to judge")
+    charged = [s for s in report.sites if s.symbol.startswith("guarded+") and s.ip == mrs[0]]
+    assert not charged, "the mrs was charged for the register value it left unchanged"

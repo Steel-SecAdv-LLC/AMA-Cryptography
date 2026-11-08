@@ -231,6 +231,10 @@ typedef struct {
     IRExpr *cons;      /* I1 atom: did the current instruction read taint? */
     IRExpr *cls[5];    /* I1 atoms, one per CT_CLASS_* bit: DIV, FP, SQRT, BRANCH, OTHER */
     Addr    ip;        /* current guest instruction, 0 before the first IMark */
+    Addr   *def_ip;    /* instruction under whose IMark each temp was defined */
+    Int    *get_off;   /* guest offset a temp was read from by a GET, else -1 */
+    Int    *pt_off;    /* guarded write: offset passed through unchanged, else -1 */
+    IRExpr **pt_val;   /* guarded write: shadow of the instruction's own value */
 } Env;
 
 static IRExpr *F1(void) { return IRExpr_Const(IRConst_U1(False)); }
@@ -777,6 +781,45 @@ static void dump_marked(const IRSB *in)
     }
 }
 
+/* A guarded register write: `t = ITE(g, v, GET(off))` with the guard `g`
+ * computed under an EARLIER instruction than this one.  That is not a select
+ * the instruction performs (a CMOV or CSEL computes its condition under its
+ * own IMark, and there the old destination IS an operand, so it keeps the
+ * ordinary rule).  It is VEX speculatively chasing past a conditional branch:
+ * every write in the chased code becomes "the new value if the branch went
+ * this way, else the register unchanged".  The unchanged arm is not an
+ * operand of the instruction, and its guard is the branch's, charged under
+ * the branch's own IMark.  Charging either here blamed the instruction for
+ * whatever the register held before it: CI's first AArch64 explanation
+ * (`--ct-dump-ir-at`, fbefa4c) showed glibc memset's `mrs x5, dczid_el0`,
+ * which VEX lifts to the constant 0x10, reported because x5 still held a
+ * secret word from the caller.  Here the instruction is charged its own
+ * value `v` only, and a PUT of `t` to `off` is charged the same.  Returns
+ * the use to charge at the WrTmp; `fallback` (the full shadow) otherwise. */
+static IRExpr *guarded_write_use(Env *e, IRTemp t, IRExpr *ite, IRExpr *fallback)
+{
+    IRExpr *g = ite->Iex.ITE.cond, *a = ite->Iex.ITE.iftrue, *b = ite->Iex.ITE.iffalse;
+    if (g->tag != Iex_RdTmp || (Int)g->Iex.RdTmp.tmp >= e->n_orig ||
+        e->def_ip[g->Iex.RdTmp.tmp] == e->ip)
+        return fallback;
+    IRExpr *own = NULL;
+    Int off = -1;
+    if (b->tag == Iex_RdTmp && (Int)b->Iex.RdTmp.tmp < e->n_orig &&
+        e->get_off[b->Iex.RdTmp.tmp] >= 0) {
+        off = e->get_off[b->Iex.RdTmp.tmp];
+        own = a;
+    } else if (a->tag == Iex_RdTmp && (Int)a->Iex.RdTmp.tmp < e->n_orig &&
+               e->get_off[a->Iex.RdTmp.tmp] >= 0) {
+        off = e->get_off[a->Iex.RdTmp.tmp];
+        own = b;
+    }
+    if (own == NULL)
+        return fallback;
+    e->pt_off[t] = off;
+    e->pt_val[t] = sh_atom(e, own);
+    return e->pt_val[t];
+}
+
 static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestLayout *layout,
                            const VexGuestExtents *vge, const VexArchInfo *archinfo,
                            IRType gWordTy, IRType hWordTy)
@@ -798,6 +841,19 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
     liveness(in, e.live, e.n_orig);
     e.branchy = VG_(malloc)("ct.branchy", (e.n_orig ? e.n_orig : 1) * sizeof(Bool));
     branch_flow(in, e.branchy, e.n_orig);
+    {
+        Int m = e.n_orig ? e.n_orig : 1;
+        e.def_ip = VG_(malloc)("ct.defip", m * sizeof(Addr));
+        e.get_off = VG_(malloc)("ct.getoff", m * sizeof(Int));
+        e.pt_off = VG_(malloc)("ct.ptoff", m * sizeof(Int));
+        e.pt_val = VG_(malloc)("ct.ptval", m * sizeof(IRExpr *));
+        for (Int i = 0; i < m; i++) {
+            e.def_ip[i] = 0;
+            e.get_off[i] = -1;
+            e.pt_off[i] = -1;
+            e.pt_val[i] = NULL;
+        }
+    }
     e.gs_off = layout->total_sizeB;
     e.cons = F1();
     for (Int k = 0; k < 5; k++)
@@ -830,12 +886,18 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
              * a load consumes its address, and every other expression its
              * arguments, which is what `s` is for them. */
             IRExpr *use = s;
+            IRTemp dst = st->Ist.WrTmp.tmp;
+            e.def_ip[dst] = e.ip;
             if (data->tag == Iex_Get)
                 use = F1();
             else if (data->tag == Iex_Load)
                 use = sh_atom(&e, data->Iex.Load.addr);
             else if (data->tag == Iex_GetI)
                 use = sh_atom(&e, data->Iex.GetI.ix);
+            else if (data->tag == Iex_ITE)
+                use = guarded_write_use(&e, dst, data, use);
+            if (data->tag == Iex_Get)
+                e.get_off[dst] = data->Iex.Get.offset;
             if (e.live[st->Ist.WrTmp.tmp]) {
                 if (e.branchy[st->Ist.WrTmp.tmp]) {
                     consume(&e, use);
@@ -850,7 +912,12 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
         }
         case Ist_Put: {
             IRExpr *s = sh_atom(&e, st->Ist.Put.data);
-            consume_other(&e, s);
+            IRExpr *d = st->Ist.Put.data;
+            if (d->tag == Iex_RdTmp && (Int)d->Iex.RdTmp.tmp < e.n_orig &&
+                e.pt_off[d->Iex.RdTmp.tmp] == st->Ist.Put.offset)
+                consume_other(&e, e.pt_val[d->Iex.RdTmp.tmp]);
+            else
+                consume_other(&e, s);
             addStmtToIRSB(e.out, st);
             sh_put(&e, st->Ist.Put.offset,
                    sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.Put.data)), s);
@@ -957,6 +1024,10 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
     VG_(free)(e.sh);
     VG_(free)(e.live);
     VG_(free)(e.branchy);
+    VG_(free)(e.def_ip);
+    VG_(free)(e.get_off);
+    VG_(free)(e.pt_off);
+    VG_(free)(e.pt_val);
     if (clo_n_dump > 0 && block_wanted(in))
         dump_marked(in);
     return e.out;

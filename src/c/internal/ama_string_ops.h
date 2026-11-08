@@ -49,8 +49,27 @@
  * this header every copied buffer reads to it as uninitialised.  Under
  * analysis the calls stay libc's memcpy/memmove/memset, whose semantics are
  * the ones implemented here; nothing is compiled differently. */
+/* Sanitizers: MemorySanitizer cannot see the stores REP MOVSB makes in inline
+ * assembly, and so reports every copied buffer as uninitialised (measured: the
+ * per-PR MSan lane aborted test_kat on fbefa4c).  AddressSanitizer and
+ * ThreadSanitizer would silently miss the accesses.  All of them intercept
+ * libc's memcpy/memmove/memset, so under any of them the calls stay libc's,
+ * and the instrumented build checks every copy.  No shipped build is
+ * sanitized; tests/test_no_libc_string_calls.py reads the release library. */
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer) || __has_feature(address_sanitizer) || \
+    __has_feature(thread_sanitizer) || __has_feature(hwaddress_sanitizer)
+#define AMA_STRING_OPS_SANITIZED 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || \
+    defined(__SANITIZE_HWADDRESS__)
+#define AMA_STRING_OPS_SANITIZED 1
+#endif
+
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(_MSC_VER) && !defined(__clang_analyzer__) && !defined(AMA_STRING_OPS_DISABLE)
+    !defined(_MSC_VER) && !defined(__clang_analyzer__) && \
+    !defined(AMA_STRING_OPS_SANITIZED) && !defined(AMA_STRING_OPS_DISABLE)
 
 /* <string.h> first, so that its declarations are seen before the macros
  * below and every later #include of it is a no-op. */

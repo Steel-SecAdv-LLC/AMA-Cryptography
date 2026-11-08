@@ -64,7 +64,9 @@ static int cpu_executes_adcx(void) {
     }
     if (sigsetjmp(g_sigill_jump, 1) == 0) {
         uint64_t a = 1, b = 2;
-        __asm__ volatile("adcx %1, %0" : "+r"(a) : "r"(b) : "cc");
+        /* CLC first: ADCX adds the incoming carry, so a stale CF would make
+         * 1 + 2 read 4 on an ADX CPU and skip the vector there. */
+        __asm__ volatile("clc\n\tadcx %1, %0" : "+r"(a) : "r"(b) : "cc");
         ok = (a == 3);
     }
     sigaction(SIGILL, &old, NULL);

@@ -64,11 +64,20 @@
  * sanitizer that moves locals off the real frame, it skips (77).
  */
 #include "ama_cryptography.h"
-#include "residue_probe.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+/* The probe header only where it is used: on any other target its helpers
+ * would be compiled and never called (-Werror=unused-function). */
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#include "residue_probe.h"
+#endif
+
+/* AMA_REGISTER_RESIDUE_PQC_GROUP: set by tests/c/CMakeLists.txt when the
+ * AMA_USE_NATIVE_PQC source group (X25519, Argon2id, ChaCha20-Poly1305) is
+ * built; without it those rows are not compiled, and the rest still run. */
 
 #if !(defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))) || \
     defined(_WIN32) || AMA_PROBE_IS_INSTRUMENTED
@@ -177,15 +186,19 @@ static const uint8_t g_salt[12] = {'s', 'a', 'l', 't', 's', 'a', 'l', 't', 's', 
 static const uint8_t g_info[7] = {'r', 'e', 's', 'i', 'd', 'u', 'e'};
 static const uint8_t g_nonce[16] = {7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6, 7, 8};
 static uint8_t g_pt[64], g_ct[64], g_tag[16], g_out[64];
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
 static uint8_t g_pk1[32], g_sk1[32], g_pk2[32], g_sk2[32], g_ss[32];
+#endif
 
 /* --- dead stack: the X25519 shared secret and the HKDF-SHA3-256 output. */
 
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
 RESIDUE_NOINLINE static ama_error_t probe_x25519_key_exchange(void) {
     ama_error_t rc;
     RUN_BELOW_GAP(ama_x25519_key_exchange(g_ss, g_sk1, g_pk2));
     return rc;
 }
+#endif
 
 RESIDUE_NOINLINE static ama_error_t probe_hkdf(void) {
     ama_error_t rc;
@@ -254,11 +267,13 @@ int main(void) {
     }
     printf("ok   control: a sentinel left on the stack is seen\n");
 
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
     if (ama_x25519_keypair(g_pk1, g_sk1) != AMA_SUCCESS ||
         ama_x25519_keypair(g_pk2, g_sk2) != AMA_SUCCESS) {
         printf("FAIL x25519 keypairs\n");
         return 1;
     }
+#endif
 
     /* --- SHA-3 family: the row CI named, and what it is built from. */
     memset(g_out, 0, sizeof(g_out));
@@ -287,6 +302,7 @@ int main(void) {
         verdict("ama_sha3_final", rc, g_out, 32);
     }
 
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
     /* --- key agreement and key generation. */
     memset(g_ss, 0, sizeof(g_ss));
     CALL_THEN_DUMP(rc, ama_x25519_key_exchange(g_ss, g_sk1, g_pk2));
@@ -298,6 +314,7 @@ int main(void) {
         printf("FAIL x25519 key exchange\n");
         return 1;
     }
+#endif
 
     /* --- the other KDFs. */
     memset(g_out, 0, sizeof(g_out));
@@ -308,8 +325,10 @@ int main(void) {
     CALL_THEN_DUMP(rc, ama_pbkdf2_hmac_sha512(g_key, 13, g_salt, 8, 2, g_out, 64));
     verdict("ama_pbkdf2_hmac_sha512", rc, g_out, 64);
     memset(g_out, 0, sizeof(g_out));
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
     CALL_THEN_DUMP(rc, ama_argon2id(g_key, 13, g_salt, sizeof(g_salt), 1, 64, 1, g_out, 32));
     verdict("ama_argon2id", rc, g_out, 32);
+#endif
 
     /* --- AEAD decryption: the plaintext, and the key. */
     if (ama_aes256_gcm_encrypt(g_key, g_nonce, g_pt, sizeof(g_pt), NULL, 0, g_ct, g_tag) !=
@@ -322,6 +341,7 @@ int main(void) {
                                               g_tag, g_out));
     verdict("ama_aes256_gcm_decrypt (plaintext)", rc, g_out, sizeof(g_pt));
     verdict("ama_aes256_gcm_decrypt (key)", rc, g_key, sizeof(g_key));
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
     if (ama_chacha20poly1305_encrypt(g_key, g_nonce, g_pt, sizeof(g_pt), NULL, 0, g_ct,
                                      g_tag) != AMA_SUCCESS) {
         printf("FAIL ama_chacha20poly1305_encrypt\n");
@@ -332,6 +352,7 @@ int main(void) {
                                                     0, g_tag, g_out));
     verdict("ama_chacha20poly1305_decrypt (plaintext)", rc, g_out, sizeof(g_pt));
     verdict("ama_chacha20poly1305_decrypt (key)", rc, g_key, sizeof(g_key));
+#endif
     if (ama_ascon_aead128_encrypt(g_key, g_nonce, g_pt, sizeof(g_pt), NULL, 0, g_ct, g_tag) !=
         AMA_SUCCESS) {
         printf("FAIL ama_ascon_aead128_encrypt\n");
@@ -350,7 +371,9 @@ int main(void) {
         printf("FAIL ama_hkdf\n");
         return 1;
     }
+#if defined(AMA_REGISTER_RESIDUE_PQC_GROUP)
     stack_verdict("ama_x25519_key_exchange (dead stack)", probe_x25519_key_exchange, g_ss, 32);
+#endif
     stack_verdict("ama_hkdf (dead stack)", probe_hkdf, g_out, 32);
 
     memset(g_regs, 0, sizeof(g_regs));

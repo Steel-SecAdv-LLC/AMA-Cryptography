@@ -118,6 +118,50 @@ in the `ml-dsa-sign` operand gate. Its four staging loops are now explicit
 `memcpy` calls, so they become REP MOVSB. The loop form fails the gate under
 clang (**PIN**), and gcc 13/14 and clang pass.
 
+CI on `fbefa4c` found three lanes the local run did not cover, each cured:
+* **MemorySanitizer** cannot see the stores REP MOVSB makes in inline
+  assembly, and aborted `test_kat`. Under any sanitizer the string-ops header
+  now leaves the calls to libc, which every sanitizer intercepts, so the
+  instrumented build checks each copy. No shipped build is sanitized.
+* **AArch64 strict warnings:** `test_register_residue.c` included
+  `residue_probe.h` on targets where it uses none of it
+  (`-Werror=unused-function`); it now includes it only on x86-64.
+* **`AMA_USE_NATIVE_PQC=OFF`:** that configuration does not build X25519,
+  Argon2id or ChaCha20-Poly1305. Those rows now compile only when CMake sets
+  `AMA_REGISTER_RESIDUE_PQC_GROUP`, and the other rows still run (80/80
+  ctest in that configuration).
+* **CI's gcc 15.2** loaded ChaCha20 x8 key-word pairs with VMOVHPS (FP domain,
+  not on the DOIT list; `aead-bulk`). It had SLP-vectorised the byte-assembly
+  loop. Each key word is now a `memcpy` into a general register behind a value
+  barrier. gcc 13/14 and clang pass locally, pinned and unpinned; gcc 15 is
+  validated in CI only.
+* **The AArch64 `mrs dczid_el0` site** is explained by the IR the gate now
+  prints. VEX had chased a conditional branch in glibc's memset and lifted the
+  `mrs` as `ITE(guard, 0x10, GET(x5))`, and the tool charged x5's unchanged
+  value, a secret left there by the caller. An ITE whose guard comes from an
+  earlier instruction is now charged only its own value. CMOV and CSEL, which
+  compute their condition under their own IMark, keep the rule that every arm
+  is an operand. The rule cannot act on amd64, where VEX does not chase
+  conditional branches; CI's AArch64 lane is its pin.
+* **Copilot:**
+  * `test_register_residue` linked X25519, Argon2id and ChaCha20 in the
+    no-PQC configuration; fixed by the gating above.
+  * The ADX capability probe ran ADCX with an uninitialised carry flag, so a
+    stale CF could read `1 + 2` as 4 and skip the known-answer test on a
+    real ADX CPU. It now clears CF in the same asm block (CLC).
+* **Instruction counts:** the nine operations that move against the new
+  merge-base `c0f2254` are acknowledged with the runner's own measurement of
+  `fbefa4c` (A/B job 128690957185). Each new entry keeps the earlier one
+  under `supersedes`, and `instruction-baseline.json` records the same head
+  values. Attribution, measured locally with callgrind on gcc 13.3:
+  * ML-DSA and ML-KEM fall 23-41%: this branch's Keccak x4 AVX2 restructure
+    (10.73M to 3.05M instructions per 10 ML-DSA keygens).
+  * AES-GCM (+12.0%) and ChaCha20-Poly1305 (+7.6%) pay for the operand-gate
+    cures and the boundary register clearing.
+  * hkdf_derive (+2.1%) pays for the register clearing alone.
+  Replaying the runner's numbers through the gate with the new file passes
+  all 18 operations.
+
 ### Secret operands: every consuming instruction vendor-listed, every primitive measured — 2026-11-08
 
 The class (c) gate added on 2026-11-07 blocked only on division,
