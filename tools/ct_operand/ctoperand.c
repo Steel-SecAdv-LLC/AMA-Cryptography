@@ -39,8 +39,10 @@
  * not model the latency of anything: it reports operand flow, and the
  * allowlist decides.  Propagation is pessimistic, so a value that Memcheck's
  * bit-precise rules would call public (a secret ANDed with zero) is tainted
- * here; the zero idioms `x ^ x` and `x - x` are the only special cases.  An
- * over-taint can only add reports, never hide one.
+ * here.  The special cases are the zero idioms `x ^ x` and `x - x`, and a
+ * constant that fixes the result (OR with all-ones, AND with zero:
+ * `const_fixes_result`).  An over-taint can only add reports, never hide
+ * one.
  *
  * Licensing note: this file is Apache-2.0 source written against Valgrind's
  * public tool interface.  The executable it builds links Valgrind's GPL-2.0
@@ -323,7 +325,14 @@ static IRExpr *nonzero(Env *e, IRType ity, IRExpr *x)
 static IRExpr *widen(Env *e, IRType ity, IRExpr *t1)
 {
     switch (ity) {
-    case Ity_I8:  return assign(e, Ity_I8, IRExpr_Unop(Iop_1Sto8, t1));
+    /* Not Iop_1Sto8: the arm64 instruction selector has no rule for it
+     * (VEX host_arm64_isel.c lowers 1Sto16/32/64 only), and an arm64 run
+     * aborted in iselIntExpr_R on the first 1-byte shadow put.  64to8 of
+     * 1Sto64 is the same value and is lowered on every host. */
+    case Ity_I8: {
+        IRExpr *w = assign(e, Ity_I64, IRExpr_Unop(Iop_1Sto64, t1));
+        return assign(e, Ity_I8, IRExpr_Unop(Iop_64to8, w));
+    }
     case Ity_I16: return assign(e, Ity_I16, IRExpr_Unop(Iop_1Sto16, t1));
     case Ity_I32: return assign(e, Ity_I32, IRExpr_Unop(Iop_1Sto32, t1));
     case Ity_I64: return assign(e, Ity_I64, IRExpr_Unop(Iop_1Sto64, t1));
