@@ -846,7 +846,9 @@ def test_the_bulk_aead_workload_reaches_the_kernels_it_names(
         sizes = [int(n) for n in re.findall(r"\bpt\[(\d+)\]", driver)]
         assert sizes and min(sizes) > 512, sizes
     assert gate._REQUIRED_KERNELS["aead-bulk"]["x86_64"] == ("ama_chacha20_block_x8_avx2",)
-    assert gate._REQUIRED_KERNELS["aead-bulk"]["aarch64"] == ("ama_chacha20_block_x8_neon",)
+    # The NEON x8 entry point only calls the x4 kernel twice; the x4 kernel
+    # is where the secret is consumed.
+    assert gate._REQUIRED_KERNELS["aead-bulk"]["aarch64"] == ("ama_chacha20_block_x4_neon",)
 
 
 def test_the_hkdf_drivers_key_every_hmac_with_a_long_secret(ghash: ModuleType) -> None:
@@ -1013,6 +1015,7 @@ int main(void) {
 
 
 @pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("aarch64")
 @pytest.mark.skipif(
     platform.machine().lower() not in ("aarch64", "arm64"),
     reason="VEX chases conditional branches into guarded writes on its arm64 front end only",

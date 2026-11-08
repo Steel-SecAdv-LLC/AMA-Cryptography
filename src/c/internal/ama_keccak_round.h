@@ -126,6 +126,61 @@ extern const uint64_t ama_keccak_round_constants[24];
     uint64_t d0, d1, d2, d3, d4;                                          \
     uint64_t b0, b1, b2, b3, b4
 
+/* Scrub the permutation's own lane variables before it returns, in an
+ * unoptimised build only.  Without optimisation every one of the 75 locals
+ * above is a stack slot, and a00..a03 hold the first four lanes of the final
+ * state -- the SHA3-256 digest -- so the returned frame kept a whole copy of
+ * it: measured 2026-11-08, CMAKE_BUILD_TYPE=None (the strict-warnings lane),
+ * tests/c/test_register_residue.c "ama_hkdf (dead stack)", one copy, and the
+ * same for ama_sha3_256, ama_sha3_final and HMAC-SHA3-256 on their own.  An
+ * optimised build keeps the lanes in registers and that row is clean on every
+ * Release lane; there the scrub would only cost stores, so it is compiled
+ * out.  Volatile stores through each local's address: the frame slots
+ * themselves are what is cleared. */
+#if !defined(__OPTIMIZE__)
+#define AMA_KECCAK_WIPE_LOCALS_ONE(v) (*(volatile uint64_t *)&(v) = 0)
+#define AMA_KECCAK_WIPE_LOCALS                                                       \
+    do {                                                                             \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a00); AMA_KECCAK_WIPE_LOCALS_ONE(a01);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a02); AMA_KECCAK_WIPE_LOCALS_ONE(a03);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a04); AMA_KECCAK_WIPE_LOCALS_ONE(a05);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a06); AMA_KECCAK_WIPE_LOCALS_ONE(a07);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a08); AMA_KECCAK_WIPE_LOCALS_ONE(a09);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a10); AMA_KECCAK_WIPE_LOCALS_ONE(a11);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a12); AMA_KECCAK_WIPE_LOCALS_ONE(a13);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a14); AMA_KECCAK_WIPE_LOCALS_ONE(a15);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a16); AMA_KECCAK_WIPE_LOCALS_ONE(a17);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a18); AMA_KECCAK_WIPE_LOCALS_ONE(a19);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a20); AMA_KECCAK_WIPE_LOCALS_ONE(a21);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a22); AMA_KECCAK_WIPE_LOCALS_ONE(a23);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(a24);                                             \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e00); AMA_KECCAK_WIPE_LOCALS_ONE(e01);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e02); AMA_KECCAK_WIPE_LOCALS_ONE(e03);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e04); AMA_KECCAK_WIPE_LOCALS_ONE(e05);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e06); AMA_KECCAK_WIPE_LOCALS_ONE(e07);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e08); AMA_KECCAK_WIPE_LOCALS_ONE(e09);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e10); AMA_KECCAK_WIPE_LOCALS_ONE(e11);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e12); AMA_KECCAK_WIPE_LOCALS_ONE(e13);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e14); AMA_KECCAK_WIPE_LOCALS_ONE(e15);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e16); AMA_KECCAK_WIPE_LOCALS_ONE(e17);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e18); AMA_KECCAK_WIPE_LOCALS_ONE(e19);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e20); AMA_KECCAK_WIPE_LOCALS_ONE(e21);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e22); AMA_KECCAK_WIPE_LOCALS_ONE(e23);            \
+        AMA_KECCAK_WIPE_LOCALS_ONE(e24);                                             \
+        AMA_KECCAK_WIPE_LOCALS_ONE(c0); AMA_KECCAK_WIPE_LOCALS_ONE(c1);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(c2); AMA_KECCAK_WIPE_LOCALS_ONE(c3);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(c4);                                              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(d0); AMA_KECCAK_WIPE_LOCALS_ONE(d1);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(d2); AMA_KECCAK_WIPE_LOCALS_ONE(d3);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(d4);                                              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(b0); AMA_KECCAK_WIPE_LOCALS_ONE(b1);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(b2); AMA_KECCAK_WIPE_LOCALS_ONE(b3);              \
+        AMA_KECCAK_WIPE_LOCALS_ONE(b4);                                              \
+    } while (0)
+#else
+#define AMA_KECCAK_WIPE_LOCALS ((void)0)
+#endif
+
 #define AMA_KECCAK_LOAD_A(st) \
     a00 = (st)[0]; a01 = (st)[1]; a02 = (st)[2]; a03 = (st)[3]; a04 = (st)[4]; \
     a05 = (st)[5]; a06 = (st)[6]; a07 = (st)[7]; a08 = (st)[8]; a09 = (st)[9]; \

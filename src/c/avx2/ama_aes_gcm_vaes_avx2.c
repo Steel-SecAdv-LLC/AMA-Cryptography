@@ -388,17 +388,18 @@ static inline void ghash_mul_4lanes_ymm(
  * gcm_inc_counter_xmm advances by 1; the ctr_block_4 helper produces
  * 4 consecutive counter blocks packed two-per-YMM, ready for VAES.
  * ============================================================================ */
+/* In integer SIMD only: PSHUFB byte-swaps the big-endian counter dword
+ * (bytes 12..15) into a little-endian lane, PADDD adds 1 to that lane modulo
+ * 2^32 (GCM's inc32), and the same PSHUFB swaps it back; bytes 0..11 pass
+ * through unchanged.  The byte-assembly form this replaces was left to the
+ * compiler, and CI's gcc 15.2 vectorised it into VSHUFPS (FP domain, not on
+ * Intel's DOIT list: 36 sites in the static listing of this object). */
 static inline __m128i gcm_inc_counter_xmm(__m128i cb) {
-    uint8_t buf[16];
-    _mm_storeu_si128((__m128i *)buf, cb);
-    uint32_t ctr = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16) |
-                   ((uint32_t)buf[14] << 8)  | ((uint32_t)buf[15]);
-    ctr++;
-    buf[12] = (uint8_t)(ctr >> 24);
-    buf[13] = (uint8_t)(ctr >> 16);
-    buf[14] = (uint8_t)(ctr >> 8);
-    buf[15] = (uint8_t)(ctr);
-    return _mm_loadu_si128((const __m128i *)buf);
+    const __m128i swap_ctr = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7,
+                                           8, 9, 10, 11, 15, 14, 13, 12);
+    __m128i le = _mm_shuffle_epi8(cb, swap_ctr);
+    le = _mm_add_epi32(le, _mm_setr_epi32(0, 0, 0, 1));
+    return _mm_shuffle_epi8(le, swap_ctr);
 }
 
 /* Encrypt 4 counter blocks (cb0..cb3) packed in 2 YMMs through 14 VAES

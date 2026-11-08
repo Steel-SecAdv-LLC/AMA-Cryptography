@@ -113,7 +113,11 @@ MIN_CONSUMING_SITES = 8
 _REQUIRED_KERNELS: dict[str, dict[str, tuple[str, ...]]] = {
     "aead-bulk": {
         "x86_64": ("ama_chacha20_block_x8_avx2",),
-        "aarch64": ("ama_chacha20_block_x8_neon",),
+        # The NEON x8 entry point is two calls to the x4 kernel and consumes
+        # nothing itself, so the secret is consumed under the x4 symbol
+        # (measured: CI's first AArch64 run with the check, 4831936, found no
+        # site in ama_chacha20_block_x8_neon).
+        "aarch64": ("ama_chacha20_block_x4_neon",),
     },
 }
 

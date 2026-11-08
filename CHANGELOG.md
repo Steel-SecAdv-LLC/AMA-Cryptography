@@ -162,6 +162,39 @@ CI on `fbefa4c` found three lanes the local run did not cover, each cured:
   Replaying the runner's numbers through the gate with the new file passes
   all 18 operations.
 
+CI on `4831936` confirmed the AArch64 rule: every `mrs dczid_el0` site is
+gone. It found four more defects, each cured:
+* **Unoptimised builds left the SHA-3 state in the permutation's frame.** The
+  strict-warnings lane builds with `CMAKE_BUILD_TYPE=None`, and there
+  `test_register_residue` found one whole copy of the HKDF output in its dead
+  stack. Bisected locally: `ama_sha3_256`, `ama_sha3_final` and HMAC-SHA3-256
+  each leave one copy on their own. The cause is the Keccak permutation's 75
+  lane variables, every one a stack slot without optimisation, with
+  `a00..a03` holding the digest. The generic and BMI permutations now
+  volatile-store zero into those slots before returning when `__OPTIMIZE__`
+  is undefined (`AMA_KECCAK_WIPE_LOCALS`). An optimised build keeps the lanes
+  in registers and the row is clean on every Release lane, so there the wipe
+  compiles to nothing. In the unoptimised build all four probes read 0 copies
+  with the wipe and 1 without it (**PIN**).
+* **The AArch64 `aead-bulk` kernel requirement named the wrong symbol.**
+  `ama_chacha20_block_x8_neon` is two calls to the x4 kernel and consumes
+  nothing itself, so the check reported the kernel unreached. It now requires
+  `ama_chacha20_block_x4_neon`, which only the x8 path reaches.
+* **The x86-64 memcheck lane escalated the arm64-only probe's architecture
+  skip.** A `requires_memcheck` test that also declares a `requires_host_isa`
+  this host lacks is now exempt on that lane. The host is re-asked, so on a
+  host with the ISA the skip still fails. Two conftest tests pin both halves.
+* **Windows:** the analyzer-confinement test compared host-separator paths;
+  it now compares POSIX paths.
+* **The static AVX-512/VAES listing under CI's gcc 15.2** found 36 VSHUFPS
+  in `ama_aes_gcm_vaes_avx2.c.o`, the GCM counter's scalar byte assembly
+  vectorised by the compiler. The listing checks every instruction in that
+  object, because Valgrind cannot run VAES, so it holds the public counter to
+  the list too. `gcm_inc_counter_xmm` is now PSHUFB, PADDD and PSHUFB. It is
+  bit-identical to the old form over the 2^32 wrap, the other edge values and
+  one million random blocks. gcc 13/14 and clang listings pass and the VAES
+  KAT/equivalence tests pass on a VAES host; gcc 15 is validated in CI only.
+
 ### Secret operands: every consuming instruction vendor-listed, every primitive measured — 2026-11-08
 
 The class (c) gate added on 2026-11-07 blocked only on division,

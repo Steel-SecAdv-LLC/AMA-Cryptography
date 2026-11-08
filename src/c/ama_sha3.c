@@ -193,6 +193,7 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
     }
 
     AMA_KECCAK_STORE_A(state);
+    AMA_KECCAK_WIPE_LOCALS;
 }
 
 /**

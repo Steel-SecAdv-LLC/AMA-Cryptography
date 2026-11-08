@@ -81,6 +81,7 @@ void ama_keccak_f1600_bmi(uint64_t state[25]) {
     }
 
     AMA_KECCAK_STORE_A(state);
+    AMA_KECCAK_WIPE_LOCALS;
 }
 
 #else

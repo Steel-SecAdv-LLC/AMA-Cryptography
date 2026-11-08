@@ -274,6 +274,13 @@ def _lane_promise_decides(item: Any, rep: Any) -> bool:
     one decision, not three.
     """
     if _CI_MEMCHECK and item.get_closest_marker("requires_memcheck") is not None:
+        if host_isa_exempts(item):
+            # The memcheck lane is x86-64; a memcheck test of an instruction
+            # set this host does not have (the AArch64 guarded-write probe in
+            # tests/test_ct_operand_gate.py) cannot run here whatever was
+            # installed.  The host is re-asked, so on a runner that HAS the
+            # ISA the skip is escalated below exactly as before.
+            return True
         reported = _reported_skip_reason(rep)
         rep.outcome = "failed"
         rep.longrepr = (
