@@ -309,7 +309,12 @@ Enforcement: `tests/test_secret_wipeability.py` (return types across the
 secret-output surface, the last-owner rule both ways, in-place and
 zero-on-failure draws) and `tools/measure_secret_residue.py` with
 `tests/test_secret_residue.py`, which scans process memory for any live copy
-of a secret after its holder has wiped it.
+of a secret after its holder has wiped it.  Below the Python layer,
+`tests/c/test_register_residue.c` holds the native half that scan can only
+see by chance: no public C entry point returns with a word of its secret in a
+call-clobbered vector register, where the next lazy-binding trampoline or
+signal frame would save it onto unscrubbed stack (`AMA_API` carries
+`zero_call_used_regs("all")` while the library is compiled).
 
 ## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 

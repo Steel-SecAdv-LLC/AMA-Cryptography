@@ -54,6 +54,7 @@
  *   from every shipped library by construction.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "ama_sha256.h"
 #include "ama_platform_rand.h"

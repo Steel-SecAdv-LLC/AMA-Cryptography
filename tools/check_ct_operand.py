@@ -105,6 +105,18 @@ ALLOWLISTS = TOOLS / "ct_operand" / "allowlists.json"
 #: reads 0, which is what the floor exists to refuse.
 MIN_CONSUMING_SITES = 8
 
+#: Kernels a target exists to measure, per ISA, which must consume the secret
+#: when the dispatcher is not pinned: a target that names a kernel but never
+#: reaches it measures nothing about it.  aead-bulk ran 256-byte messages,
+#: below the 512 bytes at which chacha20_xor enters the x8 kernel, so the AVX2
+#: and NEON ChaCha20 kernels it names never ran (Copilot review, 2026-11-08).
+_REQUIRED_KERNELS: dict[str, dict[str, tuple[str, ...]]] = {
+    "aead-bulk": {
+        "x86_64": ("ama_chacha20_block_x8_avx2",),
+        "aarch64": ("ama_chacha20_block_x8_neon",),
+    },
+}
+
 #: x86 instruction prefixes objdump prints as separate words.
 _X86_PREFIXES = {
     "rep",
@@ -761,7 +773,13 @@ def build_tool(isa: str, cache: Path) -> Path:
     return stage
 
 
-def run_tool(stage: Path, driver: Path, env: dict[str, str], workdir: Path) -> Optional[str]:
+def run_tool(
+    stage: Path,
+    driver: Path,
+    env: dict[str, str],
+    workdir: Path,
+    extra: Sequence[str] = (),
+) -> Optional[str]:
     out = workdir / "ctoperand.report"
     log = workdir / "ctoperand.log"
     run_env = dict(env)
@@ -782,6 +800,7 @@ def run_tool(stage: Path, driver: Path, env: dict[str, str], workdir: Path) -> O
             "--num-callers=12",
             f"--log-file={log}",
             f"--ct-out={out}",
+            *extra,
             str(driver),
         ],
         capture_output=True,
@@ -797,6 +816,41 @@ def run_tool(stage: Path, driver: Path, env: dict[str, str], workdir: Path) -> O
         )
         return None
     return out.read_text(encoding="utf-8", errors="replace")
+
+
+#: How many lines of IR a failing site's explanation may print.
+_IR_LINES = 400
+
+
+def explain_sites(
+    stage: Path, driver: Path, env: dict[str, str], workdir: Path, ips: Sequence[int]
+) -> list[str]:
+    """The VEX IR of the superblocks holding ``ips``, before and after instrumentation.
+
+    A failing site names an instruction; this shows which statement under its
+    IMark consumed the secret, which is what a reviewer needs when the
+    instruction itself takes no data operand.  Best effort: a second run that
+    fails yields nothing, and the verdict does not depend on it.
+    """
+    wanted = ",".join(f"0x{ip:x}" for ip in list(dict.fromkeys(ips))[:16])
+    if not wanted or run_tool(stage, driver, env, workdir, [f"--ct-dump-ir-at={wanted}"]) is None:
+        return []
+    log = workdir / "ctoperand.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    lines: list[str] = []
+    keep = False
+    for raw in text.splitlines():
+        line = re.sub(r"^==\d+== ?", "", raw)
+        if line.startswith("ctoperand-ir-begin"):
+            keep = True
+        if keep:
+            lines.append(line)
+        if line.startswith("ctoperand-ir-end"):
+            keep = False
+        if len(lines) >= _IR_LINES:
+            lines.append("... (truncated)")
+            break
+    return lines
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -956,6 +1010,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     file=sys.stderr,
                 )
                 return 2
+        explanation: list[str] = []
+        failing = [v for v in verdict.unlisted if not is_branch_only(v[0].classes)]
+        if failing and not args.inventory:
+            explanation = explain_sites(
+                stage, driver, ghash._driver_env(), workdir, [v[0].ip for v in failing]
+            )
 
     head = report.header
     print(f"[{args.target}] secret-operand analysis ({isa}, vendor list: {ALLOWLISTS.name}):")
@@ -994,6 +1054,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
+    required = () if args.dispatch_only else _REQUIRED_KERNELS.get(args.target, {}).get(isa, ())
+    reached = {site.symbol.split("+", 1)[0] for site in report.sites}
+    unreached = [kernel for kernel in required if kernel not in reached]
+    if unreached:
+        print(
+            f"\n{args.target.upper()} CT-OPERAND CHECK INCONCLUSIVE — the kernel(s) this "
+            f"target exists to measure consumed no secret: {', '.join(unreached)}. Either "
+            "the workload no longer reaches them or the dispatcher did not wire them.",
+            file=sys.stderr,
+        )
+        return 2
     if args.assume_adx and "MULX" not in verdict.by_mnemonic:
         # The library confirmed the assumption, but that is a statement about
         # CPUID, not about which kernel ran: no MULX consumed the secret, so
@@ -1024,6 +1095,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         for site, name, text in sorted(latency, key=lambda v: (v[1], v[0].obj, v[0].svma)):
             print(f"  - {name}: `{text}`  [{_where(site)}]")
+        if explanation:
+            print("\n  VEX IR of the superblock(s) holding them (`--ct-dump-ir-at`):")
+            for line in explanation:
+                print(f"    {line}")
     if verdict.class_violations:
         print(
             f"\n  {len(verdict.class_violations)} instruction(s) feed a secret-derived operand "

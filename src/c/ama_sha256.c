@@ -12,6 +12,7 @@
  * Reference: NIST FIPS 180-4, Secure Hash Standard (SHS), August 2015.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_sha256.h"
 #include <string.h>
 

@@ -24,6 +24,7 @@
  * not secrets.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>

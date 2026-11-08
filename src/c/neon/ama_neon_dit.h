@@ -22,6 +22,10 @@
 #define AMA_NEON_DIT_H
 
 #include <stdint.h>
+
+/* AArch64 only, as ama_neon_internal.h: on any other target (a static
+ * analyser reading this header on x86-64, say) it declares nothing. */
+#if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 
 /* Lane 0 of a 2 x 64-bit vector, by UMOV. */
@@ -78,5 +82,7 @@ static inline uint64x2_t ama_neon_u64x2(uint64_t lo, uint64_t hi) {
     return vcombine_u64(vcreate_u64(lo), vcreate_u64(hi));
 #endif
 }
+
+#endif /* __aarch64__ || _M_ARM64 */
 
 #endif /* AMA_NEON_DIT_H */

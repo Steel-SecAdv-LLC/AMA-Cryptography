@@ -353,6 +353,12 @@ endif()
 # `ama_ed25519_sign` or `ama_ed25519_point_from_scalar` (the secret-scalar
 # primitive FROST calls with its nonces and shares).  Links in both PQC lanes.
 add_ama_residue_probe(test_ed25519_stack_residue test_ed25519_stack_residue.c)
+# Register residue (INVARIANT-6): no output word of ama_hkdf, ama_hmac_sha3_256,
+# ama_sha3_256 or ama_sha3_final is left in %xmm0-15 / %ymm0-15 when the call
+# returns -- the next lazy-binding trampoline or signal frame would save it to
+# an unscrubbed stack.  Fails on a SHA-3 store64_le without its value barrier
+# (gcc 13: two MOVDQU copies of the digest through %xmm8/%xmm9).  x86-64 only.
+add_ama_residue_probe(test_register_residue test_register_residue.c)
 
 # The two in-house Ed25519 instantiations (fe51 and fe64-mulx) must be
 # byte-identical.  Drives both through the public API under

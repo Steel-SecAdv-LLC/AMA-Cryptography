@@ -29,6 +29,7 @@
  * ama_hmac_sha512_3 kernel).
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t, AMA_SUCCESS */
 #include "internal/ama_sha2.h"            /* shared SHA-512/384 streaming core */
 #include <string.h>

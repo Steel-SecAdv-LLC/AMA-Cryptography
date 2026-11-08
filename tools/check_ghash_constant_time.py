@@ -2548,14 +2548,18 @@ int main(void) {
     "aead-bulk": _TAINT_PRELUDE
     + r"""
 /* Secret: the key and the plaintext, through AES-256-GCM and
- * ChaCha20-Poly1305 encrypt and decrypt over 256 bytes, on the tier the
+ * ChaCha20-Poly1305 encrypt and decrypt over 768 bytes, on the tier the
  * dispatcher selects (AES-NI + PCLMULQDQ GCM and the AVX2 ChaCha20 x8 kernel
- * on an x86-64 host under Valgrind; CI also pins aes-gcm-aesni).  The
+ * on an x86-64 host under Valgrind; CI also pins aes-gcm-aesni).  768 bytes
+ * because chacha20_xor enters the x8 kernel only for 512 bytes or more
+ * (src/c/ama_chacha20poly1305.c): at 256 it never ran, so the kernel this
+ * target names was not measured; 768 runs it once and the scalar tail four
+ * times, and check_ct_operand.py requires the x8 kernel to consume taint.  The
  * ciphertext and tag are public outputs; the recovered plaintext stays
  * tainted. */
 int main(void) {
     uint8_t key[32], nonce[12], aad[32], tag[16];
-    static uint8_t pt[256], ct[256], back[256];
+    static uint8_t pt[768], ct[768], back[768];
     for (unsigned i = 0; i < (unsigned)sizeof key; i++)
         key[i] = (uint8_t)(0x5Eu * 31u + i * 167u + i * i * 13u);
     for (unsigned i = 0; i < (unsigned)sizeof pt; i++) pt[i] = (uint8_t)(i * 7u + 1u);
@@ -2660,7 +2664,11 @@ int main(void) {
     "hkdf": _TAINT_PRELUDE
     + r"""
 /* Secret: the input keying material, through ama_hkdf (SHA3-256) and HKDF
- * over HMAC-SHA-256/-384/-512, including a longer-than-a-block IKM. */
+ * over HMAC-SHA-256/-384/-512, plus each HMAC called directly with a 300-byte
+ * secret KEY.  In HKDF the IKM is HMAC's message (Extract is keyed by the
+ * salt, Expand by the digest-sized PRK), so a long IKM never reached HMAC's
+ * longer-than-a-block key path (the key hashed first); the direct calls do,
+ * for every block size (64, 128 and 136 bytes). */
 int main(void) {
     uint8_t ikm[64], okm[96], salt[32], info[24];
     static uint8_t big[300];
@@ -2685,6 +2693,16 @@ int main(void) {
     UNTAINT(&rc, sizeof rc);
     if (rc != AMA_SUCCESS) return 1;
     rc = ama_hkdf_sha256(NULL, 0, big, sizeof big, NULL, 0, okm, 32);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    ama_hmac_sha256(big, sizeof big, info, sizeof info, okm);
+    rc = ama_hmac_sha3_256(big, sizeof big, info, sizeof info, okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hmac_sha384(big, sizeof big, info, sizeof info, okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hmac_sha512(big, sizeof big, info, sizeof info, okm);
     UNTAINT(&rc, sizeof rc);
     if (rc != AMA_SUCCESS) return 1;
     static volatile uint8_t sink;
@@ -2947,9 +2965,11 @@ _HKDF_DRIVER = r"""
  * every key schedule in ama_cryptography derive keys through these, and no
  * deterministic instrument measured them on their own before.  Salt, info
  * and lengths are FIXED: they feed the block count for a legitimate reason.
- * A 300-byte IKM is included so HMAC's longer-than-a-block key path (the key
- * is hashed first) runs under the class variable too.  Invariant by
- * construction: cross-class delta 0, noise floor 0. */
+ * A 300-byte IKM covers a multi-block HMAC message; HMAC's
+ * longer-than-a-block KEY path (the key hashed first) is reached by calling
+ * each HMAC directly with that 300-byte buffer as the key, since in HKDF the
+ * IKM is the message and the keys are the salt and the digest-sized PRK.
+ * Invariant by construction: cross-class delta 0, noise floor 0. */
 int main(int argc, char **argv) {
     uint8_t ikm[64], okm[96], salt[32], info[24];
     static uint8_t big[300];
@@ -2978,6 +2998,17 @@ int main(int argc, char **argv) {
         if (ama_hkdf_sha256(NULL, 0, big, sizeof big, NULL, 0, okm, 32) != AMA_SUCCESS)
             return 1;
         sink = (uint8_t)(sink ^ okm[0]);
+        ama_hmac_sha256(big, sizeof big, info, sizeof info, okm);
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha3_256(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha384(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha512(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
     }
     return 0;
 }
@@ -2989,8 +3020,11 @@ _AEAD_BULK_DRIVER = r"""
 #include <string.h>
 #include "ama_cryptography.h"
 
-/* AES-256-GCM and ChaCha20-Poly1305 over a 256-byte message, encrypt and
+/* AES-256-GCM and ChaCha20-Poly1305 over a 768-byte message, encrypt and
  * decrypt, with the KEY as the class variable, on whatever tier the
+ * dispatcher selects.  768: chacha20_xor enters the x8 kernel only at 512
+ * bytes or more, so a 256-byte message never ran it; 768 is one x8 call and
+ * four scalar-tail blocks.  On whatever tier the
  * dispatcher selects.  The ghash and aead-verify targets force the scalar
  * AES (ama_test_force_aes_gcm_scalar) and run no bulk ChaCha, so the AES-NI
  * + PCLMULQDQ GCM kernel and the AVX2 ChaCha20 x8 kernel -- the code nearly
@@ -3001,7 +3035,7 @@ _AEAD_BULK_DRIVER = r"""
  * stream.  Cross-class delta 0. */
 int main(int argc, char **argv) {
     uint8_t key[32], nonce[12], aad[32], tag[16];
-    static uint8_t pt[256], ct[256], back[256];
+    static uint8_t pt[768], ct[768], back[768];
     unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
     for (unsigned i = 0; i < (unsigned)sizeof key; i++)
         key[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);

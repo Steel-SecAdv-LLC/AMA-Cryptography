@@ -13,6 +13,7 @@
  * same semantics (blocking until entropy available), same security level.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_platform_rand.h"
 #include <string.h>
 

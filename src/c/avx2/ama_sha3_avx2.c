@@ -21,6 +21,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>

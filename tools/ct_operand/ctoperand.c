@@ -79,6 +79,16 @@
 
 static const HChar *clo_out = NULL;
 
+/* --ct-dump-ir-at=<avma>[,<avma>...]: print the IR of every superblock that
+ * contains one of these guest instructions, before and after instrumentation.
+ * A diagnostic, never set by CI's blocking runs: it is how a reported site is
+ * explained -- which statement under that instruction's IMark consumed taint --
+ * when the instruction itself (an `mrs` of an ID register, say) takes no data
+ * operand. */
+#define CT_MAX_DUMP 16
+static Addr clo_dump_at[CT_MAX_DUMP];
+static Int clo_n_dump = 0;
+
 static ULong n_tainted_bytes = 0;     /* bytes marked by MAKE_MEM_UNDEFINED  */
 static ULong n_declassified_bytes = 0;
 static ULong n_taint_requests = 0;
@@ -721,6 +731,52 @@ static void consume_other(Env *e, IRExpr *taint)
     note_class(e, CT_CLASS_OTHER, taint);
 }
 
+static Bool block_wanted(const IRSB *in)
+{
+    for (Int i = 0; i < in->stmts_used; i++) {
+        const IRStmt *st = in->stmts[i];
+        if (st == NULL || st->tag != Ist_IMark)
+            continue;
+        Addr a = (Addr)(st->Ist.IMark.addr + st->Ist.IMark.delta);
+        for (Int k = 0; k < clo_n_dump; k++)
+            if (clo_dump_at[k] == a)
+                return True;
+    }
+    return False;
+}
+
+/* Print, for each requested instruction, the statements under its IMark (up
+ * to the next one): the IR that instruction contributes, whose operands are
+ * what the tool charged.  The next IMark is printed too, as context. */
+static void dump_marked(const IRSB *in)
+{
+    for (Int i = 0; i < in->stmts_used; i++) {
+        const IRStmt *st = in->stmts[i];
+        if (st == NULL || st->tag != Ist_IMark)
+            continue;
+        Addr a = (Addr)(st->Ist.IMark.addr + st->Ist.IMark.delta);
+        Bool hit = False;
+        for (Int k = 0; k < clo_n_dump; k++)
+            hit = hit || clo_dump_at[k] == a;
+        if (!hit)
+            continue;
+        VG_(printf)("ctoperand-ir-begin %#lx\n", (unsigned long)a);
+        for (Int j = i; j < in->stmts_used; j++) {
+            const IRStmt *s = in->stmts[j];
+            if (s == NULL)
+                continue;
+            if (j > i && s->tag == Ist_IMark) {
+                ppIRStmt(s);
+                VG_(printf)("\n");
+                break;
+            }
+            ppIRStmt(s);
+            VG_(printf)("\n");
+        }
+        VG_(printf)("ctoperand-ir-end\n");
+    }
+}
+
 static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestLayout *layout,
                            const VexGuestExtents *vge, const VexArchInfo *archinfo,
                            IRType gWordTy, IRType hWordTy)
@@ -901,6 +957,8 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
     VG_(free)(e.sh);
     VG_(free)(e.live);
     VG_(free)(e.branchy);
+    if (clo_n_dump > 0 && block_wanted(in))
+        dump_marked(in);
     return e.out;
 }
 
@@ -1031,13 +1089,34 @@ static void ct_fini(Int exitcode)
 
 static Bool ct_process_cmd_line_option(const HChar *arg)
 {
+    const HChar *dump = NULL;
     if VG_STR_CLO(arg, "--ct-out", clo_out) {
+    } else if VG_STR_CLO(arg, "--ct-dump-ir-at", dump) {
+        const HChar *p = dump;
+        while (*p != '\0' && clo_n_dump < CT_MAX_DUMP) {
+            HChar *end = NULL;
+            ULong v = VG_(strtoull16)(p, &end);
+            if (end == p)
+                return False;
+            clo_dump_at[clo_n_dump++] = (Addr)v;
+            p = end;
+            if (*p == ',')
+                p++;
+            else if (*p != '\0')
+                return False;
+        }
     } else
         return False;
     return True;
 }
 
-static void ct_print_usage(void) { VG_(printf)("    --ct-out=<file>   write the consumption report here\n"); }
+static void ct_print_usage(void)
+{
+    VG_(printf)("    --ct-out=<file>   write the consumption report here\n");
+    VG_(printf)("    --ct-dump-ir-at=<avma>[,<avma>...]  print the IR of the superblocks\n"
+                "                      holding these instructions (diagnostic)\n");
+}
+
 static void ct_print_debug_usage(void) {}
 
 static void ct_post_clo_init(void)

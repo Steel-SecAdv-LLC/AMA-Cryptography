@@ -34,6 +34,7 @@
  * across secret classes, and a Memcheck taint run over a secret input.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_declassify.h"
 #include "internal/ama_ct_barrier.h"

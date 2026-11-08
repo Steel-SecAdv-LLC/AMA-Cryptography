@@ -62,6 +62,7 @@
  * specification, and introduces no third-party cryptographic dependency.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_barrier.h"
 #include <stdint.h>

@@ -10,6 +10,7 @@
  * All operations execute in constant time regardless of input values.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_stack_wipe.h"

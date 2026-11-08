@@ -69,6 +69,7 @@
 #define _DARWIN_C_SOURCE 1
 #endif
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_dispatch.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -1827,7 +1828,7 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
     }
 
     if (!fp_matched) return -2;
-    *v = tmp;
+    memcpy(v, &tmp, sizeof(*v));
     return 0;
 }
 

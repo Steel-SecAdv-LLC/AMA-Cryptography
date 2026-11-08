@@ -37,18 +37,42 @@ extern "C" {
  * linker flag can take it back off.  With nothing marked, the .def is the sole
  * authority and a clone cannot appear in it, because nothing declares one.
  * MSVC is unaffected and keeps dllexport: it emits no such clones. */
+/* AMA_CLEAR_REGS: while the library itself is compiled, every exported
+ * function clears every call-clobbered register on return
+ * (zero_call_used_regs("all"): the general registers but the return value,
+ * %xmm0-15 / v0-v31's caller-saved state, and the x87 stack), whatever its
+ * callees, SIMD kernels and libc left there.  A secret left in one is not in
+ * memory yet, but the next save of the register file puts it there, where
+ * nothing scrubs it: the lazy-binding trampoline (_dl_runtime_resolve_xsavec),
+ * a signal frame, a ucontext switch.  Measured 2026-11-08: PBKDF2-SHA512,
+ * Argon2id and the plaintext of all three AEADs were left in vector registers
+ * by the public call, and the HKDF-SHA3-256 output reached the stack that way
+ * under CPython 3.12 (tests/c/test_register_residue.c pins every row).  GCC
+ * 11+ and clang 15+; a compiler without the attribute (MSVC) gets the
+ * declaration unchanged, and so does every consumer, which defines none of
+ * the three macros below. */
+#if (defined(AMA_BUILDING_SHARED) || defined(AMA_BUILDING_STATIC) || \
+     defined(AMA_TESTING_MODE)) && defined(__has_attribute)
+  #if __has_attribute(zero_call_used_regs)
+    #define AMA_CLEAR_REGS __attribute__((zero_call_used_regs("all")))
+  #endif
+#endif
+#ifndef AMA_CLEAR_REGS
+  #define AMA_CLEAR_REGS
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
   #if defined(AMA_BUILDING_SHARED) && defined(AMA_EXPORTS_FROM_DEF)
-    #define AMA_API  /* exports stated by the generated .def */
+    #define AMA_API AMA_CLEAR_REGS  /* exports stated by the generated .def */
   #elif defined(AMA_BUILDING_SHARED)
-    #define AMA_API __declspec(dllexport)
+    #define AMA_API __declspec(dllexport) AMA_CLEAR_REGS
   #elif defined(AMA_BUILDING_STATIC) || defined(AMA_TESTING_MODE)
-    #define AMA_API  /* static library or test build — no dllimport */
+    #define AMA_API AMA_CLEAR_REGS  /* static library or test build — no dllimport */
   #else
     #define AMA_API __declspec(dllimport)
   #endif
 #else
-  #define AMA_API
+  #define AMA_API AMA_CLEAR_REGS
 #endif
 
 /* ============================================================================

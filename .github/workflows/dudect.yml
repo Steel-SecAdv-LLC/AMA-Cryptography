@@ -1047,14 +1047,16 @@ jobs:
       - name: HKDF must not depend on the input keying material
         # ama_hkdf (SHA3-256) and HKDF over HMAC-SHA-256/-384/-512, through
         # which the hybrid combiner, the agent binding and every key schedule
-        # derive keys; one IKM is longer than a block, so HMAC's key-hash path
-        # runs under the class variable too.
+        # derive keys, and each HMAC called directly with a 300-byte key, so
+        # HMAC's key-hash path runs under the class variable too (in HKDF the
+        # IKM is HMAC's message, never its key).
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target hkdf
 
       - name: Hardware AEAD tiers must not depend on the key
-        # AES-256-GCM and ChaCha20-Poly1305 over 256 bytes on the tier the
+        # AES-256-GCM and ChaCha20-Poly1305 over 768 bytes (the ChaCha20 x8
+        # kernel runs only from 512 bytes) on the tier the
         # dispatcher selects -- AES-NI + PCLMULQDQ GCM and the AVX2 ChaCha20 x8
         # kernel here -- then pinned to aes-gcm-aesni, which the dispatcher
         # must confirm.  ghash and aead-verify force the scalar AES.

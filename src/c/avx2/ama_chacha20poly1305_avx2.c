@@ -19,6 +19,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -145,6 +146,18 @@ static inline void transpose8x32_avx2(
  * counter: starting block counter
  * out[512]: output keystream buffer
  * ============================================================================ */
+/* A secret key word broadcast to all eight lanes from a general register.
+ * The volatile empty asm is the point: clang 18 otherwise broadcast the word
+ * straight from memory with VBROADCASTSS (FP domain), kept that one broadcast
+ * live across all twenty rounds by merging it with the add-back below, and
+ * spilled it with VMOVUPS.  Each call here is a fresh MOVD + VPBROADCASTD. */
+static inline __m256i chacha_bcast_key_word(uint32_t w) {
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile("" : "+r"(w));
+#endif
+    return _mm256_set1_epi32((int)w);
+}
+
 void ama_chacha20_block_x8_avx2(const uint8_t key[32],
                                  const uint8_t nonce[12],
                                  uint32_t counter,
@@ -170,14 +183,14 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
     __m256i s2 = _mm256_set1_epi32((int)CHACHA_C2);
     __m256i s3 = _mm256_set1_epi32((int)CHACHA_C3);
 
-    __m256i s4  = _mm256_set1_epi32((int)k[0]);
-    __m256i s5  = _mm256_set1_epi32((int)k[1]);
-    __m256i s6  = _mm256_set1_epi32((int)k[2]);
-    __m256i s7  = _mm256_set1_epi32((int)k[3]);
-    __m256i s8  = _mm256_set1_epi32((int)k[4]);
-    __m256i s9  = _mm256_set1_epi32((int)k[5]);
-    __m256i s10 = _mm256_set1_epi32((int)k[6]);
-    __m256i s11 = _mm256_set1_epi32((int)k[7]);
+    __m256i s4  = chacha_bcast_key_word(k[0]);
+    __m256i s5  = chacha_bcast_key_word(k[1]);
+    __m256i s6  = chacha_bcast_key_word(k[2]);
+    __m256i s7  = chacha_bcast_key_word(k[3]);
+    __m256i s8  = chacha_bcast_key_word(k[4]);
+    __m256i s9  = chacha_bcast_key_word(k[5]);
+    __m256i s10 = chacha_bcast_key_word(k[6]);
+    __m256i s11 = chacha_bcast_key_word(k[7]);
 
     /* Counter: each of 8 instances gets counter+0..counter+7 */
     __m256i s12 = _mm256_set_epi32(
@@ -189,11 +202,13 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
     __m256i s14 = _mm256_set1_epi32((int)n[1]);
     __m256i s15 = _mm256_set1_epi32((int)n[2]);
 
-    /* Save initial state */
-    __m256i i0=s0, i1=s1, i2=s2, i3=s3;
-    __m256i i4=s4, i5=s5, i6=s6, i7=s7;
-    __m256i i8=s8, i9=s9, i10=s10, i11=s11;
-    __m256i i12=s12, i13=s13, i14=s14, i15=s15;
+    /* The initial state is NOT kept in sixteen more registers across the
+     * rounds: with the sixteen working rows that is twice the YMM file, and
+     * clang 18 spilled the copies and reloaded them as load-to-store chains,
+     * which its execution-domain pass moves with VMOVUPS -- not on Intel's
+     * DOIT list -- on key-derived words (tools/check_ct_operand.py --cc clang
+     * --target aead-bulk).  Each row is re-broadcast from its word when it is
+     * added back below. */
 
     /* 20 rounds (10 double-rounds) */
     for (int round = 0; round < 10; round++) {
@@ -209,15 +224,27 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
         chacha_qr_avx2(&s3, &s4, &s9,  &s14);
     }
 
-    /* Add initial state */
-    s0  = _mm256_add_epi32(s0, i0);   s1  = _mm256_add_epi32(s1, i1);
-    s2  = _mm256_add_epi32(s2, i2);   s3  = _mm256_add_epi32(s3, i3);
-    s4  = _mm256_add_epi32(s4, i4);   s5  = _mm256_add_epi32(s5, i5);
-    s6  = _mm256_add_epi32(s6, i6);   s7  = _mm256_add_epi32(s7, i7);
-    s8  = _mm256_add_epi32(s8, i8);   s9  = _mm256_add_epi32(s9, i9);
-    s10 = _mm256_add_epi32(s10, i10); s11 = _mm256_add_epi32(s11, i11);
-    s12 = _mm256_add_epi32(s12, i12); s13 = _mm256_add_epi32(s13, i13);
-    s14 = _mm256_add_epi32(s14, i14); s15 = _mm256_add_epi32(s15, i15);
+    /* Add the initial state, re-broadcast from its words. */
+    s0  = _mm256_add_epi32(s0,  _mm256_set1_epi32((int)CHACHA_C0));
+    s1  = _mm256_add_epi32(s1,  _mm256_set1_epi32((int)CHACHA_C1));
+    s2  = _mm256_add_epi32(s2,  _mm256_set1_epi32((int)CHACHA_C2));
+    s3  = _mm256_add_epi32(s3,  _mm256_set1_epi32((int)CHACHA_C3));
+    s4  = _mm256_add_epi32(s4,  chacha_bcast_key_word(k[0]));
+    s5  = _mm256_add_epi32(s5,  chacha_bcast_key_word(k[1]));
+    s6  = _mm256_add_epi32(s6,  chacha_bcast_key_word(k[2]));
+    s7  = _mm256_add_epi32(s7,  chacha_bcast_key_word(k[3]));
+    s8  = _mm256_add_epi32(s8,  chacha_bcast_key_word(k[4]));
+    s9  = _mm256_add_epi32(s9,  chacha_bcast_key_word(k[5]));
+    s10 = _mm256_add_epi32(s10, chacha_bcast_key_word(k[6]));
+    s11 = _mm256_add_epi32(s11, chacha_bcast_key_word(k[7]));
+    s12 = _mm256_add_epi32(s12, _mm256_set_epi32(
+        (int)(counter + 7), (int)(counter + 6),
+        (int)(counter + 5), (int)(counter + 4),
+        (int)(counter + 3), (int)(counter + 2),
+        (int)(counter + 1), (int)(counter + 0)));
+    s13 = _mm256_add_epi32(s13, _mm256_set1_epi32((int)n[0]));
+    s14 = _mm256_add_epi32(s14, _mm256_set1_epi32((int)n[1]));
+    s15 = _mm256_add_epi32(s15, _mm256_set1_epi32((int)n[2]));
 
     /* De-interleave and store.
      *
@@ -234,30 +261,32 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
      *
      * Stores are unaligned: `out` is the caller's 512-byte keystream
      * buffer with no alignment contract. */
-    __m256i lo0, lo1, lo2, lo3, lo4, lo5, lo6, lo7;
-    __m256i hi0, hi1, hi2, hi3, hi4, hi5, hi6, hi7;
+    /* Each half is stored as soon as it is transposed: holding all sixteen
+     * results live spilled them, and the spill-reload-store chain was
+     * another VMOVUPS (clang 18). */
+    __m256i t0, t1, t2, t3, t4, t5, t6, t7;
 
     transpose8x32_avx2(s0, s1, s2, s3, s4, s5, s6, s7,
-                       &lo0, &lo1, &lo2, &lo3, &lo4, &lo5, &lo6, &lo7);
-    transpose8x32_avx2(s8, s9, s10, s11, s12, s13, s14, s15,
-                       &hi0, &hi1, &hi2, &hi3, &hi4, &hi5, &hi6, &hi7);
+                       &t0, &t1, &t2, &t3, &t4, &t5, &t6, &t7);
+    _mm256_storeu_si256((__m256i *)(out +   0), t0);
+    _mm256_storeu_si256((__m256i *)(out +  64), t1);
+    _mm256_storeu_si256((__m256i *)(out + 128), t2);
+    _mm256_storeu_si256((__m256i *)(out + 192), t3);
+    _mm256_storeu_si256((__m256i *)(out + 256), t4);
+    _mm256_storeu_si256((__m256i *)(out + 320), t5);
+    _mm256_storeu_si256((__m256i *)(out + 384), t6);
+    _mm256_storeu_si256((__m256i *)(out + 448), t7);
 
-    _mm256_storeu_si256((__m256i *)(out +   0), lo0);
-    _mm256_storeu_si256((__m256i *)(out +  32), hi0);
-    _mm256_storeu_si256((__m256i *)(out +  64), lo1);
-    _mm256_storeu_si256((__m256i *)(out +  96), hi1);
-    _mm256_storeu_si256((__m256i *)(out + 128), lo2);
-    _mm256_storeu_si256((__m256i *)(out + 160), hi2);
-    _mm256_storeu_si256((__m256i *)(out + 192), lo3);
-    _mm256_storeu_si256((__m256i *)(out + 224), hi3);
-    _mm256_storeu_si256((__m256i *)(out + 256), lo4);
-    _mm256_storeu_si256((__m256i *)(out + 288), hi4);
-    _mm256_storeu_si256((__m256i *)(out + 320), lo5);
-    _mm256_storeu_si256((__m256i *)(out + 352), hi5);
-    _mm256_storeu_si256((__m256i *)(out + 384), lo6);
-    _mm256_storeu_si256((__m256i *)(out + 416), hi6);
-    _mm256_storeu_si256((__m256i *)(out + 448), lo7);
-    _mm256_storeu_si256((__m256i *)(out + 480), hi7);
+    transpose8x32_avx2(s8, s9, s10, s11, s12, s13, s14, s15,
+                       &t0, &t1, &t2, &t3, &t4, &t5, &t6, &t7);
+    _mm256_storeu_si256((__m256i *)(out +  32), t0);
+    _mm256_storeu_si256((__m256i *)(out +  96), t1);
+    _mm256_storeu_si256((__m256i *)(out + 160), t2);
+    _mm256_storeu_si256((__m256i *)(out + 224), t3);
+    _mm256_storeu_si256((__m256i *)(out + 288), t4);
+    _mm256_storeu_si256((__m256i *)(out + 352), t5);
+    _mm256_storeu_si256((__m256i *)(out + 416), t6);
+    _mm256_storeu_si256((__m256i *)(out + 480), t7);
 }
 
 /* ============================================================================

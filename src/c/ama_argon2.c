@@ -19,11 +19,13 @@
  * - Single-threaded execution (parallelism parameter affects layout only)
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "internal/ama_ct_declassify.h"
 
 /* ============================================================================
  * CONSTANTS
@@ -907,6 +909,19 @@ static ama_error_t ama_argon2id_core(
                     uint32_t ref_index = argon2_index_alpha(
                         pass, slice, idx,
                         lane, lanes, segment_length, pseudo_rand);
+                    /* The reference block's ADDRESS is password-dependent by
+                     * RFC 9106 sec. 3.4's design from the second half of pass
+                     * 0 on; no implementation can remove that channel, and it
+                     * is why `argon2id` is an operand-only target of the
+                     * secret-operand gate.  Declassified here, where the index
+                     * becomes an address, under AMA_TESTING_MODE only (a no-op
+                     * in every shipped object): how the index is computed
+                     * stays measured (that is where the secret DIV was), and
+                     * the blocks' contents stay tainted.  Without it gcc 15.2
+                     * iterated argon2_g on a pointer derived from this index,
+                     * so the loop's exit branch inherited the address's taint
+                     * and Memcheck reported it. */
+                    AMA_CT_DECLASSIFY(&ref_index, sizeof(ref_index));
 
                     /* Apply compression function */
                     if (pass == 0) {

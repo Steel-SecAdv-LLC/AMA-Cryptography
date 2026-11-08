@@ -65,6 +65,7 @@
  * require for secp256k1.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "ama_hmac_sha256.h"
@@ -709,7 +710,7 @@ static void nistp_jac_double(nistp_jac *r, const nistp_jac *p, const nistp_curve
     nistp_mod_add(t1, t1, t1, m, nl);                /* 8*gamma^2 */
     nistp_mod_sub(out.Y, out.Y, t1, m, nl);
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 
 }
 
@@ -811,7 +812,7 @@ static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,
         out.Z[k] = (p->Z[k] & mask_q) | (out.Z[k] & ~mask_q);
     }
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 
 }
 
@@ -874,7 +875,7 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
     unsigned w, i, limb;
 
     nistp_jac_set_infinity(&table[0]);
-    table[1] = *base;
+    memcpy(&table[1], base, sizeof(table[1]));
     for (i = 2; i < NISTP_TABLE_SIZE; i++)
         nistp_jac_add(&table[i], &table[i - 1], base, c);
 
@@ -905,7 +906,7 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
         nistp_jac_add(&acc, &acc, &sel, c);
     }
 
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
 
     ama_secure_memzero(table, sizeof(table));
     ama_secure_memzero(&acc, sizeof(acc));
@@ -1023,7 +1024,7 @@ static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
 
     nistp_generator(&base[0], c);
     for (j = 1; j < NISTP_COMB_BLOCKS; j++) {
-        base[j] = base[j - 1];
+        memcpy(&base[j], &base[j - 1], sizeof(base[j]));
         for (b = 0; b < e; b++)
             nistp_jac_double(&base[j], &base[j], c);
     }
@@ -1099,7 +1100,7 @@ static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
         nistp_jac_add(&acc, &acc, &sel, c);
     }
 
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
     ama_secure_memzero(&acc, sizeof(acc));
     ama_secure_memzero(&sel, sizeof(sel));
 }
@@ -1192,7 +1193,7 @@ static void nistp_jac_add_affine_vartime(nistp_jac *r, const nistp_jac *p,
     nistp_mod_sub(out.Z, out.Z, z1z1, m, nl);
     nistp_mod_sub(out.Z, out.Z, hh, m, nl);
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 }
 
 /**
@@ -1254,7 +1255,7 @@ static void nistp_shamir(nistp_jac *out,
                 nistp_jac_add_affine_vartime(&acc, &acc, tx[idx], ty[idx], c);
         }
     }
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
 }
 
 /* ============================================================================

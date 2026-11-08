@@ -27,6 +27,7 @@
  * exports were introduced), so the public names are free for this TU.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t */
 #include "internal/ama_sha2.h"            /* shared SHA-512/384 streaming core */
 

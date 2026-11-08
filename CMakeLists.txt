@@ -193,6 +193,18 @@ else()
         # none after, every memcpy/memset call inlined, object 19.7 KB ->
         # 26.6 KB.  Clang does not accept these flags and does not emit
         # REP MOVSQ for these copies (measured, clang 18.1.3).
+        # Clang has no strategy flag, and its loop-idiom pass turns copy and
+        # clear loops into calls to glibc's memcpy/memset, whose EVEX forms
+        # leave the bytes in %ymm16-31 on every AVX-512 CPU, out of reach of
+        # AMA_API's register clearing (measured 2026-11-08, clang 18.1:
+        # tests/c/test_register_residue.c).  -fno-builtin-* stops the pass;
+        # the library's own copies go through src/c/internal/ama_string_ops.h,
+        # whose __builtin_ forms are unaffected, and
+        # tests/test_no_libc_string_calls.py requires the built library to
+        # import none of these routines.
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove")
+        endif()
         if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
             include(CheckCCompilerFlag)
             set(_ama_stringop
@@ -1109,7 +1121,8 @@ if(AMA_BUILD_SHARED)
 
     # Export only the ama_* ABI from the shared library (audit B2).
     #
-    # Off-Windows AMA_API expands to nothing, so the linked .so exported all of
+    # Off-Windows AMA_API carries no visibility attribute (while the library
+    # builds it carries only zero_call_used_regs), so the linked .so exported all of
     # its ~246 defined symbols -- at the time including six un-prefixed names
     # from the since-removed vendored Ed25519 tree and one mutable data symbol,
     # any of which a process loading a second copy of that code could have

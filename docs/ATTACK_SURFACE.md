@@ -19,7 +19,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 - Declared / exported entry points: **199**
 - Referenced by C tests: **197**
 - Referenced by Fuzz: **78**
-- Referenced by CT gate: **55**
+- Referenced by CT gate: **57**
 - Referenced by Python layer: **140**
 - Reached by neither a C test nor a fuzz harness: **0**
 
@@ -28,8 +28,8 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | Entry point | C tests | Fuzz | CT gate | Python layer |
 |---|---|---|---|---|
 | `ama_aes256_encrypt_block_consttime` | 2 | — | — | — |
-| `ama_aes256_gcm_decrypt` | 6 | 1 | 2 | 1 |
-| `ama_aes256_gcm_encrypt` | 7 | 1 | 2 | 1 |
+| `ama_aes256_gcm_decrypt` | 7 | 1 | 2 | 1 |
+| `ama_aes256_gcm_encrypt` | 8 | 1 | 2 | 1 |
 | `ama_aes256_key_expansion_consttime` | 2 | — | — | — |
 | `ama_aes_gcm_active_backend` | 2 | — | — | — |
 | `ama_aes_sbox_consttime` | 1 | — | — | — |
@@ -38,17 +38,17 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_agent_binding_context` | 1 | 1 | — | 1 |
 | `ama_agent_binding_encode` | 1 | 1 | — | 1 |
 | `ama_agent_binding_init` | 2 | 1 | 1 | 1 |
-| `ama_argon2id` | 2 | 1 | — | 1 |
+| `ama_argon2id` | 3 | 1 | — | 1 |
 | `ama_argon2id_legacy` | 2 | — | 1 | 1 |
 | `ama_argon2id_legacy_verify` | 2 | — | 1 | 1 |
-| `ama_ascon_aead128_decrypt` | 3 | 1 | 1 | 1 |
-| `ama_ascon_aead128_encrypt` | 4 | 1 | 2 | 1 |
+| `ama_ascon_aead128_decrypt` | 4 | 1 | 1 | 1 |
+| `ama_ascon_aead128_encrypt` | 5 | 1 | 2 | 1 |
 | `ama_ascon_hash256` | 2 | 1 | 2 | 1 |
 | `ama_base64_decode` | 1 | — | 1 | 1 |
 | `ama_base64_encode` | 1 | — | 1 | 1 |
 | `ama_base64_encoded_len` | 1 | — | — | 1 |
-| `ama_chacha20poly1305_decrypt` | 3 | 1 | 1 | 1 |
-| `ama_chacha20poly1305_encrypt` | 3 | 1 | 1 | 1 |
+| `ama_chacha20poly1305_decrypt` | 4 | 1 | 1 | 1 |
+| `ama_chacha20poly1305_encrypt` | 4 | 1 | 1 | 1 |
 | `ama_consttime_copy` | 1 | 1 | 2 | — |
 | `ama_consttime_lookup` | 2 | 1 | 2 | — |
 | `ama_consttime_memcmp` | 5 | 1 | 3 | 3 |
@@ -97,16 +97,16 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_frost_verify_share` | 2 | 1 | — | 1 |
 | `ama_get_dispatch_info` | 2 | — | — | — |
 | `ama_get_dispatch_table` | 17 | — | — | — |
-| `ama_hkdf` | 4 | 1 | 2 | 3 |
+| `ama_hkdf` | 5 | 1 | 2 | 3 |
 | `ama_hkdf_agent_bound` | 1 | 1 | — | 1 |
-| `ama_hkdf_sha256` | 1 | — | 1 | 1 |
+| `ama_hkdf_sha256` | 2 | — | 1 | 1 |
 | `ama_hkdf_sha384` | 1 | — | 1 | 1 |
 | `ama_hkdf_sha512` | 1 | — | 1 | 1 |
 | `ama_hmac_sha256` | 1 | 2 | 1 | 2 |
 | `ama_hmac_sha256_2` | 1 | — | — | 1 |
 | `ama_hmac_sha384` | 2 | — | 1 | 1 |
-| `ama_hmac_sha3_256` | 2 | — | — | 2 |
-| `ama_hmac_sha512` | 3 | — | — | 1 |
+| `ama_hmac_sha3_256` | 3 | — | 1 | 2 |
+| `ama_hmac_sha512` | 3 | — | 1 | 1 |
 | `ama_hss_pubkey_levels` | 1 | 1 | — | 1 |
 | `ama_hss_verify` | 1 | 1 | — | 1 |
 | `ama_impl_level_name` | 1 | — | — | — |
@@ -166,7 +166,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_nistp_sig_der_to_raw` | 2 | 1 | — | 1 |
 | `ama_nistp_sig_raw_to_der` | 2 | 1 | — | 1 |
 | `ama_pbkdf2_hmac_sha256` | 1 | — | — | 1 |
-| `ama_pbkdf2_hmac_sha512` | 1 | — | — | 1 |
+| `ama_pbkdf2_hmac_sha512` | 2 | — | — | 1 |
 | `ama_print_dispatch_info` | 1 | — | — | — |
 | `ama_random_bytes` | 1 | — | — | 3 |
 | `ama_secp256k1_ecdsa_sign` | 2 | 1 | — | 1 |
@@ -186,15 +186,15 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_secure_stack_wipe` | 2 | — | — | — |
 | `ama_sha256` | 2 | 5 | — | 1 |
 | `ama_sha384` | 1 | — | — | 1 |
-| `ama_sha3_256` | 7 | 4 | 2 | 4 |
+| `ama_sha3_256` | 8 | 4 | 2 | 4 |
 | `ama_sha3_384` | 1 | — | — | 2 |
 | `ama_sha3_512` | 2 | 1 | — | 1 |
 | `ama_sha3_512_final` | 2 | — | — | — |
 | `ama_sha3_512_init` | 2 | — | — | — |
 | `ama_sha3_512_update` | 2 | — | — | — |
-| `ama_sha3_final` | 2 | 1 | — | — |
-| `ama_sha3_init` | 2 | 1 | — | — |
-| `ama_sha3_update` | 2 | 1 | — | — |
+| `ama_sha3_final` | 3 | 1 | — | — |
+| `ama_sha3_init` | 3 | 1 | — | — |
+| `ama_sha3_update` | 3 | 1 | — | — |
 | `ama_sha512` | 1 | — | 1 | 1 |
 | `ama_shake128` | 1 | — | — | 1 |
 | `ama_shake128_inc_absorb` | 4 | 1 | — | — |
@@ -222,7 +222,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_version_string` | 1 | — | — | — |
 | `ama_x25519_field_path` | 3 | — | 1 | — |
 | `ama_x25519_get_mulx_override` | 1 | — | — | — |
-| `ama_x25519_key_exchange` | 4 | 1 | 1 | 1 |
-| `ama_x25519_keypair` | 3 | 1 | — | 1 |
+| `ama_x25519_key_exchange` | 5 | 1 | 1 | 1 |
+| `ama_x25519_keypair` | 4 | 1 | — | 1 |
 | `ama_x25519_scalarmult_batch` | 2 | — | 1 | 1 |
 | `ama_x25519_set_mulx_override` | 1 | — | — | — |

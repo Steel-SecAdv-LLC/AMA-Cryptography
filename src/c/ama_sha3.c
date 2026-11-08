@@ -16,10 +16,12 @@
  * - No table lookups that could leak timing information
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
 #include "internal/ama_keccak_round.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -223,14 +225,26 @@ static inline uint64_t load64_le(const uint8_t *p) {
  * Store 64-bit little-endian value
  */
 static inline void store64_le(uint8_t *p, uint64_t x) {
-    /* One 64-bit store, byte-swapped first on a big-endian host.  The
-     * byte-at-a-time form was auto-vectorised across lanes by gcc into SHUFPS
-     * lane shuffles of the (secret) squeezed state, and SHUFPS is not on
-     * Intel's Data Operand Independent Timing list; a whole-word store is a
-     * plain MOV.  Same construction as ama_ascon_store64. */
+    /* One 64-bit store from a general register, byte-swapped first on a
+     * big-endian host.  The byte-at-a-time form was auto-vectorised across
+     * lanes by gcc into SHUFPS lane shuffles of the (secret) squeezed state,
+     * and SHUFPS is not on Intel's Data Operand Independent Timing list; a
+     * whole-word store is a plain MOV.
+     *
+     * The barrier is for INVARIANT-6, not for timing.  Without it gcc 13
+     * merges the digest words into two MOVDQU copies through %xmm8/%xmm9,
+     * call-clobbered registers that nothing on the return path overwrites;
+     * the next lazily bound PLT call's _dl_runtime_resolve_xsavec then saved
+     * them, adjacent, onto the stack, where tools/measure_secret_residue.py
+     * found a whole live copy of the HKDF-SHA3-256 output (Python 3.12, CI
+     * job 128658717231).  It is the second of two guards: AMA_API's
+     * zero_call_used_regs("all") clears those registers at the public
+     * return, and tests/c/test_register_residue.c fails only with both
+     * removed (measured; the barrier alone is SMOKE). */
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     x = __builtin_bswap64(x);
 #endif
+    x = ama_ct_value_barrier_u64(x);
     memcpy(p, &x, sizeof(x));
 }
 

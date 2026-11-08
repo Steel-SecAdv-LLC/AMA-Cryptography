@@ -40,6 +40,7 @@
  *   `CSRC_ALIGN_REPORT.md` for KAT results.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
@@ -1928,7 +1929,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
 
     /* Compute t = A*s1 + s2, expanding A one row at a time — A is used exactly
      * once here, so holding all 56 polynomials only ever cost 57 KB of frame. */
-    s1hat = s1;
+    memcpy(&s1hat, &s1, sizeof(s1hat));
     dil_polyvecl_ntt(&s1hat, P->l);
     dil_matrix_pointwise_rowwise(&t, rho, &s1hat, P);
     /* Reduce BEFORE the inverse NTT, not only after it.
@@ -2495,7 +2496,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Compute w = A*NTT(y).  yhat is hoisted (see above) so its
          * stack slot persists past the loop for scrub. */
-        yhat = y;
+        memcpy(&yhat, &y, sizeof(yhat));
         dil_polyvecl_ntt(&yhat, P->l);
         dil_polyvec_matrix_pointwise(&w1, mat, &yhat, P);
         /* Same l-fold accumulator, same precondition — see the bound note in
@@ -2511,10 +2512,12 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Pack w1 and compute challenge hash */
         {
-            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX] = {0};
+            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             uint8_t challenge_seed[DIL_CRHBYTES +
                                    DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             const size_t w1_len = (size_t)P->k * P->polyw1_packedbytes;
+
+            memset(w1_packed, 0, sizeof(w1_packed));  // PUBLIC-DATA: w1_packed (pre-use init; w1 = HighBits(A*y) is what a verifier recomputes from the signature, FIPS 204 Algorithm 8)
 
             for (i = 0; i < P->k; ++i) {
                 dil_polyw1_pack(w1_packed + i * P->polyw1_packedbytes, &w1.vec[i], P);
@@ -2633,13 +2636,17 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     uint8_t c_tilde2[DIL_CTILDEBYTES_MAX];
     dil_polyvecl z;
     /* h_vec is filled element-by-element in the loop below before it is
-     * read; zero-initialised so cppcheck 2.17 can see that, since it
-     * cannot follow the P->k bound. */
-    dil_polyveck t1, w1prime, h_vec = {0};
+     * read; zeroed first so cppcheck 2.17 can see that, since it cannot
+     * follow the P->k bound.  An explicit memset, not `= {0}`: clang lowers
+     * an aggregate initialiser this size to a call into glibc's memset
+     * (see src/c/internal/ama_string_ops.h). */
+    dil_polyveck t1, w1prime, h_vec;
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
     uint8_t tr[DIL_TRBYTES];
     unsigned int i;
+
+    memset(&h_vec, 0, sizeof(h_vec));  // PUBLIC-DATA: h_vec (pre-use init on the verification path; the hint is decoded from the public signature)
 
     if (!P || !message || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
@@ -2762,7 +2769,8 @@ static ama_error_t dil_verify_internal(const dil_params *P,
      * thread stack.  Holding the whole 56-polynomial matrix put the frame at
      * ~101 KB, on the wrong side of musl's 128 KB default once anything else
      * was below it. */
-    dil_polyvecl zhat = z;
+    dil_polyvecl zhat;
+    memcpy(&zhat, &z, sizeof(zhat));
     dil_polyvecl_ntt(&zhat, P->l);
     dil_matrix_pointwise_rowwise(&w1prime, rho, &zhat, P);
 

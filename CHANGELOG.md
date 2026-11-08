@@ -29,6 +29,95 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
 
+### Secrets left in registers at return: cleared at the ABI boundary, pinned — 2026-11-08
+
+CI's `test_secret_residue.py` failed on the Python 3.12 lane with one live
+copy each of the HKDF-SHA3-256 output and the hybrid-KEM shared secret (job
+128658717231). Measured cause: this branch's whole-word `store64_le` in
+`ama_sha3.c` let gcc 13 merge the digest stores into two MOVDQU copies
+through `%xmm8`/`%xmm9`, call-clobbered registers nothing on the return path
+overwrites; the first lazily bound PLT call after the return ran
+`_dl_runtime_resolve_xsavec`, which saved them, adjacent, onto the stack.
+Reproduced under CPython 3.12, gone under `LD_BIND_NOW=1` (no trampoline
+after the call), and never seen under 3.13, whose interpreter overwrites the
+registers first.
+
+The instrument could not pin that, so `tests/c/test_register_residue.c` does:
+it stores `%xmm0-15` / `%ymm0-15` / `%zmm16-31` in the instructions right
+after each public call returns, and fails on any word of the secret. It
+covers HKDF-SHA3-256, HMAC-SHA3-256, SHA3-256 (one-shot and incremental),
+X25519 key exchange and keypair, HKDF-SHA256, PBKDF2-SHA512, Argon2id, and
+the plaintext and key of AES-256-GCM, ChaCha20-Poly1305 and Ascon-AEAD128
+decryption, plus a dead-stack probe (`residue_probe.h`) of the X25519 shared
+secret and the HKDF output. It found more than the CI row. These leaked on
+`main` too: PBKDF2, Argon2id, every AEAD plaintext, and two AES-256 key words
+after GCM decrypt. This branch had added the SHA-3 digest and the X25519
+shared secret, the latter also spilled to `fe64_tobytes`'s own frame.
+
+Fixes:
+* `AMA_API` carries `zero_call_used_regs("all")` while the library is
+  compiled (GCC 11+, clang 15+; consumers and MSVC see the declaration
+  unchanged). Every exported function clears every call-clobbered register
+  on return, whatever its callees, kernels or libc left there.
+* `fe64_store64_le` / `fe51_store64_le` store each word from a general
+  register behind a value barrier, so no frame copy is made. That copy is in
+  memory, which the attribute cannot reach.
+* `store64_le` in `ama_sha3.c` gets the same barrier.
+
+Mutation (gcc 13.3, x86-64 with AVX-512F):
+
+| Mutation | Result |
+|---|---|
+| Attribute removed | PBKDF2, Argon2id and the three AEAD plaintext rows fail (**PIN**) |
+| fe64/fe51 barrier removed | X25519 dead-stack row fails (**PIN**) |
+| SHA-3 barrier removed | Passes: redundant under the attribute (**SMOKE**) |
+| SHA-3 barrier and attribute removed | The five SHA-3-family rows fail |
+
+So the SHA-3 property is held redundantly, and the test pins the property,
+not either guard. Full Python 3.12 inventory after the fix: 17 of 17 rows at
+0 copies.
+
+**`%zmm16-31` under clang.** The attribute cannot reach `%zmm16-31` from a
+baseline x86-64 translation unit, and glibc's EVEX `memcpy`, which it selects
+on every AVX-512 CPU, copies through exactly those registers. Under clang
+18.1, which calls glibc for variable-length copies, HKDF, HKDF-SHA256, PBKDF2
+and Argon2id returned with their output in `%zmm16`/`%zmm17`. Without the
+cures below, the gcc 13.3 library also imported `__memcpy_chk` (39 call sites)
+and `__memset_chk` (8), the fortified form of the same calls.
+
+Cures:
+* `src/c/internal/ama_string_ops.h`, included first by every library source
+  on x86-64 GCC/Clang, expands each `memcpy`/`memmove`/`memset` inline. Under
+  GCC that is the compiler's own pinned expansion; under Clang a short
+  constant copy stays inline and everything else becomes REP MOVSB / REP
+  STOSB. Both are DOIT-listed, use no vector register, and are timed only by
+  the public count. `_FORTIFY_SOURCE`'s object-size check is kept, as a trap.
+* Clang's loop-idiom pass is off for these routines (`-fno-builtin-memcpy`
+  and the like).
+* The 18 struct copies and aggregate initialisers clang still lowered to calls
+  (ML-DSA, the P-curves, PBKDF2's HMAC contexts, the dispatcher) are explicit
+  copies.
+
+`tests/test_no_libc_string_calls.py` requires the built x86-64 library to
+import no libc copy routine, and its control proves the check sees one.
+
+Measured:
+
+| Build | Result |
+|---|---|
+| Clang, header disabled | Fails 5 register rows (**PIN**); imports `memcpy` and `__memcpy_chk` |
+| GCC, header disabled | Passes the register test (**SMOKE**); imports `__memcpy_chk` |
+| Both compilers, cured | ctest 161/161 and the register test pass |
+
+The static analyzer cannot model REP MOVSB, so the header steps aside under
+`__clang_analyzer__`, and a test confines that exception to this one header.
+
+With the loop idiom off, clang copied the ML-DSA AVX2 NTT's 1 KiB staging
+array through VMOVAPS, which is FP-domain and not on the DOIT list: 254 sites
+in the `ml-dsa-sign` operand gate. Its four staging loops are now explicit
+`memcpy` calls, so they become REP MOVSB. The loop form fails the gate under
+clang (**PIN**), and gcc 13/14 and clang pass.
+
 ### Secret operands: every consuming instruction vendor-listed, every primitive measured — 2026-11-08
 
 The class (c) gate added on 2026-11-07 blocked only on division,
@@ -86,6 +175,38 @@ AVX-512 and VAES kernels Valgrind cannot run.
   and INS (`src/c/neon/ama_neon_dit.h`). The 5 FMOVs left move public
   values. clang's NEON GHASH multiply no longer routes H through general
   registers. AArch64 ctest under QEMU: 159/159.
+- **CI's complete gcc 15.2 and AArch64 findings, cured.** With every target
+  reported, the blocking lanes named the rest. On x86-64 gcc 15.2, CDQE (not
+  on Intel's list) sign-extended ML-DSA coefficients in the AVX2 NTT's scalar
+  layers; `dil_sext32` now does it arithmetically behind a value barrier
+  (exact for all 2^32 inputs). The same compiler iterated Argon2's G over a
+  pointer derived from the reference block's address, so the loop's exit
+  inherited the address's taint: the reference index is now declassified
+  where it becomes an address, in AMA_TESTING_MODE only. That address is
+  RFC 9106's data-dependent addressing, which no implementation removes; it is
+  the first declassified value that is not published, and the policy says so.
+  On AArch64 every remaining site was one `mrs x5, dczid_el0` in glibc's
+  memset, which VEX lifts to a constant: the gate now prints, for each failing
+  site, the IR under its IMark (`--ct-dump-ir-at`), so the next run shows what
+  was charged.
+- **Copilot: two workloads did not reach what they named.** `aead-bulk` ran
+  256-byte messages, below the 512 at which ChaCha20 enters its x8 kernel, so
+  the AVX2 and NEON kernels it names never ran; it now runs 768 bytes, and the
+  operand gate is inconclusive unless that kernel consumed the secret
+  (mutation: 256 bytes is refused). Running it at last found clang spilling
+  ChaCha20 x8 key-word broadcasts and output with VMOVUPS; the kernel now
+  re-broadcasts the initial rows from general registers at the add-back and
+  stores each transposed half at once (no FP-domain move under clang, gcc 13
+  or gcc 14; the x8 equivalence test and KATs pass). `hkdf` called HMAC's long-key path through
+  a 300-byte IKM, which is HMAC's message, not its key; each HMAC is now also
+  called directly with the 300-byte key. Two more on
+  `tests/c/test_cpuid_assume_adx.c`, both real: it called POSIX `setenv`,
+  which Windows lacks (now `_putenv_s` there), and on a CPU with BMI2 but no
+  ADX (Intel Haswell) the override selected a ladder that raises SIGILL. The
+  known-answer half now runs only where ADCX executes: probed by executing
+  one under a SIGILL handler, because Valgrind's CPUID hides ADX while
+  running it. The override's contract is still checked everywhere, and a
+  `ud2` stand-in for the probe takes the no-ADX path.
 - **CI reports every target.** Each operand loop records failures and
   fails at the end, rather than stopping at the first: the gcc 15.2 run
   stopped at `x25519` (a `MOVHLPS` in the scalar copy and clamp, now

@@ -18,6 +18,7 @@
  * - Conforms to RFC 8439 (supersedes RFC 7539)
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "../include/ama_uint128.h"

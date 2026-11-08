@@ -41,6 +41,7 @@
  * - Secure memory cleanup via ama_secure_memzero
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "../include/ama_dispatch.h"

@@ -14,6 +14,7 @@
  * If key > 64 bytes, K' = SHA-256(key) zero-padded to 64 bytes.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_hmac_sha256.h"
 #include "ama_sha256.h"
 #include <stdlib.h>

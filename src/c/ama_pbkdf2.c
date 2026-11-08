@@ -35,6 +35,7 @@
  * value.  All key-derived intermediates are scrubbed on every exit path.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t */
 #include "ama_sha256.h"                   /* SHA-256 streaming context */
 #include "internal/ama_sha2.h"            /* SHA-512 streaming context */
@@ -123,23 +124,23 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
         index_be[3] = (uint8_t)(block_index);
 
         /* U_1 = HMAC(P, S || INT(l)) */
-        ctx = ictx_base;
+        memcpy(&ctx, &ictx_base, sizeof(ctx));
         if (salt_len > 0) {
             ama_sha256_update(&ctx, salt, salt_len);
         }
         ama_sha256_update(&ctx, index_be, sizeof(index_be));
         ama_sha256_final(&ctx, u_block);
-        ctx = octx_base;
+        memcpy(&ctx, &octx_base, sizeof(ctx));
         ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
         ama_sha256_final(&ctx, u_block);
         memcpy(t_accum, u_block, AMA_SHA256_DIGEST_SIZE);
 
         /* U_j = HMAC(P, U_{j-1}); T ^= U_j */
         for (j = 1; j < iterations; j++) {
-            ctx = ictx_base;
+            memcpy(&ctx, &ictx_base, sizeof(ctx));
             ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
             ama_sha256_final(&ctx, u_block);
-            ctx = octx_base;
+            memcpy(&ctx, &octx_base, sizeof(ctx));
             ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
             ama_sha256_final(&ctx, u_block);
             for (i = 0; i < AMA_SHA256_DIGEST_SIZE; i++) {
@@ -236,22 +237,22 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
         index_be[2] = (uint8_t)(block_index >> 8);
         index_be[3] = (uint8_t)(block_index);
 
-        ctx = ictx_base;
+        memcpy(&ctx, &ictx_base, sizeof(ctx));
         if (salt_len > 0) {
             ama_sha512_ctx_update(&ctx, salt, salt_len);
         }
         ama_sha512_ctx_update(&ctx, index_be, sizeof(index_be));
         ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
-        ctx = octx_base;
+        memcpy(&ctx, &octx_base, sizeof(ctx));
         ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
         ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
         memcpy(t_accum, u_block, AMA_SHA512_DIGEST_SIZE);
 
         for (j = 1; j < iterations; j++) {
-            ctx = ictx_base;
+            memcpy(&ctx, &ictx_base, sizeof(ctx));
             ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
-            ctx = octx_base;
+            memcpy(&ctx, &octx_base, sizeof(ctx));
             ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             for (i = 0; i < AMA_SHA512_DIGEST_SIZE; i++) {

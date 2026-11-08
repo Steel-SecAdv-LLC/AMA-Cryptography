@@ -572,6 +572,49 @@ _ENCODINGS = {"sse": ["-mno-avx"], "vex": ["-mavx"]}
 @pytest.mark.requires_memcheck
 @pytest.mark.skipif(
     platform.machine().lower() not in ("x86_64", "amd64"),
+    reason="the probe is written for the x86-64 lifting",
+)
+def test_a_reported_site_is_explained_by_its_own_ir(gate: ModuleType, tmp_path: Path) -> None:
+    """`--ct-dump-ir-at` prints the statements under the reported instruction's
+    IMark, and only that instruction's: what a reviewer needs when a site's
+    mnemonic takes no data operand (the first AArch64 run reported an `mrs` of
+    DCZID_EL0, which VEX lifts to a constant PUT).  The site's own IMark opens
+    the dump and the dump stops at the next one."""
+    if (
+        not shutil.which("valgrind")
+        or not Path("/usr/include/valgrind/pub_tool_tooliface.h").is_file()
+    ):
+        pytest.skip("valgrind or its tool headers are not installed")
+    stage = gate.build_tool("x86_64", tmp_path / "cache")
+    src = tmp_path / "probe.c"
+    exe = tmp_path / "probe"
+    src.write_text(_PROBE, encoding="utf-8")
+    subprocess.run(["gcc", "-O2", "-g", "-mno-avx", str(src), "-o", str(exe), "-lm"], check=True)
+    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
+    assert text is not None
+    report = gate.parse_report(text)
+    allowed, _ = gate.load_allowlist("x86_64")
+    gate.classify(report, "x86_64", allowed, gate.derive_x86_spellings(allowed, tmp_path), set())
+    site = next(
+        s
+        for s in report.sites
+        if s.symbol.startswith("f_div+") and "DIV" in gate.class_names(s.classes)
+    )
+    lines = gate.explain_sites(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path, [site.ip])
+    assert lines, "the explainer printed nothing for a reported site"
+    assert lines[0] == f"ctoperand-ir-begin 0x{site.ip:x}"
+    marks = [line for line in lines if "IMark(" in line]
+    assert int(marks[0].split("IMark(")[1].split(",")[0], 16) == site.ip
+    assert len(marks) == 2, "the dump runs past the next instruction's IMark"
+    # ... and nothing of the next instruction is printed after its IMark.
+    assert "IMark(" in lines[-2], "the dump continued past the next instruction's IMark"
+    assert any("DivMod" in line or "Div" in line for line in lines), lines
+    assert lines[-1] == "ctoperand-ir-end"
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe's expectations are written for the x86-64 lifting",
 )
 @pytest.mark.parametrize("encoding", sorted(_ENCODINGS))
@@ -789,6 +832,32 @@ def test_the_job_is_fail_closed_and_aggregated(name: str) -> None:
     assert name in workflow["jobs"]["dudect-gate"]["needs"]
     gate_script = "\n".join(s.get("run", "") for s in workflow["jobs"]["dudect-gate"]["steps"])
     assert f"check {name} " in gate_script
+
+
+def test_the_bulk_aead_workload_reaches_the_kernels_it_names(
+    gate: ModuleType, ghash: ModuleType
+) -> None:
+    """chacha20_xor enters the x8 kernel only for 512 bytes or more, and the
+    aead-bulk drivers once ran 256: the ChaCha20 kernels the target names
+    never executed (Copilot review, 2026-11-08).  Both drivers carry a message
+    above that size, and the operand gate requires the kernel to consume the
+    secret when the dispatcher is not pinned."""
+    for driver in (ghash._TAINT_DRIVERS["aead-bulk"], ghash._DRIVERS["aead-bulk"]):
+        sizes = [int(n) for n in re.findall(r"\bpt\[(\d+)\]", driver)]
+        assert sizes and min(sizes) > 512, sizes
+    assert gate._REQUIRED_KERNELS["aead-bulk"]["x86_64"] == ("ama_chacha20_block_x8_avx2",)
+    assert gate._REQUIRED_KERNELS["aead-bulk"]["aarch64"] == ("ama_chacha20_block_x8_neon",)
+
+
+def test_the_hkdf_drivers_key_every_hmac_with_a_long_secret(ghash: ModuleType) -> None:
+    """In HKDF the IKM is HMAC's message; the keys are the salt and the
+    digest-sized PRK, so a long IKM never reached HMAC's key-hash path.  Each
+    HMAC is called directly with the 300-byte buffer as its key, in the taint
+    and the count driver alike (block sizes 64, 128 and 136 bytes)."""
+    for driver in (ghash._TAINT_DRIVERS["hkdf"], ghash._DRIVERS["hkdf"]):
+        assert "static uint8_t big[300];" in driver
+        for hmac in ("ama_hmac_sha256", "ama_hmac_sha3_256", "ama_hmac_sha384", "ama_hmac_sha512"):
+            assert f"{hmac}(big, sizeof big," in driver, hmac
 
 
 def test_assume_adx_is_trusted_only_when_the_library_confirms_it(

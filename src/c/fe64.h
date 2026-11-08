@@ -75,15 +75,21 @@ static inline void fe64_frombytes(fe64 h, const uint8_t *s) {
           | ((uint64_t)s[30] << 48) | ((uint64_t)(s[31] & 0x7f) << 56);
 }
 
-/* One 64-bit little-endian store (byte-swapped first on a big-endian host).
- * Byte-at-a-time stores of a secret word were vectorised by gcc on AArch64,
- * which moved the words into SIMD registers with FMOV (general -> SIMD), an
- * instruction Arm's DIT list does not name; a whole-word store is one STR.
- * Same construction as store64_le in ama_sha3.c. */
+/* One 64-bit little-endian store from a general register (byte-swapped
+ * first on a big-endian host).  Byte-at-a-time stores of a secret word were
+ * vectorised by gcc on AArch64, which moved the words into SIMD registers
+ * with FMOV (general -> SIMD), an instruction Arm's DIT list does not name; a
+ * whole-word store is one STR.  The value barrier keeps it there: without
+ * it gcc 13 x86-64 spilled the four words to the tobytes frame and copied
+ * them out with two MOVDQU through %xmm0/%xmm1, leaving the X25519 shared
+ * secret in an unscrubbed stack slot and in two call-clobbered registers
+ * (tests/c/test_register_residue.c).  Same construction as store64_le in
+ * ama_sha3.c. */
 static inline void fe64_store64_le(uint8_t *p, uint64_t x) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     x = __builtin_bswap64(x);
 #endif
+    x = ama_ct_value_barrier_u64(x);
     memcpy(p, &x, sizeof(x));
 }
 

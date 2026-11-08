@@ -62,6 +62,7 @@
  *      depth before it is handed back.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"

@@ -55,6 +55,7 @@
  * primitives FROST uses) take PUBLIC scalars only and say so at each site.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "internal/ama_sha2.h"

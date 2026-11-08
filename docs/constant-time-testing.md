@@ -417,6 +417,11 @@ reports `symbol+offset`, the object, the execution count and the call chain.
 * **`--inventory`** reports unlisted sites without failing. It is a
   measurement mode for bringing up a new target; CI never uses it
   (`tests/test_ct_operand_gate.py` fails if a CI step does).
+* **A failing site explains itself.** For each consuming instruction outside
+  the list, the gate re-runs the driver with `--ct-dump-ir-at` and prints the
+  VEX IR under that instruction's IMark: which statement read the secret. It
+  exists because the first AArch64 verdict named an `mrs` of DCZID_EL0, which
+  VEX lifts to a constant and which takes no data operand.
 * **`--static`** is the same rule, taken over every instruction of named
   archive members, for kernels Valgrind cannot execute (AVX-512, VAES): each
   must be on the list, a control transfer, or padding. Without taint it
@@ -444,6 +449,9 @@ the tree before the cure the same command fails with the row named.
 | `MOVHLPS` (`x25519_scalarmult+0x12b`, CI gcc 15.2 only) | the 32-byte scalar copy and clamp moved through XMM registers | `src/c/ama_x25519.c` `x25519_copy_clamp`: four 64-bit words through value barriers; gcc 13/14 and clang never emitted the row, so locally the cure is SMOKE and CI's gcc 15 run is its pin |
 | `FMOV` general <-> SIMD (AArch64, gcc 13; first AArch64 run, `x25519`) | the auto-vectoriser and register allocator moved the portable C's secret words into the SIMD file: 514 such FMOVs over the library (static census of the cross-built archive), among them the X25519 ladder's output, its all-zero check, P-256 and ML-DSA signing, SHA-256 and bitsliced AES | `CMakeLists.txt`: every portable source on AArch64 GCC/Clang compiles with `-mgeneral-regs-only` (configure fails if refused), after which those objects contain no SIMD instruction at all; the NEON kernels compile without the auto-vectoriser; 514 -> 5, and the 5 left move public values (NTT zetas, the GCM length block, the ChaCha20 block counter) |
 | `FMOV` from NEON intrinsics (Keccak theta, AES-256 key schedule; clang: the GHASH multiply) | gcc lowers `vgetq_lane_u64/u32(v, 0)` to FMOV and `vcombine_u64(vcreate_u64(..))` to FMOV + INS; clang routed GHASH's Karatsuba halves (H and the accumulator) through general registers | `src/c/neon/ama_neon_dit.h` pins lane moves to UMOV, DUP and INS; `ghash_mul_neon` keeps every operand in its vector register (PMULL/PMULL2 on lanes in place); NEON AES-GCM equivalence and the SHA-3, ML-KEM, ML-DSA NEON KAT sweeps pass under QEMU |
+| `CDQE` (`ama_dilithium_ntt_avx2`, `_invntt_avx2`, CI gcc 15.2) | `(int64_t)` of a secret coefficient in the scalar len <= 4 layers and the Montgomery fallback, emitted as CDQE (Intel lists MOVSXD, not CDQE) | `src/c/avx2/ama_dilithium_avx2.c` `dil_sext32`: zero-extend through a value barrier, then `(z ^ 2^31) - 2^31`; exact for all 2^32 inputs; gcc 13/14 and clang emit no CDQE/CWDE/CDQ in the object |
+| Memcheck-confirmed branch in `ama_argon2_g_avx2` (`argon2id`, CI gcc 15.2) | the loop iterated on a pointer derived from the reference block's address, which is password-derived by RFC 9106's design, so its exit inherited that taint | the reference index is declassified where it becomes an address (AMA_TESTING_MODE only; see the declassification list) |
+| `VMOVUPS` (`ama_chacha20_block_x8_avx2`, clang; reached once `aead-bulk` ran 768 bytes) | sixteen saved initial rows beside sixteen working rows overflowed the YMM file, and clang spilled the key-word broadcasts (VBROADCASTSS from memory, merged with the add-back) and the transposed output with VMOVUPS | `src/c/avx2/ama_chacha20poly1305_avx2.c`: the initial rows are re-broadcast at the add-back, each key word from a general register through a volatile barrier (`chacha_bcast_key_word`), and each transposed half is stored as soon as it is formed; clang, gcc 13 and gcc 14 now emit no FP-domain move in the kernel; mutation: the pre-fix kernel fails at its 4 sites |
 
 The instrument itself had two false positives, fixed and pinned: an `OR`
 with all ones or an `AND` with zero now yields an untainted result (gcc 14's
@@ -474,6 +482,14 @@ cured at source and pinned by the drivers that found them
   decryption (so a forgery writes no plaintext) is the `VERIFY_FAILED` the
   function returns; declassified in the scalar, AES-NI, VAES, NEON and
   ChaCha20-Poly1305 decrypts.
+* **Argon2id** (`argon2id`, operand-only): the reference block index, where
+  it becomes an address. Unlike every entry above it is not published: it is
+  password-derived, and the address channel it opens is RFC 9106 sec. 3.4's
+  design (data-dependent addressing), which no implementation can remove and
+  which the operand-only target excludes by definition. The index's
+  computation stays measured and the blocks' contents stay tainted; gcc 15.2's
+  pointer-induction loop in `ama_argon2_g_avx2` is what made the address's
+  taint reach a branch.
 
 **Measured, 2026-11-08 (x86-64):** all 24 targets (the 18 above, plus
 `ml-dsa-sign`, `ml-kem-keygen`, `hkdf`, `frost-sign`, `aead-bulk` and the

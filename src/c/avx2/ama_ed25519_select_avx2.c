@@ -26,6 +26,7 @@
  * entries, both as plain uint64_t arrays.
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #if defined(__x86_64__) || defined(_M_X64)
 
 #include <immintrin.h>
