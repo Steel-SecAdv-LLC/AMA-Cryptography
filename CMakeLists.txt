@@ -1108,7 +1108,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND
         #if !defined(__has_attribute) || !__has_attribute(zero_call_used_regs)
         #error zero_call_used_regs unknown
         #endif
-        __attribute__((zero_call_used_regs(\"all\"))) int ama_probe(void) { return 0; }
+        static __attribute__((zero_call_used_regs(\"all\"))) int ama_probe(void) { return 0; }
         int main(void) { return ama_probe(); }" AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
     if(NOT AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
         message(FATAL_ERROR
