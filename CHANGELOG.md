@@ -117,6 +117,19 @@ vector code is their own intrinsics. gcc 13/14 and clang listings pass, and
 37/37 AES-GCM and SHA-3 tests pass on a VAES host; gcc 15 is checked by CI.
 The counter change is kept: it is bit-identical, and it is an intrinsic form.
 
+**Argon2id: no divide left in the per-block loop (Copilot review).** The
+fastmod constant for `lanes` and the per-slice reference-area start are now
+formed once, outside the loop, instead of on every call to
+`argon2_index_alpha`. Before this, the source formed both on every call:
+two divides per block, on public values, unless the compiler hoisted them.
+Where it did was not measured. Copilot's premise that the fastmod form cost
+more than the `%` it replaced was wrong: the source before it divided three
+times per block. The hoist is worth doing anyway, because it makes the loop
+division-free by construction rather than by optimiser choice. `tools/check_secret_division.py` now attributes
+3 divides (gcc 13.3) or 4 (gcc 14.2, which duplicates the per-slice start),
+none in the loop, and its ceiling falls from 5 to 4. The RFC 9106 KATs and
+the `argon2id` / `argon2id-verify` operand gate (gcc 13/14, clang) pass.
+
 ### Secrets left in registers at return: cleared at the ABI boundary, pinned — 2026-11-08
 
 CI's `test_secret_residue.py` failed on the Python 3.12 lane with one live

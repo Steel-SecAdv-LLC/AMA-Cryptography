@@ -523,9 +523,13 @@ static inline uint64_t argon2_mulhi_u64_u32(uint64_t a, uint32_t b) {
  * Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation" (2019),
  * fastmod_u32: with c = floor((2^64 - 1) / d) + 1, n mod d is the high half
  * of (c * n mod 2^64) * d, exactly, for every 32-bit n and d.  (d = 1 gives
- * c = 0 and remainder 0.)  The division that forms c is on the public d. */
-static inline uint32_t argon2_ct_mod_u32(uint32_t n, uint32_t d) {
-    const uint64_t c = UINT64_MAX / d + 1u;
+ * c = 0 and remainder 0.)  The division that forms c is on the public d, and
+ * is done once per hash (argon2_fastmod_c), not once per block. */
+static inline uint64_t argon2_fastmod_c(uint32_t d) {
+    return UINT64_MAX / d + 1u;
+}
+
+static inline uint32_t argon2_ct_mod_u32(uint32_t n, uint64_t c, uint32_t d) {
     return (uint32_t)argon2_mulhi_u64_u32(c * n, d);
 }
 
@@ -543,7 +547,10 @@ static inline uint32_t argon2_eq_mask(uint32_t a, uint32_t b) {
  * @param index     Position within the segment
  * @param lane      Current lane
  * @param lanes     Total number of lanes
+ * @param lanes_c   argon2_fastmod_c(lanes), formed once per hash
  * @param segment_length Length of one segment
+ * @param ref_start Start of the reference area in the lane (public; formed
+ *                  once per slice by the caller)
  * @param pseudo_rand The pseudo-random value J1||J2 to use for indexing
  * @return The reference block index
  *
@@ -560,8 +567,8 @@ static inline uint32_t argon2_eq_mask(uint32_t a, uint32_t b) {
  */
 static uint32_t argon2_index_alpha(
     uint32_t pass, uint32_t slice, uint32_t index,
-    uint32_t lane, uint32_t lanes,
-    uint32_t segment_length, uint64_t pseudo_rand)
+    uint32_t lane, uint32_t lanes, uint64_t lanes_c,
+    uint32_t segment_length, uint32_t ref_start, uint64_t pseudo_rand)
 {
     uint32_t J1 = (uint32_t)(pseudo_rand & 0xFFFFFFFF);
     uint32_t J2 = (uint32_t)(pseudo_rand >> 32);
@@ -571,7 +578,7 @@ static uint32_t argon2_index_alpha(
     if (pass == 0 && slice == 0) {
         ref_lane = lane;
     } else {
-        ref_lane = argon2_ct_mod_u32(J2, lanes);
+        ref_lane = argon2_ct_mod_u32(J2, lanes_c, lanes);
     }
 
     /* Determine reference set size.  Whether the reference lane is the
@@ -602,13 +609,8 @@ static uint32_t argon2_index_alpha(
     uint64_t y = (reference_area_size * (x >> 32));
     uint64_t z = reference_area_size - 1 - (y >> 32);
 
-    /* Determine starting position of reference area (public operands). */
-    uint32_t start;
-    if (pass == 0) {
-        start = 0;
-    } else {
-        start = ((slice + 1) * segment_length) % lane_length;
-    }
+    /* Starting position of the reference area: public, from the caller. */
+    const uint32_t start = ref_start;
 
     /* start < lane_length and z < reference_area_size <= lane_length, so the
      * sum is below 2 * lane_length and one masked subtraction reduces it. */
@@ -832,8 +834,14 @@ static ama_error_t ama_argon2id_core(
      * - Pass 0, slices 0-1: data-independent (generate pseudo-random from counter)
      * - All other cases: data-dependent (use previous block's first qword)
      * ---------------------------------------------------------------- */
+    /* Public reduction constants, formed outside the per-block loop. */
+    const uint64_t lanes_c = argon2_fastmod_c(lanes);
     for (uint32_t pass = 0; pass < t_cost; pass++) {
         for (uint32_t slice = 0; slice < ARGON2_SYNC_POINTS; slice++) {
+            /* RFC 9106 sec. 3.4.1.2: the reference area starts at the
+             * segment after this one, except in the first pass. */
+            const uint32_t ref_start =
+                (pass == 0) ? 0u : ((slice + 1u) * segment_length) % lane_length;
 
             for (uint32_t lane = 0; lane < lanes; lane++) {
                 /* For data-independent addressing (Argon2id: pass 0, slice 0 or 1),
@@ -908,7 +916,7 @@ static ama_error_t ama_argon2id_core(
                     /* Compute reference block index */
                     uint32_t ref_index = argon2_index_alpha(
                         pass, slice, idx,
-                        lane, lanes, segment_length, pseudo_rand);
+                        lane, lanes, lanes_c, segment_length, ref_start, pseudo_rand);
                     /* The reference block's ADDRESS is password-dependent by
                      * RFC 9106 sec. 3.4's design from the second half of pass
                      * 0 on; no implementation can remove that channel, and it
