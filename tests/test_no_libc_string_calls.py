@@ -31,6 +31,7 @@ register, never a secret.
 from __future__ import annotations
 
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,9 +41,13 @@ from tools import check_vendor_isolation as gate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: Package-local first: ``pqc_backends._get_search_dirs()`` loads the copy in
+#: the package before the build tree's, and a wheel ships only that one.  Both
+#: are checked when both exist (Copilot review): passing on one image says
+#: nothing about the other.
 _LIBRARY_DIRS = (
-    Path("build") / "lib",
     Path("ama_cryptography"),
+    Path("build") / "lib",
 )
 
 #: The libc routines that move caller bytes through vector registers.
@@ -61,14 +66,18 @@ COPY_ROUTINES = frozenset(
 _EM_X86_64 = 62
 
 
-def _built_library() -> Path | None:
+def _built_libraries() -> list[Path]:
+    """Every distinct library image this tree holds, the loaded one first."""
+    images: list[Path] = []
+    seen: set[Path] = set()
     for relative in _LIBRARY_DIRS:
         directory = REPO_ROOT / relative
         if directory.is_dir():
             found = native_library_path(directory)
-            if found is not None:
-                return found
-    return None
+            if found is not None and found.resolve() not in seen:
+                seen.add(found.resolve())
+                images.append(found)
+    return images
 
 
 def _elf_machine(path: Path) -> int | None:
@@ -86,18 +95,42 @@ def _imported_copy_routines(path: Path) -> set[str]:
 
 
 def test_the_x86_64_library_imports_no_libc_copy_routine() -> None:
-    built = _built_library()
-    if built is None:
+    images = _built_libraries()
+    if not images:
         pytest.skip("native library not built in this tree")
-    if _elf_machine(built) != _EM_X86_64:
-        pytest.skip(f"{built.name} is not an x86-64 ELF image; glibc's EVEX routines are x86-64")
-    imported = _imported_copy_routines(built)
-    assert not imported, (
-        f"{built} imports {sorted(imported)}: a secret copied by glibc's EVEX "
-        "form is left in %ymm16-31, which the public epilogue cannot clear. "
-        "Route the copy through src/c/internal/ama_string_ops.h (an explicit "
-        "memcpy, not a struct assignment or a copy loop)."
+    elf = [image for image in images if _elf_machine(image) == _EM_X86_64]
+    if not elf:
+        pytest.skip(
+            f"{images[0].name} is not an x86-64 ELF image; glibc's EVEX routines are x86-64"
+        )
+    offending = {str(image): sorted(_imported_copy_routines(image)) for image in elf}
+    offending = {image: names for image, names in offending.items() if names}
+    assert not offending, (
+        f"{offending}: a secret copied by glibc's EVEX form is left in "
+        "%ymm16-31, which the public epilogue cannot clear. Route the copy "
+        "through src/c/internal/ama_string_ops.h (an explicit memcpy, not a "
+        "struct assignment or a copy loop)."
     )
+
+
+def test_every_image_in_the_tree_is_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both locations are read, the loaded one first, and a symlinked copy of
+    the same image is read once."""
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+    (tmp_path / "ama_cryptography").mkdir()
+    (tmp_path / "build" / "lib").mkdir(parents=True)
+    pkg = tmp_path / "ama_cryptography" / "libama_cryptography.so"
+    built = tmp_path / "build" / "lib" / "libama_cryptography.so"
+    pkg.write_bytes(b"package")
+    built.write_bytes(b"build")
+    assert _built_libraries() == [pkg, built]
+    pkg.unlink()
+    pkg.symlink_to(built)
+    # native_library_path resolves links: the editable install's symlink and
+    # the build output are one image, read once.
+    assert _built_libraries() == [built.resolve()]
 
 
 def test_the_check_sees_an_import(tmp_path: Path) -> None:
