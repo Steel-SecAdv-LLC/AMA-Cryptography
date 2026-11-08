@@ -52,8 +52,17 @@ def _exported_functions(image: Path) -> set[str]:
     return {name for name in info.defined_symbols if name.lstrip("_").startswith("ama_")}
 
 
+def _bare(name: str, macho: bool) -> str:
+    """A symbol as C spells it: Mach-O prefixes one underscore."""
+    return name[1:] if macho and name.startswith("_") else name
+
+
 def tail_calls(image: Path, objdump: str) -> dict[str, set[str]]:
-    """Each exported function that jumps to another function, and where to."""
+    """Each exported function that jumps to another function, and where to,
+    by C name (Mach-O's leading underscore removed; measured on CI's
+    macos-latest, where the control's names came back as
+    ``_ama_control_export``)."""
+    macho = gate.parse_binary(image).fmt == "Mach-O"
     exported = _exported_functions(image)
     listing = subprocess.run(
         [objdump, "-d", "--no-show-raw-insn", str(image)],
@@ -76,7 +85,7 @@ def tail_calls(image: Path, objdump: str) -> dict[str, set[str]]:
         target = jump.group("target").split("+", 1)[0]
         if target == current or target.startswith(current + ".cold"):
             continue
-        found.setdefault(current, set()).add(target)
+        found.setdefault(_bare(current, macho), set()).add(_bare(target, macho))
     return found
 
 

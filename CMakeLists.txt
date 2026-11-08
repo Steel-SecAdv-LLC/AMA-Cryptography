@@ -528,6 +528,24 @@ set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
 set(AMA_DISPATCH_SOURCES src/c/dispatch/ama_dispatch.c)
 
+# Flags for the two kernels the secret-operand gate checks statically
+# (the VAES AES-GCM and AVX-512 SHA-3 objects, which Valgrind cannot run;
+# tools/check_ct_operand.py --static).  No auto-vectoriser: their only
+# vector code is their own intrinsics (see the VAES block below).
+#
+# Under GCC they also never leave through LEAVE, which is not on
+# the DOIT list.  A kernel that spills __m256i realigns its frame
+# to 32 bytes, and GCC's generic tuning then ends the function
+# with LEAVE: gcc 15.2 did so in the AVX-512 SHA-3 kernel (CI job
+# 128727474601).  With use_leave off, the same epilogue is
+# MOV RSP,RBP / POP RBP, both listed.  Measured on gcc 13.3 and
+# 14.2 with a realigning probe: LEAVE by default, MOV/POP with the
+# flag; clang emits MOV/POP already.
+set(AMA_STATIC_CT_KERNEL_FLAGS "-fno-tree-vectorize -fno-tree-slp-vectorize")
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    string(APPEND AMA_STATIC_CT_KERNEL_FLAGS " -mtune-ctrl=^use_leave")
+endif()
+
 # AVX2 hand-written intrinsics (x86-64 only)
 if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
@@ -564,7 +582,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             # kernels follow.
             set_source_files_properties(src/c/avx2/ama_aes_gcm_vaes_avx2.c
                 PROPERTIES COMPILE_FLAGS
-                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul -fno-tree-vectorize -fno-tree-slp-vectorize")
+                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul ${AMA_STATIC_CT_KERNEL_FLAGS}")
         endif()
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (9 algorithms incl. VAES AES-GCM and the Ed25519 comb select)")
         # Tell dispatch code that AVX2 implementations are linked in
@@ -598,7 +616,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
                 src/c/avx512/ama_sha3_x4_avx512.c
             )
             set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
-                COMPILE_FLAGS "-mavx512f -mavx512vl -fno-tree-vectorize -fno-tree-slp-vectorize")
+                COMPILE_FLAGS "-mavx512f -mavx512vl ${AMA_STATIC_CT_KERNEL_FLAGS}")
             add_compile_definitions(AMA_HAVE_AVX512_IMPL)
             message(STATUS "SIMD: AVX-512 SHA3 4-way kernel enabled (in-house, AVX-512F + AVX-512VL)")
         else()

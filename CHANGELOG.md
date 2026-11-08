@@ -116,6 +116,19 @@ compile without the auto-vectoriser, like the NEON kernels, so their only
 vector code is their own intrinsics. gcc 13/14 and clang listings pass, and
 37/37 AES-GCM and SHA-3 tests pass on a VAES host; gcc 15 is checked by CI.
 The counter change is kept: it is bit-identical, and it is an intrinsic form.
+CI on `fabc7de` confirmed the cure: gcc 15.2's 36 VSHUFPS are gone. Without
+the vectoriser, gcc 15.2 then spilled enough in the AVX-512 SHA-3 kernel to
+realign its frame, and it left through `LEAVE`, which is not on the DOIT list
+(job 128727474601). Both statically checked kernels now build under GCC with
+`-mtune-ctrl=^use_leave`, so the same epilogue is `MOV RSP,RBP` / `POP RBP`,
+both listed. Measured on gcc 13.3 and 14.2 with a realigning probe: `LEAVE` by
+default, `MOV`/`POP` with the flag, and the same through an LTO link. Clang
+already emits `MOV`/`POP`.
+
+The tail-call test's control failed on CI's macOS arm64 Python lanes,
+because Mach-O spells its symbols with a leading underscore. The scan now
+reports C names. The test on the built macOS library itself passed, as did
+the libc-import test.
 
 **Argon2id: no divide left in the per-block loop (Copilot review).** The
 fastmod constant for `lanes` and the per-slice reference-area start are now
