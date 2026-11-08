@@ -26,10 +26,15 @@
  * default LTO build: GCC applies that option at link time, not per
  * function.  An attribute is per function.
  *
- * SCOPE.  AArch64 with GCC or Clang.  A GNU-C compiler without the attribute
- * (GCC < 11, Clang < 15) is rejected rather than built without the clearing.
- * MSVC is not analysed (docs/constant-time-testing.md) and gets nothing.  On
- * every other target the kernels are not compiled and this defines nothing.
+ * SCOPE.  AArch64 with GCC or Clang.  A compiler without the attribute
+ * (GCC < 11, Clang < 15) is rejected by CMakeLists.txt at configure time, so
+ * no library is built without the clearing.  The check is there, not here,
+ * because a static analyser's own front end parses this header too and need
+ * not know the attribute: CodeQL's does not, and an #error here made every
+ * kernel declaration unparseable to it (CI job 128723683357).  Where the
+ * attribute is unknown the macro is empty.  MSVC is not analysed
+ * (docs/constant-time-testing.md) and gets nothing.  On every other target
+ * the kernels are not compiled and this defines nothing.
  */
 #ifndef AMA_SIMD_CLEAR_REGS_H
 #define AMA_SIMD_CLEAR_REGS_H
@@ -41,10 +46,8 @@
 #define AMA_SIMD_CLEAR_REGS __attribute__((zero_call_used_regs("all")))
 #endif
 #endif
-#ifndef AMA_SIMD_CLEAR_REGS
-#error "ama_simd_clear_regs.h: zero_call_used_regs is required (GCC 11+, Clang 15+): without it the NEON and SVE2 kernels return with secrets in SIMD registers"
 #endif
-#else
+#ifndef AMA_SIMD_CLEAR_REGS
 #define AMA_SIMD_CLEAR_REGS
 #endif
 

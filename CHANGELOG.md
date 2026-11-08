@@ -60,6 +60,11 @@ one gap it found holds on x86-64 as well:
     nothing in the default LTO build, where GCC applies it at link time.
     `"used"` would save almost nothing: 41 against 43 zeroing instructions
     for SHA-256, and the same count for Keccak, the ML-KEM NTT and ChaCha20.
+    A compiler without the attribute is refused at configure time
+    (`AMA_HAVE_ZERO_CALL_USED_REGS_ATTR`), not by an `#error` in the header.
+    CodeQL's own front end does not know the attribute, so the `#error` left
+    every kernel declaration unparseable to it, and its AArch64 lane reported
+    `ama_sha256_compress_neon` as implicitly declared (job 128723683357).
 * **A tail call skips the clearing, on every target.** The attribute acts at
   the function's own return, and a public function that ends in a tail call
   never executes one. Before this change, 32 of the 199 exports left that

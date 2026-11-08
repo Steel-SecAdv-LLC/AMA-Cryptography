@@ -1099,7 +1099,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND
     # with AMA_SIMD_CLEAR_REGS (src/c/internal/ama_simd_clear_regs.h).  It is
     # a function attribute because a per-file -fzero-call-used-regs is
     # applied by GCC at LTO link time, not per function, and was measured to
-    # have no effect in the default LTO build.
+    # have no effect in the default LTO build.  A compiler that does not know
+    # the attribute is refused here: the header defines the macro empty for it
+    # (so a static analyser's front end can still parse the declarations), and
+    # this check keeps that from ever reaching a built library.
+    include(CheckCSourceCompiles)
+    check_c_source_compiles("
+        #if !defined(__has_attribute) || !__has_attribute(zero_call_used_regs)
+        #error zero_call_used_regs unknown
+        #endif
+        __attribute__((zero_call_used_regs(\"all\"))) int ama_probe(void) { return 0; }
+        int main(void) { return ama_probe(); }" AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
+    if(NOT AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
+        message(FATAL_ERROR
+            "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION} lacks "
+            "__attribute__((zero_call_used_regs)) (GCC 11+, Clang 15+): without it "
+            "the NEON and SVE2 kernels return with secrets in SIMD registers "
+            "(src/c/internal/ama_simd_clear_regs.h)")
+    endif()
     # Both compilers would turn copy loops back into libc memcpy calls, which
     # copy through q0-q3: clang's loop-idiom pass (as on x86-64, above), and
     # GCC's loop distribution, which made ten such calls in six functions
