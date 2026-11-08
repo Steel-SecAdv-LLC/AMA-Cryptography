@@ -36,6 +36,7 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -727,6 +728,11 @@ ama_error_t ama_aes256_gcm_decrypt(
      * divergence between verify-pass and verify-fail return paths
      * (closes the dudect leak at test_aes_gcm_tag_verify). */
     int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it bounds
+     * the decryption below so a forgery writes no plaintext: public by
+     * contract (internal/ama_ct_declassify.h).  The comparison above is
+     * constant time; the tags and the key stay secret. */
+    AMA_CT_DECLASSIFY(&tag_match, sizeof(tag_match));
     /* The mask goes through the value barrier: at -O2 gcc rewrote
      * `x & (0 - tag_match)` as a conditional move on tag_match, which the
      * Memcheck secret-taint gate reports (tag_match derives from the key).

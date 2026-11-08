@@ -245,9 +245,14 @@ instruction count and was reported by the taint gate at the jump.
 `ed25519-sign-expanded`, `ed25519-sign-sse2fold`, `secp256k1-scalarmult`,
 `ecdsa`, `nistp-ecdsa`, `kyber-decaps`, `consttime`, `ghash`, `ascon-encrypt`,
 `agent-binding`, `argon2id-verify`, `slhdsa-sign`, `base64`,
-`secp256k1-seckey` and `aead-verify`.
-`slhdsa-sign` is the one target with a taint driver and no instruction-count
-driver: SLH-DSA signing does different work per key by construction (the
+`secp256k1-seckey`, `ml-dsa-sign`, `ml-kem-keygen`, `hkdf`, `frost-sign`,
+`aead-bulk` and `aead-verify`.
+Four targets have a taint driver and no instruction-count driver, each for a
+reason in `_TAINT_ONLY`: ML-DSA signing's rejection loop and ML-KEM key
+generation's SampleNTT do seed-dependent work by construction, and FROST's
+binding factors hash the group public key into variable-time public-point
+arithmetic.  The oldest of them, `slhdsa-sign`, has no instruction-count
+driver because SLH-DSA signing does different work per key by construction (the
 WOTS+ chain lengths are digits of values derived from SK.seed), so a count
 target would fail a correct implementation, and the tool refuses to run it
 without `--taint`.
@@ -397,66 +402,83 @@ section padding cannot shift the pairing — positional pairing broke on
 MinGW's COFF output — and checked on ELF, COFF and Mach-O objects) and
 reports `symbol+offset`, the object, the execution count and the call chain.
 
-### The verdict: one blocking half, one inventory
+### The verdict: blocking, with no exemption
 
-* **Blocking, with no exemption.** The run FAILS if a secret-derived
-  operand reaches a division, floating-point or square-root operation
-  anywhere in the process. On this tree no target does.
-* **Inventory, reported and not blocking.** Every consuming instruction whose
-  mnemonic the vendor list does not name is printed. On this tree that
-  residue is compiler instruction selection with no vendor statement either
-  way, and blocking on it would need a standing exemption list (which would
-  also drift with every compiler release) — the construction AGENTS.md
-  section 10 rejects. So this half is a measurement instrument with the
-  reviewed inventory below, and `--require-listed` turns it into a blocking
-  check for anyone who wants that. Saying so plainly is the point: the
-  inventory items are secret operands at instructions Intel or Arm does not
-  vouch for, and they are open, not cleared.
+* **Every consuming instruction must be on the vendor list.** The run FAILS
+  if a secret-derived operand reaches a division, floating-point or
+  square-root operation, or any instruction Intel's DOIT list (x86-64) or
+  Arm's DIT list (AArch64) does not name. There is no exemption list.
+* **A branch is decided by the bit-exact instrument, in the same run.** A
+  site whose only tainted use is a conditional exit or an indirect target
+  (BRANCH without OTHER) is leakage class (a), and this tool's byte-granular
+  shadow over-approximates it. When a run has any such site, the gate runs
+  the same driver under Memcheck and FAILS on any conditional jump or move on
+  the secret; it never passes a branch on the strength of its label.
+* **`--inventory`** reports unlisted sites without failing. It is a
+  measurement mode for bringing up a new target; CI never uses it
+  (`tests/test_ct_operand_gate.py` fails if a CI step does).
+* **`--static`** is the same rule, taken over every instruction of named
+  archive members, for kernels Valgrind cannot execute (AVX-512, VAES): each
+  must be on the list, a control transfer, or padding. Without taint it
+  cannot tell secret from public, so it holds both to the rule.
 
-### Reviewed inventory (gcc 13.3.0, x86-64, 2026-11-07)
+### What the gate found, and how each was cured (2026-11-08)
 
-Measured on the `AMA_TESTING_MODE` archive (Release, LTO off) for all 18
-taint targets and on the LTO shared object for the 10 the Memcheck
-shipped-object lane runs. Every row has a secret-derived operand; none is in
-a blocking class.
+The first version of this gate reported unlisted instructions as an open
+inventory. Every row was then removed at source, the verdict made blocking,
+and the targets extended. Each cure's pin is the blocking gate itself: on
+the tree before the cure the same command fails with the row named.
 
-| Mnemonic | Where | Classification |
+| Row | Cause | Cure |
 |---|---|---|
-| `REP MOVSQ` | `ama_sha512_oneshot`, `ama_sha512_ctx_update`, `ama_sha3_update`, `ama_sha3_512`, `ama_shake256`, `sha2_HT`, `ed25519_sign_core` | gcc's inline expansion of a fixed-size block copy of hash state. Intel lists `REP MOVSB/W/D` and `REP STOSB/W/D`, footnoting that their latency varies with the count in (E/R)CX, and does not list the quadword form. The count is a compile-time constant here. Unlisted: open. |
-| `LEAVE` | `ama_ed25519_select15_avx2` epilogue | restores a frame pointer whose saved value is a caller's secret-holding register; `LEAVE` is not listed (`MOV` and `POP` are). Unlisted: open. |
-| `CWDE` | `poly_compress`, `poly_basemul`, `polyvec_basemul_acc` | gcc's short form of a 16→32-bit sign extension; `MOVSX` is listed, `CWDE` is not (`CQO` is). Unlisted: open. |
-| `SHUFPS` | `kyber_decapsulate_internal`, `kyber_gennoise`, `ama_shake256`, `ama_shake256_x4_squeezeblocks` | auto-vectorised integer shuffles emitted in the FP domain; `PSHUFD` is listed, `SHUFPS` is not. Unlisted: open. |
-| `MOVHLPS` | `ascon_aead128_encrypt_frame` | auto-vectorised lane move; not listed. Unlisted: open. |
-| `JE`, `JNE` | `ama_aes256_gcm_decrypt` | BRANCH-tagged: conditional control flow, leakage class (a). The bit-exact Memcheck lane passes `aead-verify`, so the condition does not depend on the secret bit for bit; the coarser taint here over-approximates it. Adjudicated by Memcheck, not by this gate. |
+| `REP MOVSQ`, `REP STOSQ` (SHA-2, SHA-3 state and buffer copies) | gcc's inline `memcpy`/`memset` expansion; Intel lists the REP forms only at byte, word and doubleword width | `CMakeLists.txt`: GCC on x86-64 builds with `-mmemcpy-strategy=`/`-mmemset-strategy=unrolled_loop:256,rep_byte:-1` (unrolled `MOV` up to 256 bytes, listed `REP MOVSB`/`STOSB` above, public count). Configure fails if GCC rejects the flags. |
+| `SHUFPS` (`ama_shake256`, x4 squeeze) | byte-wise `store64_le` vectorised across lanes | `src/c/ama_sha3.c`: one 64-bit store, as `ama_ascon_store64` already was |
+| `SHUFPS`, `CWDE` (Kyber compress, Montgomery reduction) | vectorised 64-bit product narrowing; `(int32_t)(int16_t)u` as `CWDE` | `src/c/ama_kyber.c`: Compress_d kept scalar by a value barrier; normalised coefficients zero-extended; `montgomery_reduce` from the unsigned residue with an exact correction, bit-identical (`tests/c/test_kyber_montgomery.c`, 93.7 million inputs, fails on a dropped correction term) |
+| `LEAVE` (`ama_ed25519_select15_avx2`) | twelve YMM accumulators spilled to a realigned frame | `src/c/avx2/ama_ed25519_select_avx2.c`: even and odd entries fold into one accumulator set |
+| `MOVHLPS` (Ascon key, `sc_is_zero`), `MOVMSKPS` (`sc_is_zero`, clang) | SLP-merged adjacent loads; vectorised OR reduction | value barriers in `src/c/ama_ascon.c` and `src/c/ama_secp256k1.c` |
+| `XSAVE`/`XRSTOR` (clang) | ld.so's lazy-binding trampoline in the gate's own driver | the driver runs with `LD_BIND_NOW=1`, as the project links its binaries and the shipped `.so` (`-z relro -z now`); a harness artifact, not library code |
+| clang FP-domain moves and logic (`VMOVAPS`, `VMOVUPS`, `VXORPS`, `VANDNPS`, `VMOVLHPS`, `MOVAPD`, `MOVSD`, `SHUFPS`, `SHUFPD`, `ANDPS`, `VSHUFPS`, `VBLENDPS`) | clang's execution-domain pass puts load-to-store chains with no integer instruction in the FP domain, and auto-vectorises scalar secret loops with FP shuffles | AVX2 Keccak x4 restructured plane by plane with an integer pack/unpack (`src/c/avx2/ama_sha3_avx2.c`); Argon2 G with every XOR fused into a BlaMka round (`src/c/avx2/ama_argon2_avx2.c`); scalar secret loops pinned to general-purpose registers in the Kyber and ML-DSA decode, encode, pack and NTT-tail code, base64 `in_range`/`enc6` and Ed25519 `fe_cswap` (`internal/ama_ct_barrier.h`, `ama_ct_value_barrier_u32`) |
+| `DIV` (Argon2id `argon2_index_alpha`), **a real secret division** | `J2 % lanes` and `(start + z) % lane_length` on password-derived words | `src/c/ama_argon2.c`: Lemire-Kaser-Kurz `fastmod_u32` for the lane (exact for all 32-bit n and every lane count, checked exhaustively: 1,095,216,660,480 pairs) and one masked subtraction for the index; the reference-lane selection by mask. RFC 9106 vectors unchanged. |
+| `VMOVAPS`, `VMOVUPS`, `VXORPS`, `VMOVLHPS` (static, clang: VAES GCM, AVX-512 Keccak x4) | a stack copy of the broadcast YMM round keys; the `set_epi64x` pack; a load-xor-store theta pass | `src/c/avx2/ama_aes_gcm_vaes_avx2.c` broadcasts each round key at its use from a pointer re-read per call (`vaes_rk_fresh`: clang otherwise hoists the keys out of the block loops and spills them), and assembles partial blocks in general registers rather than through `memcpy`, whose call spilled the keystream; mutation: removing either brings back 10 and 3 unlisted moves; `src/c/avx512/ama_sha3_x4_avx512.c` packs in the integer domain and unrolls theta under clang (not under gcc, where unrolling realigns the frame and leaves through `LEAVE`) |
 
-The same sweep on a **clang 18.1.3** archive (all 18 targets, every one
-passing the blocking criterion) inventories a different set, because clang
-moves integer data through the floating-point domain: `MOVAPD`,
-`MOVSD` (the SSE scalar move, not the listed string move), `VMOVAPS`,
-`VMOVUPS`, `VXORPS`, `VANDNPS`, `ANDPS`, `MOVMSKPS`, `VMOVLHPS`, `SHUFPD`,
-`SHUFPS` — data movement and bitwise operations, none of them FP arithmetic,
-which is why the blocking FP class (taken from the IR operation, not the
-mnemonic) does not fire on them — plus `XSAVE` / `XRSTOR` in the dynamic
-loader's lazy-binding trampoline (`_dl_runtime_resolve_xsave`), which saves
-and restores vector registers that hold secret data across a PLT call, and
-31 branch sites. The Memcheck lane, run on the same clang archive for each of
-the eight targets those branches occur in, passes all eight, so they are
-over-approximation by this tool's coarser propagation, not secret branches.
-Every one is unlisted and open in the sense above.
+The instrument itself had two false positives, fixed and pinned: an `OR`
+with all ones or an `AND` with zero now yields an untainted result (gcc 14's
+`or rax, -1` before a public `div` carried a stale secret into the dividend;
+probe `k_ones_div`), and objdump's selector-immediate aliases of `PCLMULQDQ`
+(`pclmullqlqdq` ...) are normalised to the listed name.
 
-On **CI** (`ubuntu-latest`, Ubuntu 26.04, GNU 15.2.0, run `42394370852` at
-`27b321d`) every target passed the blocking criterion on the archive and on
-the `.so`. The inventory added `MOVHPS` and `MOVLHPS` in `kyber_cpapke_enc`,
-and a `je`/`jbe` pair in `poly_basemul` — branches the Memcheck lane in the
-same workflow passes on that build, so over-approximation again, and the
-case that showed BRANCH must follow data flow (the `je` was listed without
-the class (a) label). A **gcc 14.2.0** archive measured here passes 18/18
-with the gcc 13 set plus a third `MOVHLPS`. The inventory is a property of
-the compiler as much as of the source, which is the reason it is a
-measurement and not a list to block on.
+Extending the targets to every secret-handling primitive found more, also
+cured at source and pinned by the drivers that found them
+(`check_ghash_constant_time.py --taint`):
 
-Clearing a row means changing the code generation (or obtaining a vendor
-statement), not adding it to a list.
+* **ML-DSA** (`ml-dsa-sign`, 64 Memcheck reports before): MakeHint
+  short-circuited on the secret r0, so a rejected attempt's timing said which
+  clause fired -- now branch-free; the hint positions of every attempt,
+  rejected ones included, were written at a secret-dependent index -- now
+  the bits go to fixed slots and are packed only once the attempt is
+  accepted; and the values FIPS 204 publishes or that decide only a
+  discarded candidate are declassified at their computation: rho, c~, the
+  accepted z and hint, each per-attempt rejection decision (FIPS 204 sec.
+  3.6.1 note 3: signing's timing leakage is information about the message,
+  not the private key) and each RejBoundedPoly accept bit (the accept pattern
+  of uniform nibbles carries no information about any accepted coefficient).
+* **ML-KEM key generation** (`ml-kem-keygen`): rho, the encapsulation key's
+  trailing field, declassified before SampleNTT.
+* **FROST** (`frost-sign`): the zero-scalar, consumed-nonce and
+  own-commitment verdicts it returns as errors, declassified.
+* **Bulk AEAD decryption** (`aead-bulk`): the tag verdict that bounds the
+  decryption (so a forgery writes no plaintext) is the `VERIFY_FAILED` the
+  function returns; declassified in the scalar, AES-NI, VAES, NEON and
+  ChaCha20-Poly1305 decrypts.
+
+**Measured, 2026-11-08 (x86-64):** all 24 targets (the 18 above, plus
+`ml-dsa-sign`, `ml-kem-keygen`, `hkdf`, `frost-sign`, `aead-bulk` and the
+operand-only `argon2id`) pass the blocking gate on the archive under gcc
+13.3.0, gcc 14.2.0 and clang 18.1.3; `aead-bulk` also pinned to
+`aes-gcm-aesni`, the pin confirmed by the dispatcher; 12 targets on the LTO
+shared object; the static listing of the production AVX-512 Keccak and VAES
+GCM objects under gcc and clang. CI (`dudect.yml`, `secret-operand-check`
+and `secret-operand-check-arm64`) runs every one of these, fail-closed.
 
 ### Mutation evidence (section 6.2)
 
@@ -469,7 +491,7 @@ decapsulation: the KyberSlash site), and was reverted after the run.
 | Division | `quotient = n / q` with `q` volatile | FAIL: 24 `div` sites, class DIV, in `poly_compress` and its inlined copies in `kyber_decapsulate_internal`; also FAIL on the LTO shared object (`div rcx` at `poly_compress+0xfe`) |
 | Floating point | `(double)quotient * one`, `one` volatile | FAIL: `cvtsi2sd`, `mulsd`, `cvttsd2si`, class FP, 24 sites each |
 | Square root | `sqrt((double)q * (double)q)` | FAIL: `sqrtsd` ×16 and `sqrtpd` ×4 (gcc vectorised one copy), class SQRT, plus the conversions as FP |
-| Multiply | `quotient * one`, `one` volatile | PASS by default (the vendor lists admit integer multiply); with `--deny IMUL,MUL,MULX --require-listed` FAIL; the planted run carries 44 two-register `imul` sites against the unplanted run's 20 under the same flags, and the 24 added are in `poly_compress` (16) and `kyber_decapsulate_internal` (8), the same 24 inlined copies the divide plant hit |
+| Multiply | `quotient * one`, `one` volatile | PASS by default (the vendor lists admit integer multiply); with `--deny IMUL,MUL,MULX` FAIL; the planted run carries 44 two-register `imul` sites against the unplanted run's 20 under the same flags, and the 24 added are in `poly_compress` (16) and `kyber_decapsulate_internal` (8), the same 24 inlined copies the divide plant hit |
 
 `tests/test_ct_operand_gate.py` pins the instrument itself on a small
 program (in CI from `ci.yml`'s `security-checks` job, the one pytest lane that
@@ -480,27 +502,29 @@ blocking class, and a divide of a declassified value is not recorded.
 
 ### Tiers analysed, and not
 
-* **Analysed:** x86-64 under Valgrind's CPU model, which exposes AVX2 and
-  not AVX-512: the default dispatch wiring on that model (AVX2 Kyber and
-  ML-DSA NTT, the BMI2 scalar Keccak, the AVX2 Ed25519 niels-select fold,
-  scalar X25519), on the archive and the shipped `.so` with gcc 13.3.0 and,
-  in CI, gcc 15.2.0; and on the archive with gcc 14.2.0 and clang 18.1.3
-  (measured here, not in CI).
-* **Not analysed:** every AVX-512 and VAES kernel (Valgrind does not
-  implement AVX-512, and no hosted runner is guaranteed to carry it);
-  the AES-NI / PCLMULQDQ AES-GCM kernels (the AES-GCM drivers force the
-  scalar path); the opt-in AVX2 X25519 batch kernel; scalar tiers that the
-  default wiring replaces; clang in CI, and the clang shared object; and
-  **all of AArch64** — NEON, the
-  Crypto Extensions and SVE2. The tool and the gate are written for
-  `arm64-linux` and the Arm list is in place, but this PR could not run
-  Valgrind on AArch64 and does not wire an unvalidated lane: running
-  `tools/check_ct_operand.py` on an AArch64 host with Valgrind (SVE2 still
-  excluded, since Valgrind does not implement SVE) is what it takes.
-* **Not executed by any driver:** Argon2id's password-dependent addressing,
-  whose divide `J2 % lanes` is on a secret dividend by RFC 9106's design
-  (the drivers deliberately do not taint the password; see
-  `tools/check_secret_division.py`).
+* **Analysed, dynamically (x86-64, Valgrind's CPU model: AVX2, AES-NI,
+  PCLMULQDQ, no AVX-512):** the default dispatch wiring on that model (AVX2
+  Kyber and ML-DSA NTT, BMI2 Keccak, AVX2 Keccak x4, the AVX2 Ed25519
+  niels-select fold, AVX2 ChaCha20 x8 and Argon2 G, AES-NI + PCLMULQDQ GCM),
+  plus the scalar AES-GCM the `ghash` and `aead-verify` drivers force and
+  the AES-NI tier pinned; on the archive under gcc and clang and on the
+  shipped `.so`.
+* **Analysed, dynamically (AArch64, natively on `ubuntu-24.04-arm`):** the
+  same targets against Arm's DIT list, on the NEON and Crypto Extensions
+  tiers that runner's dispatcher selects.
+* **Analysed, statically:** the AVX-512 Keccak x4 and the VAES AES-GCM
+  kernels, every instruction of their production objects, under gcc and
+  clang. This settles class (c) for them as an over-approximation; their
+  classes (a) and (b) are not dynamically checked, because nothing here
+  executes them under taint. They are functionally checked on AVX-512
+  hardware (`kat_sweep__sha3-avx512x4__*`, `test_aes_gcm_vaes_equiv`).
+* **Not analysed:** SVE2 (Valgrind implements no SVE); scalar tiers the
+  default wiring replaces, except where a `--dispatch-only` pin exists; the
+  opt-in AVX2 X25519 batch kernel's alternative selections; MSVC builds.
+* **Argon2id** (`argon2id`, operand-only): its memory addressing is
+  data-dependent by RFC 9106's design, which no implementation can remove, so
+  it is not a Memcheck taint target; how the index is computed is
+  implementation, and class (c) and the branch question are checked.
 
 ### Runtime modes: DOITM and PSTATE.DIT
 

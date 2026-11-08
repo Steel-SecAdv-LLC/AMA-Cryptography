@@ -177,6 +177,35 @@ else()
             message(STATUS "x86-64 baseline: compiler default is ABOVE baseline; pinned -march=x86-64 -mtune=generic (overrides it)")
         endif()
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=x86-64 -mtune=generic")
+
+        # String-operation expansion: no REP MOVSQ / REP STOSQ.
+        #
+        # GCC expands bounded memcpy/memset inline, and on x86-64 its default
+        # strategy is REP MOVSQ / REP STOSQ.  Those copy secrets here (the
+        # SHA-2/SHA-3 buffer and state copies, measured by
+        # tools/check_ct_operand.py) and neither is on Intel's
+        # Data Operand Independent Timing list, which names the REP forms only
+        # at byte, word and doubleword width.  This pins the expansion to
+        # unrolled MOV loops up to 256 bytes and REP MOVSB / REP STOSB above
+        # that -- both listed, with latency that varies only with the count,
+        # which is public at every call site.  Measured on src/c/ama_sha3.c
+        # (gcc 13.3 and 14.2, Release): 13 REP MOVSQ and 24 REP STOSQ before,
+        # none after, every memcpy/memset call inlined, object 19.7 KB ->
+        # 26.6 KB.  Clang does not accept these flags and does not emit
+        # REP MOVSQ for these copies (measured, clang 18.1.3).
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            include(CheckCCompilerFlag)
+            set(_ama_stringop
+                "-mmemcpy-strategy=unrolled_loop:256:noalign,rep_byte:-1:noalign -mmemset-strategy=unrolled_loop:256:noalign,rep_byte:-1:noalign")
+            check_c_compiler_flag("${_ama_stringop}" AMA_HAVE_STRINGOP_STRATEGY)
+            if(AMA_HAVE_STRINGOP_STRATEGY)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${_ama_stringop}")
+            else()
+                message(FATAL_ERROR
+                    "GCC rejected ${_ama_stringop}: without it, secret buffers are "
+                    "copied with REP MOVSQ/REP STOSQ, which are not on Intel's DOIT list")
+            endif()
+        endif()
     endif()
 
     # ELF link-time hardening.

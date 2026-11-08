@@ -1032,6 +1032,27 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target secp256k1-seckey
 
+      - name: HKDF must not depend on the input keying material
+        # ama_hkdf (SHA3-256) and HKDF over HMAC-SHA-256/-384/-512, through
+        # which the hybrid combiner, the agent binding and every key schedule
+        # derive keys; one IKM is longer than a block, so HMAC's key-hash path
+        # runs under the class variable too.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target hkdf
+
+      - name: Hardware AEAD tiers must not depend on the key
+        # AES-256-GCM and ChaCha20-Poly1305 over 256 bytes on the tier the
+        # dispatcher selects -- AES-NI + PCLMULQDQ GCM and the AVX2 ChaCha20 x8
+        # kernel here -- then pinned to aes-gcm-aesni, which the dispatcher
+        # must confirm.  ghash and aead-verify force the scalar AES.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk \
+            --dispatch-only aes-gcm-aesni
+
       # ---- Secret-taint lane ---------------------------------------------
       # Instruction, data-reference and cache-miss counts cannot see a
       # secret-indexed load that stays cache-resident, a conditional move on
@@ -1065,10 +1086,14 @@ jobs:
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
-                        aead-verify base64 secp256k1-seckey slhdsa-sign; do
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk --taint \
+            --dispatch-only aes-gcm-aesni
 
       # ---- Shipped machine code ------------------------------------------
       # Every gate above measures the AMA_TESTING_MODE archive with LTO off.
@@ -1170,48 +1195,128 @@ jobs:
             --lib build-shared/lib/libama_cryptography.so
 
   secret-operand-check:
-    # INVARIANT-12, leakage class (c): a secret-derived value reaching an
-    # instruction whose latency may depend on its operands.  The lanes above
-    # see branches and addresses (Memcheck taint) and instruction-sequence
-    # differences (callgrind counts); none of them sees a secret operand of a
-    # fixed instruction sequence, which is where KyberSlash lived.
-    #
-    # tools/ct_operand/ctoperand.c is a Valgrind tool on VEX IR that runs the
-    # SAME taint drivers as the Memcheck lane (and honours the same
-    # AMA_CT_DECLASSIFY points), records every instruction that consumes a
-    # tainted operand, and classifies each one twice:
-    #   - BLOCKING: the secret reached a division, floating-point or
-    #     square-root IR operation -- the classes neither Intel's DOIT list nor
-    #     Arm's DIT list admits.  Zero exemptions.
-    #   - INVENTORY: the consuming mnemonic is absent from the vendor list
-    #     (tools/ct_operand/allowlists.json).  Printed, not blocking: the
-    #     residue on this tree is compiler instruction selection (leave, cwde,
-    #     shufps, movhlps, rep movsq) that would need a standing exemption list
-    #     to block on, which AGENTS.md section 10 rejects.  The reviewed
-    #     classification is in docs/constant-time-testing.md.
-    #
-    # Verified by mutation (2026-11-07): a divide, a double multiply and a
-    # square root planted in kyber_compress_d_impl each fail this job at the
-    # planted instructions on the archive, the divide also on the LTO shared
-    # object; a planted multiply passes, as the vendor lists admit integer
-    # multiply, and is reported at its 24 inlined copies once IMUL/MUL/MULX
-    # are denied.
     name: Secret-operand instruction gate (Intel DOIT / Arm DIT lists)
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
-    # The archive sweep is eighteen instrumented runs (slhdsa-sign, two
-    # parameter sets, the longest), the shared-object sweep ten more, plus two
-    # library builds.
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install dependencies
-        # valgrind ships the tool headers and the libcoregrind/libvex
-        # archives the gate links its tool against; binutils supplies `as`
-        # (mnemonic-spelling probes), objdump and readelf.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake valgrind binutils clang
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      # Blocking, no exemptions: every instruction that consumes a secret must
+      # be on the vendor list.  A site whose only tainted use is a conditional
+      # exit (class (a)) is settled in the same run by bit-exact Memcheck on
+      # the same driver.  argon2id is an operand-only target: its addressing
+      # is data-dependent by RFC 9106, but how the index is computed is not.
+      - name: Every secret operand reaches only a vendor-listed instruction (gcc)
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+            python tools/check_ct_operand.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target"
+          done
+          python tools/check_ct_operand.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk \
+            --dispatch-only aes-gcm-aesni
+
+      # clang builds the macOS wheels; its execution-domain pass chooses FP
+      # encodings (VMOVAPS, VXORPS, SHUFPS ...) for integer data that gcc
+      # does not, so it is held to the same rule on its own build.
+      - name: Build the AMA_TESTING_MODE static library (clang)
+        run: |
+          cmake -B build-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build-clang -j"$(nproc)" --target ama_cryptography_test
+
+      - name: Every secret operand reaches only a vendor-listed instruction (clang)
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+            python tools/check_ct_operand.py --cc clang \
+              --lib build-clang/lib/libama_cryptography_test.a --target "$target"
+          done
+
+      # Valgrind executes neither AVX-512 nor VAES, so those kernels get the
+      # static listing: every instruction of the production object, secret or
+      # not, must be on Intel's list, a control transfer or padding.
+      - name: AVX-512 and VAES kernels list only vendor-listed instructions (static)
+        run: |
+          set -euo pipefail
+          for cc in gcc clang; do
+            cmake -B "build-avx512-${cc}" -DCMAKE_C_COMPILER="${cc}" \
+              -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF \
+              -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_LTO=OFF -DAMA_ENABLE_AVX512=ON
+            cmake --build "build-avx512-${cc}" -j"$(nproc)" --target ama_cryptography_static
+            python tools/check_ct_operand.py --static \
+              --lib "build-avx512-${cc}/lib/libama_cryptography_static.a" \
+              --member ama_sha3_x4_avx512.c.o --member ama_aes_gcm_vaes_avx2.c.o
+          done
+
+      - name: Build the shipped shared library (LTO on, as the wheel ships it)
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      # Targets whose branch-only sites the library declassifies at a
+      # published value need AMA_TESTING_MODE (AMA_CT_DECLASSIFY is a no-op in
+      # the shipped object), so they run on the archive above only.
+      - name: Secret-operand gate on the shipped shared object
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
+                        secp256k1-scalarmult \
+                        kyber-decaps consttime ascon-encrypt agent-binding \
+                        argon2id-verify hkdf argon2id; do
+            python tools/check_ct_operand.py \
+              --lib build-shared/lib/libama_cryptography.so \
+              --optimized-witness build-shared/CMakeCache.txt \
+              --target "$target"
+          done
+
+  # The same gate on AArch64, against Arm's DIT list.  Native, not emulated:
+  # Valgrind runs on the ubuntu-24.04-arm runners (aead-verify-invariance
+  # below uses it).  The x86-only steps (clang domain, static AVX-512) have no
+  # AArch64 counterpart; the NEON and Crypto Extensions tiers are what the
+  # dispatcher selects here.
+  secret-operand-check-arm64:
+    name: Secret-operand instruction gate (AArch64, Arm DIT list)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           .github/scripts/apt-install.sh build-essential cmake valgrind binutils
@@ -1222,44 +1327,21 @@ jobs:
           python-version: '3.12'
 
       - name: Build the AMA_TESTING_MODE static library
-        # Same configuration as ghash-scalar-invariance: Release, LTO off.
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
-      - name: No secret reaches a division, floating-point or square-root instruction
-        # Every taint driver check_ghash_constant_time.py defines.
-        run: |
-          set -euo pipefail
-          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
-                        ed25519-sign-expanded \
-                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
-                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
-                        aead-verify base64 secp256k1-seckey slhdsa-sign; do
-            python tools/check_ct_operand.py \
-              --lib build/lib/libama_cryptography_test.a --target "$target"
-          done
-
-      - name: Build the shipped shared library (LTO on, as the wheel ships it)
-        run: |
-          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
-            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
-          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
-
-      - name: Secret-operand gate on the shipped shared object
-        # The targets the Memcheck shipped-object lane runs: their drivers use
-        # only public symbols and carry no declassification point.
+      - name: Every secret operand reaches only a DIT-listed instruction
         run: |
           set -euo pipefail
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
-                        secp256k1-scalarmult \
-                        kyber-decaps consttime ascon-encrypt agent-binding \
-                        argon2id-verify; do
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
             python tools/check_ct_operand.py \
-              --lib build-shared/lib/libama_cryptography.so \
-              --optimized-witness build-shared/CMakeCache.txt \
-              --target "$target"
+              --lib build/lib/libama_cryptography_test.a --target "$target"
           done
 
   aead-verify-invariance:
@@ -1336,6 +1418,7 @@ jobs:
       - dudect-simd-sweep
       - ghash-scalar-invariance
       - secret-operand-check
+      - secret-operand-check-arm64
       - aead-verify-invariance
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -1373,6 +1456,7 @@ jobs:
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
         R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
         R_CTOPND:  ${{ needs['secret-operand-check'].result }}
+        R_CTOPNDA: ${{ needs['secret-operand-check-arm64'].result }}
         R_AEADVER: ${{ needs['aead-verify-invariance'].result }}
       run: |
         set -euo pipefail
@@ -1436,6 +1520,7 @@ jobs:
         # relevant, skipped when it is not.
         check ghash-scalar-invariance   "${R_GHASH}"   "${always_expected}"
         check secret-operand-check      "${R_CTOPND}"  "${always_expected}"
+        check secret-operand-check-arm64 "${R_CTOPNDA}" "${always_expected}"
         check aead-verify-invariance    "${R_AEADVER}" "${always_expected}"
 
         if [ "${rc}" -ne 0 ]; then

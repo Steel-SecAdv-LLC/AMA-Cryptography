@@ -223,14 +223,15 @@ static inline uint64_t load64_le(const uint8_t *p) {
  * Store 64-bit little-endian value
  */
 static inline void store64_le(uint8_t *p, uint64_t x) {
-    p[0] = (uint8_t)(x);
-    p[1] = (uint8_t)(x >> 8);
-    p[2] = (uint8_t)(x >> 16);
-    p[3] = (uint8_t)(x >> 24);
-    p[4] = (uint8_t)(x >> 32);
-    p[5] = (uint8_t)(x >> 40);
-    p[6] = (uint8_t)(x >> 48);
-    p[7] = (uint8_t)(x >> 56);
+    /* One 64-bit store, byte-swapped first on a big-endian host.  The
+     * byte-at-a-time form was auto-vectorised across lanes by gcc into SHUFPS
+     * lane shuffles of the (secret) squeezed state, and SHUFPS is not on
+     * Intel's Data Operand Independent Timing list; a whole-word store is a
+     * plain MOV.  Same construction as ama_ascon_store64. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    x = __builtin_bswap64(x);
+#endif
+    memcpy(p, &x, sizeof(x));
 }
 
 /**

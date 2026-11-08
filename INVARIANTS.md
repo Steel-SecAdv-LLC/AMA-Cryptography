@@ -728,34 +728,36 @@ constant-time gate for the new kernel from "explicitly measured"
 to "assumed to ride the all-default-dispatch lane" — exactly the
 ambiguity the close-out exists to remove.
 
-### INVARIANT-12 Addendum — No Secret Operand at a Variable-Latency Instruction
+### INVARIANT-12 Addendum — No Secret Operand Outside the Vendor Timing Lists
 
-A secret-derived value **must not** be an operand of a division,
-floating-point or square-root instruction. Those are the classes neither
-Intel's Data Operand Independent Timing list nor Arm's DIT list admits on any
-supported target (x86-64, AArch64); the lists, their sources and how they
-were read are in `tools/ct_operand/allowlists.json`.
+A secret-derived value **must not** be an operand of any instruction that
+Intel's Data Operand Independent Timing list (x86-64) or Arm's DIT list
+(AArch64) does not name. No list admits a division, floating-point
+arithmetic or a square root on any supported target. The lists, their
+sources and how they were read are in `tools/ct_operand/allowlists.json`.
 
-**Enforcement:** `tools/check_ct_operand.py`, the `secret-operand-check` job
-of `dudect.yml`, fail-closed. A Valgrind tool on VEX IR
+**Enforcement:** `tools/check_ct_operand.py`, the `secret-operand-check` and
+`secret-operand-check-arm64` jobs of `dudect.yml`, fail-closed, with no
+exemption mechanism. A Valgrind tool on VEX IR
 (`tools/ct_operand/ctoperand.c`) runs every Memcheck taint driver, honours
 the same `AMA_CT_DECLASSIFY` points, and records each instruction that
-consumes a tainted operand with the IR class of the operation that consumed
-it; any DIV, FP or SQRT class fails, with no exemption mechanism. It runs on
-the `AMA_TESTING_MODE` archive and on the LTO shared object, on x86-64; each
-class was shown to fail by a planted defect in `kyber_compress_d_impl`, and
-`tests/test_ct_operand_gate.py` pins the instrument. Consuming instructions
-the vendor list does not name are printed as an inventory and do not block:
-the residue is compiler instruction selection that only a standing exemption
-list could pass, which AGENTS.md section 10 forbids; the reviewed inventory
-is in `docs/constant-time-testing.md`, and `--require-listed` blocks on it.
+consumes a tainted operand; the run fails on any such instruction the list
+does not name. A site whose only use is a conditional exit is class (a) and
+is settled in the same run by bit-exact Memcheck on the same driver. It runs
+on the `AMA_TESTING_MODE` archive under gcc and clang, on the LTO shared
+object, and natively on AArch64; the AVX-512 and VAES kernels, which
+Valgrind cannot execute, are held to the same rule statically over every
+instruction of their production objects (`--static`). Argon2id is checked
+as an operand-only target, its data-dependent addressing being RFC 9106's.
+`tests/test_ct_operand_gate.py` pins the instrument, the verdict rule and
+the wiring; each class was shown to fail by a planted defect.
 
 **Limit, stated.** The vendor lists hold only in the vendor's timing mode
 (Intel DOITM, Arm PSTATE.DIT). The library reports that mode
 (`ama_ct_hw_mode_status`, `tests/c/test_ct_hw_mode.c`) and can set
 PSTATE.DIT for the calling thread; it cannot set or read DOITM, which needs
-privilege. AArch64 is not yet analysed by the gate, and the gate says nothing
-about power, electromagnetic, acoustic, fault, speculative or
+privilege. SVE2 is not analysed (Valgrind implements no SVE), and the gate
+says nothing about power, electromagnetic, acoustic, fault, speculative or
 frequency-scaling channels.
 
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions

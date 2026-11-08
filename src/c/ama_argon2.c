@@ -508,6 +508,31 @@ static void argon2_G_xor(ama_argon2_g_fn g_fn,
  * slices (slices 0 and 1), and data-dependent indexing elsewhere.
  * ============================================================================ */
 
+/* High 64 bits of a * b for b < 2^32, from 64-bit products only (no
+ * __int128, so MSVC builds it too).  Both partial products are below
+ * 2^64 - 2^33 + 1 and (lo >> 32) is below 2^32, so the sum cannot wrap. */
+static inline uint64_t argon2_mulhi_u64_u32(uint64_t a, uint32_t b) {
+    const uint64_t lo = (a & 0xFFFFFFFFu) * b;
+    const uint64_t hi = (a >> 32) * b;
+    return (hi + (lo >> 32)) >> 32;
+}
+
+/* n mod d for a SECRET n and a public d >= 1, without a division on n.
+ * Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation" (2019),
+ * fastmod_u32: with c = floor((2^64 - 1) / d) + 1, n mod d is the high half
+ * of (c * n mod 2^64) * d, exactly, for every 32-bit n and d.  (d = 1 gives
+ * c = 0 and remainder 0.)  The division that forms c is on the public d. */
+static inline uint32_t argon2_ct_mod_u32(uint32_t n, uint32_t d) {
+    const uint64_t c = UINT64_MAX / d + 1u;
+    return (uint32_t)argon2_mulhi_u64_u32(c * n, d);
+}
+
+/* All-ones when a == b, else zero, without a branch. */
+static inline uint32_t argon2_eq_mask(uint32_t a, uint32_t b) {
+    const uint32_t x = a ^ b;
+    return ((x | (0u - x)) >> 31) - 1u;
+}
+
 /**
  * Generate pseudo-random index for block reference.
  *
@@ -519,6 +544,17 @@ static void argon2_G_xor(ama_argon2_g_fn g_fn,
  * @param segment_length Length of one segment
  * @param pseudo_rand The pseudo-random value J1||J2 to use for indexing
  * @return The reference block index
+ *
+ * The reference block's position is data-dependent BY SPECIFICATION in
+ * Argon2id once the first half of the first pass is done (RFC 9106 sec.
+ * 3.4.1.2): J1 and J2 are then words of the previous block, which derive from
+ * the password.  The ADDRESS that results is the algorithm.  Dividing to get
+ * it is not: `J2 % lanes` and `(start + z) % lane_length` were DIV
+ * instructions on password-derived operands, whose latency depends on the
+ * dividend, and no vendor data-independent-timing list admits a divide
+ * (tools/check_ct_operand.py --target argon2id).  Both are reductions by a
+ * public modulus, done here without a division on the secret; the result is
+ * bit-identical, so every RFC 9106 test vector is unchanged.
  */
 static uint32_t argon2_index_alpha(
     uint32_t pass, uint32_t slice, uint32_t index,
@@ -528,16 +564,22 @@ static uint32_t argon2_index_alpha(
     uint32_t J1 = (uint32_t)(pseudo_rand & 0xFFFFFFFF);
     uint32_t J2 = (uint32_t)(pseudo_rand >> 32);
 
-    /* Determine reference lane */
+    /* Determine reference lane.  pass and slice are public. */
     uint32_t ref_lane;
     if (pass == 0 && slice == 0) {
         ref_lane = lane;
     } else {
-        ref_lane = J2 % lanes;
+        ref_lane = argon2_ct_mod_u32(J2, lanes);
     }
 
-    /* Determine reference set size */
+    /* Determine reference set size.  Whether the reference lane is the
+     * current one depends on J2, so it selects by mask, not by branch:
+     * `same` adds the current segment's blocks so far, `!same` excludes the
+     * last block of the previous segment when this is the segment's first. */
     uint32_t lane_length = segment_length * ARGON2_SYNC_POINTS;
+    const uint32_t same = argon2_eq_mask(ref_lane, lane);
+    const uint32_t other_tail = (index == 0) ? (uint32_t)-1 : 0;
+    const uint32_t tail = (same & (index - 1u)) | (~same & other_tail);
     uint32_t reference_area_size;
 
     if (pass == 0) {
@@ -546,19 +588,11 @@ static uint32_t argon2_index_alpha(
             /* First slice: only reference blocks in current segment, current lane */
             reference_area_size = index - 1;
         } else {
-            if (ref_lane == lane) {
-                reference_area_size = slice * segment_length + index - 1;
-            } else {
-                reference_area_size = slice * segment_length + ((index == 0) ? (uint32_t)-1 : 0);
-            }
+            reference_area_size = slice * segment_length + tail;
         }
     } else {
         /* Subsequent passes: can reference all blocks except current */
-        if (ref_lane == lane) {
-            reference_area_size = lane_length - segment_length + index - 1;
-        } else {
-            reference_area_size = lane_length - segment_length + ((index == 0) ? (uint32_t)-1 : 0);
-        }
+        reference_area_size = lane_length - segment_length + tail;
     }
 
     /* Map J1 to an index in the reference area */
@@ -566,7 +600,7 @@ static uint32_t argon2_index_alpha(
     uint64_t y = (reference_area_size * (x >> 32));
     uint64_t z = reference_area_size - 1 - (y >> 32);
 
-    /* Determine starting position of reference area */
+    /* Determine starting position of reference area (public operands). */
     uint32_t start;
     if (pass == 0) {
         start = 0;
@@ -574,7 +608,11 @@ static uint32_t argon2_index_alpha(
         start = ((slice + 1) * segment_length) % lane_length;
     }
 
-    uint32_t abs_index = (uint32_t)((start + z) % lane_length);
+    /* start < lane_length and z < reference_area_size <= lane_length, so the
+     * sum is below 2 * lane_length and one masked subtraction reduces it. */
+    const uint64_t sum = (uint64_t)start + z;
+    const uint64_t ge = 1u - ((sum - lane_length) >> 63);
+    uint32_t abs_index = (uint32_t)(sum - ge * lane_length);
     return ref_lane * lane_length + abs_index;
 }
 

@@ -704,6 +704,10 @@ class TestCalibration:
             # The private-key PEM / JWK codec, and BIP32's private child step.
             "base64",
             "secp256k1-seckey",
+            # HKDF over SHA3-256 and HMAC-SHA-2; the hardware AEAD tiers
+            # (AES-NI + PCLMULQDQ GCM, AVX2 ChaCha20 x8), unpinned and pinned.
+            "hkdf",
+            "aead-bulk",
         }
     )
 
@@ -922,6 +926,8 @@ ENTRY_POINTS: dict[str, str] = {
     # Decode is the side that reads secret CHARACTERS; the driver round-trips.
     "base64": "ama_base64_decode",
     "secp256k1-seckey": "ama_secp256k1_seckey_tweak_add",
+    "hkdf": "ama_hkdf_sha256",
+    "aead-bulk": "ama_aes256_gcm_encrypt",
 }
 
 
@@ -1000,6 +1006,14 @@ class TestEveryTargetMeasuresItsEntryPoint:
 #: fail a correct implementation; the taint target is its blocking instrument.
 TAINT_ONLY_ENTRY_POINTS: dict[str, str] = {
     "slhdsa-sign": "ama_slhdsa_sign",
+    # Rejection sampling (FIPS 204 Algorithm 7) varies the work per key and
+    # message; ExpandA from rho varies key generation's.
+    "ml-dsa-sign": "ama_ml_dsa_sign_ctx",
+    # SampleNTT rejection-samples A from rho, which derives from the seed.
+    "ml-kem-keygen": "ama_kyber_keypair_from_seed",
+    # Binding factors hash the group public key, the image of the secret, and
+    # feed the variable-time public-point multiply.
+    "frost-sign": "ama_frost_round2_sign",
 }
 
 

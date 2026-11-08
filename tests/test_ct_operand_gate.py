@@ -15,8 +15,10 @@ in four distinct places, each pinned here:
    NOT the listed string ``MOVSD``); a wrong rule passes or fails the wrong
    instruction.
 3. **The verdict.**  A division, floating-point or square-root class on a
-   tainted operand fails; an unlisted mnemonic is inventoried and does not;
-   an unresolvable site or an empty run is inconclusive, never a pass.
+   tainted operand fails; so does an unlisted mnemonic (``--inventory`` only
+   reports it); a branch-only site passes only when a bit-exact Memcheck run
+   of the same driver reports nothing; an unresolvable site, an empty run or
+   an unadjudicated branch is inconclusive, never a pass.
 4. **The instrument itself.**  The Valgrind tool is built and run on a small
    program that feeds a secret to a divide, a double multiply, a square root
    and a multiply, and the same operations a public value: the report must
@@ -26,13 +28,17 @@ in four distinct places, each pinned here:
 from __future__ import annotations
 
 import ast
+import dataclasses
 import importlib.util
 import json
+import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -154,6 +160,11 @@ class TestAllowlists:
         ("notrack jmp rax", "JMP"),
         ("div    rcx", "DIV"),
         ("vpmuludq ymm0,ymm1,ymm2", "VPMULUDQ"),
+        # objdump's selector-immediate aliases of PCLMULQDQ are one instruction.
+        ("pclmullqlqdq xmm1,xmm2", "PCLMULQDQ"),
+        ("pclmulhqhqdq xmm1,xmm2", "PCLMULQDQ"),
+        ("pclmullqhqdq xmm1,xmm2", "PCLMULQDQ"),
+        ("vpclmulhqlqdq ymm0,ymm1,ymm2", "VPCLMULQDQ"),
     ],
 )
 def test_x86_canonical(gate: ModuleType, text: str, expected: str) -> None:
@@ -235,6 +246,113 @@ class TestProbeTexts:
         assert gate.probe_texts(dump, 2) == ["cmove  rax,rbx", "sete   al"]
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership and modes")
+class TestToolCache:
+    """The staged tool is executed, so its cache must be private to the caller."""
+
+    def test_the_default_is_per_user_not_the_shared_temporary_directory(
+        self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+        assert gate.default_cache() == tmp_path / "xdg" / "ama-ctoperand"
+        monkeypatch.delenv("XDG_CACHE_HOME")
+        assert gate.default_cache() == Path.home() / ".cache" / "ama-ctoperand"
+        assert Path(tempfile.gettempdir()) not in gate.default_cache().parents
+
+    def test_a_new_cache_is_created_private(self, gate: ModuleType, tmp_path: Path) -> None:
+        cache = tmp_path / "new" / "cache"
+        gate._require_private_dir(cache)
+        assert stat.S_IMODE(cache.stat().st_mode) & 0o077 == 0
+
+    @pytest.mark.parametrize("where", ["cache", "stage"])
+    def test_a_group_or_world_writable_directory_is_refused(
+        self, gate: ModuleType, tmp_path: Path, where: str
+    ) -> None:
+        cache = tmp_path / "cache"
+        stage = cache / "vglib-amd64-linux"
+        stage.mkdir(parents=True, mode=0o700)
+        cache.chmod(0o700)
+        (cache if where == "cache" else stage).chmod(0o777)
+        # Refused before Valgrind is looked up or anything staged is trusted.
+        with pytest.raises(ValueError, match="writable by group or others"):
+            gate.build_tool("x86_64", cache)
+
+    def test_a_symlinked_stage_is_refused(self, gate: ModuleType, tmp_path: Path) -> None:
+        cache = tmp_path / "cache"
+        cache.mkdir(mode=0o700)
+        elsewhere = tmp_path / "planted"
+        elsewhere.mkdir(mode=0o700)
+        (cache / "vglib-amd64-linux").symlink_to(elsewhere)
+        with pytest.raises(ValueError, match="not a plain directory"):
+            gate.build_tool("x86_64", cache)
+
+    def test_another_users_directory_is_refused(
+        self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = tmp_path / "cache"
+        cache.mkdir(mode=0o700)
+        owner = cache.stat().st_uid
+        monkeypatch.setattr(gate.os, "getuid", lambda: owner + 1)
+        with pytest.raises(ValueError, match="owned by uid"):
+            gate.build_tool("x86_64", cache)
+
+
+_STATIC_PROBE = """
+        .intel_syntax noprefix
+        .text
+        .globl static_probe
+static_probe:
+        endbr64
+        vpxor   ymm0, ymm1, ymm2
+        vpshufb ymm3, ymm4, ymm5
+        test    rdi, rdi
+        jne     1f
+        nop
+        xchg    ax, ax
+        vmovaps ymm0, YMMWORD PTR [rsp]
+1:      ret
+"""
+
+
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("x86_64", "amd64") or not shutil.which("as"),
+    reason="assembles an x86-64 probe with GNU as",
+)
+class TestStaticListing:
+    """The AVX-512/VAES lane: no taint, every instruction held to the list."""
+
+    def test_only_the_unlisted_data_instruction_is_reported(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        src = tmp_path / "probe.s"
+        obj = tmp_path / "probe.o"
+        src.write_text(_STATIC_PROBE, encoding="utf-8")
+        subprocess.run(["as", "-o", str(obj), str(src)], check=True)
+        allowed, _ = gate.load_allowlist("x86_64")
+        spell_dir = tmp_path / "spellings"
+        spell_dir.mkdir()
+        counts, bad = gate.static_listing(
+            [obj], allowed, gate.derive_x86_spellings(allowed, spell_dir)
+        )
+        # The listed SIMD logic, the control transfers and the padding pass;
+        # the FP-domain move clang emitted for a stack copy of round keys
+        # (src/c/avx2/ama_aes_gcm_vaes_avx2.c) does not.
+        assert [name for _, name, _ in bad] == ["VMOVAPS"], bad
+        assert {"VPXOR", "VPSHUFB", "JNE", "RET", "NOP", "ENDBR64"} <= set(counts)
+
+    def test_a_missing_member_is_inconclusive(self, gate: ModuleType, tmp_path: Path) -> None:
+        archive = tmp_path / "lib.a"
+        obj = tmp_path / "probe.o"
+        src = tmp_path / "probe.s"
+        src.write_text(_STATIC_PROBE, encoding="utf-8")
+        subprocess.run(["as", "-o", str(obj), str(src)], check=True)
+        subprocess.run(["ar", "rcs", str(archive), str(obj)], check=True)
+        status = gate.main(
+            ["--static", "--lib", str(archive), "--member", "ama_sha3_x4_avx512.c.o"]
+        )
+        assert status == 2
+
+
 # ---------------------------------------------------------------------------
 # 3. IR classes and the verdict
 # ---------------------------------------------------------------------------
@@ -251,6 +369,13 @@ class TestProbeTexts:
         ("Iop_MulF64", "FP"),
         ("Iop_Add32Fx4", "FP"),
         ("Iop_I64StoF64", "FP"),
+        ("Iop_F32toI32Sx4_RZ", "FP"),
+        ("Iop_RoundF64toIntE", "FP"),
+        # Width-less conversions out of FP: not spelled this way by any VEX
+        # release through 3.26, but the table follows the installed header.
+        ("Iop_FtoI32Sx4_RZ", "FP"),
+        ("Iop_FtoI32Ux4_RZ", "FP"),
+        ("Iop_QFtoI32Sx4_RZ", "FP"),
         ("Iop_ReinterpF64asI64", None),
         ("Iop_CmpORD32U", None),
         ("Iop_MullU64", None),
@@ -359,6 +484,32 @@ class TestVerdict:
         verdict = _classify(gate, _report(["site 0x40 1 0x40 0x0 obj", "  at f"]), {})
         assert len(verdict.unresolved) == 1
 
+    def test_the_outcome_rule(self, gate: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(gate, "load_segments", lambda obj: [(0, 0, 1 << 20)])
+        bits = gate.CLASS_BITS
+
+        def verdict(mnemonic: str, classes: int) -> Any:
+            return _classify(
+                gate,
+                _report([f"site 0x50 1 0x50 {classes:#x} obj", "  at f"]),
+                {0x50: f"f+0x0\t{mnemonic}"},
+            )
+
+        listed = verdict("imul   rax,rbx", bits["OTHER"])
+        unlisted = verdict("cwde", bits["OTHER"])
+        branch = verdict("je     10 <f>", bits["BRANCH"])
+        division = verdict("div    rcx", bits["DIV"] | bits["OTHER"])
+        assert gate.outcome(listed, None, False)[0] == 0
+        assert gate.outcome(division, None, True)[0] == 1
+        # An unlisted mnemonic blocks; --inventory reports it and passes.
+        assert gate.outcome(unlisted, None, False)[0] == 1
+        assert gate.outcome(unlisted, None, True)[0] == 0
+        # A branch-only site is decided by Memcheck, never by its label.
+        assert gate.outcome(branch, None, False)[0] == 2
+        assert gate.outcome(branch, 0, False)[0] == 0
+        assert gate.outcome(branch, 3, False)[0] == 1
+        assert gate.outcome(branch, 3, True)[0] == 1
+
     def test_a_missing_library_is_inconclusive(self, gate: ModuleType, tmp_path: Path) -> None:
         assert gate.main(["--lib", str(tmp_path / "absent.a"), "--target", "x25519"]) == 2
 
@@ -386,6 +537,15 @@ __attribute__((noinline)) int h_branch(uint64_t a, uint64_t b) {
                      "1: mov $1, %0\n2:\n" : "=r"(r) : "r"(a), "r"(b) : "cc");
     return r;
 }
+/* rax holds the secret, then `or $-1` makes it a constant: the divide that
+ * follows has public operands only (gcc 14 builds UINT64_MAX this way before
+ * dividing by a public modulus in src/c/ama_argon2.c). */
+__attribute__((noinline)) uint64_t k_ones_div(uint64_t a, uint64_t d) {
+    uint64_t q;
+    __asm__ volatile("mov %1, %%rax\n\tor $-1, %%rax\n\txor %%edx, %%edx\n\tdiv %2\n\tmov %%rax, %0"
+                     : "=r"(q) : "r"(a), "r"(d) : "rax", "rdx", "cc");
+    return q;
+}
 int main(void) {
     volatile uint64_t seed = 12345, seven = 7;
     volatile double scale = 1.5;
@@ -399,10 +559,14 @@ int main(void) {
     volatile uint64_t r4 = f_mul(secret, seven);
     volatile uint64_t r5 = g_div(declassified, seven);
     volatile int r6 = h_branch(secret, seven);
-    (void)r1; (void)r2; (void)r3; (void)r4; (void)r5; (void)r6;
+    volatile uint64_t r7 = k_ones_div(secret, seven);
+    (void)r1; (void)r2; (void)r3; (void)r4; (void)r5; (void)r6; (void)r7;
     return 0;
 }
 """
+
+
+_ENCODINGS = {"sse": ["-mno-avx"], "vex": ["-mavx"]}
 
 
 @pytest.mark.requires_memcheck
@@ -410,9 +574,9 @@ int main(void) {
     platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe's expectations are written for the x86-64 lifting",
 )
-@pytest.mark.parametrize("encoding", [[], ["-mavx"]], ids=["sse", "vex"])
+@pytest.mark.parametrize("encoding", sorted(_ENCODINGS))
 def test_the_tool_reports_each_class_on_the_secret_sites_only(
-    gate: ModuleType, tmp_path: Path, encoding: list[str]
+    gate: ModuleType, tmp_path: Path, encoding: str
 ) -> None:
     if (
         not shutil.which("valgrind")
@@ -423,9 +587,12 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
     src = tmp_path / "probe.c"
     exe = tmp_path / "probe"
     src.write_text(_PROBE, encoding="utf-8")
-    # Both encodings on every host: `-mavx` makes gcc emit the VEX forms
-    # (vdivsd, vmulsd, vsqrtsd ...) a newer default target produces anyway.
-    subprocess.run(["gcc", "-O2", "-g", *encoding, str(src), "-o", str(exe), "-lm"], check=True)
+    # Both encodings on every host, each selected explicitly: CI's Ubuntu 26.04
+    # gcc emits the VEX forms (vmulsd, vsqrtsd ...) with no flag at all, so an
+    # empty flag list would make both cases VEX and leave SSE lifting untested.
+    subprocess.run(
+        ["gcc", "-O2", "-g", *_ENCODINGS[encoding], str(src), "-o", str(exe), "-lm"], check=True
+    )
     text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
     assert text is not None
     report = gate.parse_report(text)
@@ -479,7 +646,62 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
     assert "DIV" in blocking.get("f_div", set()), blocking
     assert "FP" in blocking.get("f_fp", set()), blocking
     assert "SQRT" in blocking.get("f_sqrt", set()), blocking
-    assert not {"f_mul", "g_div", "h_branch"} & set(blocking), blocking
+    # k_ones_div divides only after `or $-1` replaced the secret in rax.
+    assert not {"f_mul", "g_div", "h_branch", "k_ones_div"} & set(blocking), blocking
+    # Each case ran the encoding it is named for -- held against the NAME, not
+    # the flags, so a wrong flag fails here: every blocking FP or SQRT
+    # instruction is VEX (V-prefixed) in "vex" and none is in "sse".
+    fp_mnemonics = {
+        mnemonic
+        for site, mnemonic, _ in verdict.class_violations
+        if site.symbol.split("+", 1)[0] in ("f_fp", "f_sqrt")
+    }
+    assert fp_mnemonics, verdict.class_violations
+    vex = {m for m in fp_mnemonics if m.startswith("V")}
+    assert vex == (fp_mnemonics if encoding == "vex" else set()), fp_mnemonics
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("x86_64", "amd64"),
+    reason="the probe's expectations are written for the x86-64 lifting",
+)
+def test_a_secret_branch_fails_through_the_memcheck_adjudication(
+    gate: ModuleType, ghash: ModuleType, tmp_path: Path
+) -> None:
+    """The probe's h_branch jumps on the secret.  The operand tool labels the
+    two jumps branch-only; the gate must not pass them on that label: the
+    bit-exact Memcheck run of the same program reports the jump, and the
+    outcome is a failure."""
+    if not shutil.which("valgrind") or not Path("/usr/include/valgrind/memcheck.h").is_file():
+        pytest.skip("valgrind or its headers are not installed")
+    stage = gate.build_tool("x86_64", tmp_path / "cache")
+    src = tmp_path / "probe.c"
+    exe = tmp_path / "probe"
+    src.write_text(_PROBE, encoding="utf-8")
+    subprocess.run(["gcc", "-O2", "-g", str(src), "-o", str(exe), "-lm"], check=True)
+    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
+    assert text is not None
+    allowed, _ = gate.load_allowlist("x86_64")
+    verdict = gate.classify(
+        gate.parse_report(text),
+        "x86_64",
+        allowed,
+        gate.derive_x86_spellings(allowed, tmp_path),
+        {"DIV", "IMUL"} & allowed,
+    )
+    branch_only = [v for v in verdict.unlisted if gate.is_branch_only(v[0].classes)]
+    # h_branch's two jumps -- and gcc's errno check in the inlined sqrt of
+    # f_sqrt (UCOMISD; JA), which branches on the same secret.
+    assert "h_branch" in {v[0].symbol.split("+", 1)[0] for v in branch_only}, branch_only
+    memcheck = ghash._run_taint(exe, tmp_path)
+    assert memcheck is not None and memcheck[0] > 0, memcheck
+    # The probe also divides by the secret, which fails first; drop those
+    # sites so what is held is the branch rule on the probe's real sites.
+    branches_alone = dataclasses.replace(verdict, class_violations=[])
+    status, reason = gate.outcome(branches_alone, memcheck[0], inventory=False)
+    assert status == 1 and "Memcheck" in reason, reason
+    assert gate.outcome(branches_alone, None, inventory=False)[0] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -487,26 +709,69 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
 # ---------------------------------------------------------------------------
 
 
-def _job() -> dict[str, Any]:
+def _job(name: str = "secret-operand-check") -> dict[str, Any]:
     workflow = yaml.safe_load(DUDECT.read_text(encoding="utf-8"))
-    job: dict[str, Any] = workflow["jobs"]["secret-operand-check"]
+    job: dict[str, Any] = workflow["jobs"][name]
     return job
 
 
-def test_the_dudect_workflow_runs_every_taint_driver_through_the_gate(ghash: ModuleType) -> None:
+def _archive_loops(job: dict[str, Any]) -> list[set[str]]:
+    """The target set of every `for target in ...` loop over the test archive."""
+    loops = []
+    for step in job["steps"]:
+        run = step.get("run", "")
+        if "libama_cryptography_test.a" not in run or "check_ct_operand" not in run:
+            continue
+        match = re.search(r"for target in (.*?); do", run.replace("\\\n", " "), re.S)
+        if match:
+            loops.append(set(match.group(1).split()))
+    return loops
+
+
+def test_the_dudect_workflow_runs_every_taint_driver_through_the_gate(
+    gate: ModuleType, ghash: ModuleType
+) -> None:
+    """Every taint driver and every operand-only driver, under gcc AND clang.
+
+    Two archive loops: the gcc build, and the clang build -- clang's
+    execution-domain pass picks encodings gcc does not, and the macOS wheels
+    are clang-built, so a target measured only under gcc is half measured."""
+    every = set(ghash._TAINT_DRIVERS) | set(gate._OPERAND_ONLY_DRIVERS)
+    loops = _archive_loops(_job())
+    assert len(loops) == 2, f"expected a gcc and a clang archive loop, found {len(loops)}"
+    for looped in loops:
+        missing = sorted(every - looped)
+        assert not missing, f"drivers an x86-64 archive loop never runs: {missing}"
     text = "\n".join(step.get("run", "") for step in _job()["steps"])
-    assert "tools/check_ct_operand.py" in text
-    archive_loop = next(
-        step["run"]
-        for step in _job()["steps"]
-        if "libama_cryptography_test.a" in step.get("run", "")
-        and "check_ct_operand" in step.get("run", "")
+    assert "--cc clang" in text
+    assert "--dispatch-only aes-gcm-aesni" in text, "the AES-NI GCM tier is never pinned"
+
+
+def test_the_aarch64_job_runs_every_driver_against_the_dit_list(
+    gate: ModuleType, ghash: ModuleType
+) -> None:
+    """The AArch64 lane, natively on ubuntu-24.04-arm.  ed25519-sign-sse2fold
+    is the one driver it does not run: it forces the x86 SSE2 niels-select
+    fold, which an AArch64 build does not contain, so there it would measure
+    ed25519-sign a second time."""
+    job = _job("secret-operand-check-arm64")
+    assert job["runs-on"] == "ubuntu-24.04-arm"
+    loops = _archive_loops(job)
+    assert len(loops) == 1
+    missing = sorted(
+        (set(ghash._TAINT_DRIVERS) | set(gate._OPERAND_ONLY_DRIVERS))
+        - {"ed25519-sign-sse2fold"}
+        - loops[0]
     )
-    match = re.search(r"for target in (.*?); do", archive_loop.replace("\\\n", " "), re.S)
-    assert match, "the archive step has no `for target in ...; do` loop"
-    looped = set(match.group(1).split())
-    missing = sorted(set(ghash._TAINT_DRIVERS) - looped)
-    assert not missing, f"taint drivers the secret-operand gate never runs: {missing}"
+    assert not missing, f"drivers the AArch64 lane never runs: {missing}"
+
+
+def test_the_avx512_and_vaes_kernels_get_the_static_listing() -> None:
+    runs = "\n".join(step.get("run", "") for step in _job()["steps"])
+    assert "--static" in runs and "-DAMA_ENABLE_AVX512=ON" in runs
+    for member in ("ama_sha3_x4_avx512.c.o", "ama_aes_gcm_vaes_avx2.c.o"):
+        assert f"--member {member}" in runs, member
+    assert "for cc in gcc clang" in runs
 
 
 def test_the_gate_also_measures_the_shipped_shared_object() -> None:
@@ -514,14 +779,16 @@ def test_the_gate_also_measures_the_shipped_shared_object() -> None:
     assert any("libama_cryptography.so" in r and "check_ct_operand" in r for r in runs)
 
 
-def test_the_job_is_fail_closed_and_aggregated() -> None:
+@pytest.mark.parametrize("name", ["secret-operand-check", "secret-operand-check-arm64"])
+def test_the_job_is_fail_closed_and_aggregated(name: str) -> None:
     workflow = yaml.safe_load(DUDECT.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["secret-operand-check"]
+    job = workflow["jobs"][name]
     assert "continue-on-error" not in job
     assert all("continue-on-error" not in step for step in job["steps"])
-    assert "secret-operand-check" in workflow["jobs"]["dudect-gate"]["needs"]
+    assert all("--inventory" not in step.get("run", "") for step in job["steps"])
+    assert name in workflow["jobs"]["dudect-gate"]["needs"]
     gate_script = "\n".join(s.get("run", "") for s in workflow["jobs"]["dudect-gate"]["steps"])
-    assert "check secret-operand-check" in gate_script
+    assert f"check {name} " in gate_script
 
 
 def test_the_instrument_tests_run_where_valgrind_is_provisioned() -> None:

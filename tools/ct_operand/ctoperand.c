@@ -447,6 +447,40 @@ static Bool is_zero_idiom(const IRExpr *ex)
     }
 }
 
+/* True when a constant operand fixes the result of `op` whatever the other
+ * operand holds: OR with all ones, AND with zero (any width).  The same
+ * bitwise "improvement" Memcheck makes (mc_translate.c), at the byte
+ * granularity this tool keeps.  Without it, gcc 14's `or rax, -1` -- how it
+ * materialises UINT64_MAX before a public `div` -- carried a stale secret
+ * from rax into the dividend, and the divide was reported. */
+static Bool const_fixes_result(IROp op, const IRExpr *c)
+{
+    if (c->tag != Iex_Const)
+        return False;
+    const IRConst *k = c->Iex.Const.con;
+    Bool ones, zero;
+    switch (k->tag) {
+    case Ico_U8:   ones = k->Ico.U8 == 0xFF;               zero = k->Ico.U8 == 0;   break;
+    case Ico_U16:  ones = k->Ico.U16 == 0xFFFF;            zero = k->Ico.U16 == 0;  break;
+    case Ico_U32:  ones = k->Ico.U32 == 0xFFFFFFFFu;       zero = k->Ico.U32 == 0;  break;
+    case Ico_U64:  ones = k->Ico.U64 == ~0ULL;             zero = k->Ico.U64 == 0;  break;
+    case Ico_V128: ones = k->Ico.V128 == 0xFFFF;           zero = k->Ico.V128 == 0; break;
+    case Ico_V256: ones = k->Ico.V256 == 0xFFFFFFFFu;      zero = k->Ico.V256 == 0; break;
+    default:
+        return False;
+    }
+    switch (op) {
+    case Iop_Or8: case Iop_Or16: case Iop_Or32: case Iop_Or64:
+    case Iop_OrV128: case Iop_OrV256:
+        return ones;
+    case Iop_And8: case Iop_And16: case Iop_And32: case Iop_And64:
+    case Iop_AndV128: case Iop_AndV256:
+        return zero;
+    default:
+        return False;
+    }
+}
+
 /* Shadow of the value of a flat expression; also returns its own input taint. */
 static IRExpr *sh_expr(Env *e, IRExpr *ex)
 {
@@ -470,7 +504,9 @@ static IRExpr *sh_expr(Env *e, IRExpr *ex)
         return r;
     }
     case Iex_Binop: {
-        if (is_zero_idiom(ex))
+        if (is_zero_idiom(ex) ||
+            const_fixes_result(ex->Iex.Binop.op, ex->Iex.Binop.arg1) ||
+            const_fixes_result(ex->Iex.Binop.op, ex->Iex.Binop.arg2))
             return F1();
         IRExpr *r = or1(e, sh_atom(e, ex->Iex.Binop.arg1), sh_atom(e, ex->Iex.Binop.arg2));
         note_class(e, ct_op_class(ex->Iex.Binop.op), r);
@@ -822,8 +858,14 @@ static IRSB *ct_instrument(VgCallbackClosure *closure, IRSB *in, const VexGuestL
                 IRExpr *s = sh_atom(&e, st->Ist.LLSC.storedata);
                 consume_other(&e, or1(&e, a, s));
                 addStmtToIRSB(e.out, st);
+                /* A failed store-conditional leaves memory unchanged, so its
+                   shadow must be left unchanged too: guarded by RESULT (Ity_I1,
+                   1 iff the store happened).  Unguarded, a public store attempt
+                   on a secret-bearing word would clear the taint the word still
+                   holds. */
                 call_st(&e, st->Ist.LLSC.addr,
-                        sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.LLSC.storedata)), s, NULL);
+                        sizeofIRType(typeOfIRExpr(in->tyenv, st->Ist.LLSC.storedata)), s,
+                        IRExpr_RdTmp(st->Ist.LLSC.result));
                 set_sh(&e, st->Ist.LLSC.result, a);
             }
             break;

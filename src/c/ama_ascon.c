@@ -63,6 +63,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "internal/ama_ct_barrier.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -321,8 +322,11 @@ static void ama_ascon_aead_init(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN]
 ) {
-    const uint64_t k0 = ama_ascon_load64(key);
-    const uint64_t k1 = ama_ascon_load64(key + 8);
+    /* Each key word from its own general-purpose load: gcc merged the two
+     * adjacent loads into one 16-byte load and split it with MOVHLPS, which
+     * is not on Intel's Data Operand Independent Timing list. */
+    const uint64_t k0 = ama_ct_value_barrier_u64(ama_ascon_load64(key));
+    const uint64_t k1 = ama_ct_value_barrier_u64(ama_ascon_load64(key + 8));
 
     s->x[0] = AMA_ASCON_IV_AEAD128;
     s->x[1] = k0;
@@ -379,8 +383,11 @@ static void ama_ascon_aead_final(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN]
 ) {
-    const uint64_t k0 = ama_ascon_load64(key);
-    const uint64_t k1 = ama_ascon_load64(key + 8);
+    /* Each key word from its own general-purpose load: gcc merged the two
+     * adjacent loads into one 16-byte load and split it with MOVHLPS, which
+     * is not on Intel's Data Operand Independent Timing list. */
+    const uint64_t k0 = ama_ct_value_barrier_u64(ama_ascon_load64(key));
+    const uint64_t k1 = ama_ct_value_barrier_u64(ama_ascon_load64(key + 8));
 
     s->x[2] ^= k0;
     s->x[3] ^= k1;

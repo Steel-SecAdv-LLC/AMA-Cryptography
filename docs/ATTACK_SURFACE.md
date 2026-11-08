@@ -19,7 +19,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 - Declared / exported entry points: **199**
 - Referenced by C tests: **197**
 - Referenced by Fuzz: **78**
-- Referenced by CT gate: **43**
+- Referenced by CT gate: **55**
 - Referenced by Python layer: **140**
 - Reached by neither a C test nor a fuzz harness: **0**
 
@@ -83,7 +83,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_ed25519_point_from_scalar` | 7 | — | — | — |
 | `ama_ed25519_sc_muladd` | 3 | — | — | — |
 | `ama_ed25519_sc_reduce` | 7 | — | — | — |
-| `ama_ed25519_scalarmult_public` | 9 | — | — | — |
+| `ama_ed25519_scalarmult_public` | 9 | — | 1 | — |
 | `ama_ed25519_set_avx2_fold_override` | 1 | — | 1 | — |
 | `ama_ed25519_set_mulx_override` | 3 | — | — | — |
 | `ama_ed25519_sha512` | 3 | — | — | — |
@@ -91,20 +91,20 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_ed25519_sign_expanded` | 2 | — | 1 | 1 |
 | `ama_ed25519_verify` | 14 | 2 | — | 4 |
 | `ama_frost_aggregate` | 1 | 1 | — | 1 |
-| `ama_frost_keygen_trusted_dealer` | 2 | 1 | — | 1 |
-| `ama_frost_round1_commit` | 2 | 2 | — | 1 |
-| `ama_frost_round2_sign` | 2 | 1 | — | 1 |
+| `ama_frost_keygen_trusted_dealer` | 2 | 1 | 1 | 1 |
+| `ama_frost_round1_commit` | 2 | 2 | 1 | 1 |
+| `ama_frost_round2_sign` | 2 | 1 | 1 | 1 |
 | `ama_frost_verify_share` | 2 | 1 | — | 1 |
 | `ama_get_dispatch_info` | 2 | — | — | — |
 | `ama_get_dispatch_table` | 17 | — | — | — |
-| `ama_hkdf` | 4 | 1 | 1 | 3 |
+| `ama_hkdf` | 4 | 1 | 2 | 3 |
 | `ama_hkdf_agent_bound` | 1 | 1 | — | 1 |
-| `ama_hkdf_sha256` | 1 | — | — | 1 |
-| `ama_hkdf_sha384` | 1 | — | — | 1 |
-| `ama_hkdf_sha512` | 1 | — | — | 1 |
-| `ama_hmac_sha256` | 1 | 2 | — | 2 |
+| `ama_hkdf_sha256` | 1 | — | 1 | 1 |
+| `ama_hkdf_sha384` | 1 | — | 1 | 1 |
+| `ama_hkdf_sha512` | 1 | — | 1 | 1 |
+| `ama_hmac_sha256` | 1 | 2 | 1 | 2 |
 | `ama_hmac_sha256_2` | 1 | — | — | 1 |
-| `ama_hmac_sha384` | 2 | — | — | 1 |
+| `ama_hmac_sha384` | 2 | — | 1 | 1 |
 | `ama_hmac_sha3_256` | 2 | — | — | 2 |
 | `ama_hmac_sha512` | 3 | — | — | 1 |
 | `ama_hss_pubkey_levels` | 1 | 1 | — | 1 |
@@ -123,13 +123,13 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_lms_signing_available` | 1 | — | — | 1 |
 | `ama_lms_verify` | 1 | 1 | — | 1 |
 | `ama_ml_dsa_keypair` | 4 | — | — | 1 |
-| `ama_ml_dsa_keypair_from_seed` | 4 | — | — | 1 |
+| `ama_ml_dsa_keypair_from_seed` | 4 | — | 1 | 1 |
 | `ama_ml_dsa_param_set_name` | 4 | — | — | 1 |
 | `ama_ml_dsa_privkey_check` | 3 | — | — | 1 |
 | `ama_ml_dsa_pubkey_from_privkey` | 4 | — | — | 1 |
 | `ama_ml_dsa_public_key_bytes` | 4 | — | — | 1 |
 | `ama_ml_dsa_secret_key_bytes` | 2 | — | — | 1 |
-| `ama_ml_dsa_sign_ctx` | 4 | — | — | 1 |
+| `ama_ml_dsa_sign_ctx` | 4 | — | 1 | 1 |
 | `ama_ml_dsa_sign_hedged` | 1 | — | — | 1 |
 | `ama_ml_dsa_signature_bytes` | 3 | — | — | 1 |
 | `ama_ml_dsa_verify_ctx` | 4 | — | — | 1 |
@@ -195,7 +195,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_sha3_final` | 2 | 1 | — | — |
 | `ama_sha3_init` | 2 | 1 | — | — |
 | `ama_sha3_update` | 2 | 1 | — | — |
-| `ama_sha512` | 1 | — | — | 1 |
+| `ama_sha512` | 1 | — | 1 | 1 |
 | `ama_shake128` | 1 | — | — | 1 |
 | `ama_shake128_inc_absorb` | 4 | 1 | — | — |
 | `ama_shake128_inc_finalize` | 4 | 1 | — | — |

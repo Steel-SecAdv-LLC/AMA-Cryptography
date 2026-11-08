@@ -43,6 +43,8 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -919,6 +921,11 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
         }
         rho = buf;
         sigma = buf + 32;
+        /* rho is the encapsulation key's trailing 32 bytes (FIPS 203
+         * Algorithm 13, ek = ByteEncode(t) || rho), and SampleNTT
+         * rejection-samples A from it by specification.  sigma stays
+         * secret. */
+        AMA_CT_DECLASSIFY(rho, 32);
 
         /* Generate matrix A from rho (in NTT domain) */
         kyber_gen_matrix(a, rho, 0, P);
@@ -1073,8 +1080,11 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
     for (i = 0; i < 32; i++) {
         unsigned int j;
         for (j = 0; j < 8; j++) {
-            mp_poly.coeffs[8*i + j] = (int16_t)(((m[i] >> j) & 1) *
-                                                  ((KYBER_Q + 1) / 2));
+            /* m is the secret message.  Per bit through a general-purpose
+             * register: vectorised, clang moved these coefficients with
+             * MOVAPD/MOVSD, which Intel's DOIT list does not include. */
+            const uint32_t bit = ama_ct_value_barrier_u32(((uint32_t)m[i] >> j) & 1u);
+            mp_poly.coeffs[8*i + j] = (int16_t)(bit * ((KYBER_Q + 1) / 2));
         }
     }
     poly_add(&v, &v, &mp_poly);
@@ -1285,7 +1295,7 @@ static ama_error_t kyber_decapsulate_internal(
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
                 /* Compress_1: round(2t/q) mod 2.  Division-free — mp is
                  * secret-key-derived, see kyber_compress_d (KyberSlash). */
-                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
+                t = (int16_t)kyber_compress_d((uint32_t)(uint16_t)t, 1);
                 m[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -1788,7 +1798,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             m_test[ii] = 0;
             for (jj = 0; jj < 8; jj++) {
                 int16_t tv = coeff_normalize(stu_man.coeffs[8*ii + jj]);
-                tv = (int16_t)kyber_compress_d((uint32_t)tv, 1);
+                tv = (int16_t)kyber_compress_d((uint32_t)(uint16_t)tv, 1);
                 m_test[ii] |= (uint8_t)((tv & 1) << jj);
             }
         }
@@ -1894,7 +1904,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             unsigned int kj;
             for (kj = 0; kj < 8; kj++) {
                 int16_t tv2 = coeff_normalize(stu3.coeffs[8*ki + kj]);
-                tv2 = (int16_t)kyber_compress_d((uint32_t)tv2, 1);
+                tv2 = (int16_t)kyber_compress_d((uint32_t)(uint16_t)tv2, 1);
                 msg_dec3[ki] |= (uint8_t)((tv2 & 1) << kj);
             }
         }
@@ -2084,7 +2094,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(stu_poly.coeffs[8*i + j]);
-                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
+                t = (int16_t)kyber_compress_d((uint32_t)(uint16_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -2135,7 +2145,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
-                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
+                t = (int16_t)kyber_compress_d((uint32_t)(uint16_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -2522,12 +2532,18 @@ int ama_ml_kem_test_params_selfcheck(void) {
  * Uses the identity: a * q^-1 mod R * q subtracted from a gives a multiple of R
  */
 static int16_t montgomery_reduce(int32_t a) {
-    int32_t t;
-    int16_t u;
-
-    u = (int16_t)((int64_t)a * 62209);  /* q^-1 mod 2^16 = 62209 */
-    t = (int32_t)u * KYBER_Q;
-    t = a - t;
+    /* u = a * q^-1 mod 2^16 (q^-1 mod 2^16 = 62209), taken here as the
+     * UNSIGNED residue ul in [0, 2^16).  The reference's signed residue is
+     * u = ul - 2^16 * (ul >> 15), so a - u*q = a - ul*q + (ul >> 15)*(q << 16):
+     * the same value, reached by integer multiply/shift/add alone.  The
+     * reference's `(int32_t)(int16_t)u` is a sign extension of a secret, which
+     * gcc emits as CWDE when u lands in AX, and CWDE is not on Intel's Data
+     * Operand Independent Timing list (tools/check_ct_operand.py measured it
+     * in poly_basemul).  Bit-identical to the reference for every |a| <= 2^30
+     * + 1 -- every int16 x int16 product, and every caller below -- checked
+     * exhaustively under UBSan; tests/c/test_kyber_montgomery.c holds it. */
+    const uint32_t ul = ((uint32_t)a * 62209u) & 0xFFFFu;
+    int32_t t = a - (int32_t)ul * KYBER_Q + (int32_t)(ul >> 15) * (KYBER_Q << 16);
     t >>= 16;
 
     return (int16_t)t;
@@ -2928,6 +2944,13 @@ static inline uint32_t kyber_compress_d_impl(uint32_t x_normalized, unsigned d) 
         return AMA_KYBER_COMPRESS_REFUSED;
     }
 
+    /* Scalar on purpose.  Vectorised, the 64-bit product below is narrowed
+     * lane-wise with SHUFPS (gcc, clang: there is no SSE2 integer narrowing
+     * of 64-bit lanes), and SHUFPS is not on Intel's Data Operand Independent
+     * Timing list; x_normalized is secret.  The barrier puts the coefficient
+     * in a general-purpose register, which the vectoriser cannot lift, at
+     * the cost of the scalar loop the reference implementation runs anyway. */
+    x_normalized = ama_ct_value_barrier_u32(x_normalized);
     n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
     quotient = (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
     /* The `mod 2^d` of the definition, applied HERE rather than left to the
@@ -2968,6 +2991,13 @@ static inline uint32_t kyber_compress_d_impl(uint32_t x_normalized, unsigned d) 
 uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d) {
     return kyber_compress_d_impl(x_normalized, d);
 }
+
+/* Test-only export of montgomery_reduce, so tests/c/test_kyber_montgomery.c
+ * holds the unsigned-residue form (no sign extension of the secret residue)
+ * bit-identical to FIPS 203's signed form, against the shipped unit. */
+int16_t ama_kyber_montgomery_reduce_for_test(int32_t a) {
+    return montgomery_reduce(a);
+}
 #endif
 
 /**
@@ -2996,8 +3026,16 @@ static void poly_frombytes(poly* r, const uint8_t* a) {
     unsigned int i;
 
     for (i = 0; i < KYBER_N / 2; i++) {
-        r->coeffs[2*i] = ((uint16_t)a[3*i] | ((uint16_t)a[3*i + 1] << 8)) & 0xFFF;
-        r->coeffs[2*i + 1] = ((uint16_t)(a[3*i + 1] >> 4) | ((uint16_t)a[3*i + 2] << 4)) & 0xFFF;
+        /* Three bytes, two 12-bit coefficients.  Assembled in one 32-bit word
+         * held in a general-purpose register (the barrier), because the
+         * vectorised form of this loop -- it decodes the secret key -- moves
+         * the coefficients with SSE MOVSD/SHUFPS under clang, which are not on
+         * Intel's Data Operand Independent Timing list. */
+        const uint32_t w = ama_ct_value_barrier_u32((uint32_t)a[3*i] |
+                                                    ((uint32_t)a[3*i + 1] << 8) |
+                                                    ((uint32_t)a[3*i + 2] << 16));
+        r->coeffs[2*i] = (int16_t)(w & 0xFFFu);
+        r->coeffs[2*i + 1] = (int16_t)((w >> 12) & 0xFFFu);
     }
 }
 
@@ -3014,7 +3052,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
         for (i = 0; i < KYBER_N / 2; i++) {
             for (j = 0; j < 2; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[2*i + j]);
-                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 4) & 0xF);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)(uint16_t)coeff, 4) & 0xF);
             }
             r[i] = (uint8_t)(t[0] | (t[1] << 4));
         }
@@ -3023,7 +3061,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
         for (i = 0; i < KYBER_N / 8; i++) {
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 5) & 0x1F);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)(uint16_t)coeff, 5) & 0x1F);
             }
             /* (uint8_t) narrowing is the packing itself: high bits of a
              * shifted 5-bit field continue in the next byte (same explicit-
@@ -3040,7 +3078,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[4];
             for (j = 0; j < 4; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[4*i + j]);
-                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 10) & 0x3FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)(uint16_t)coeff, 10) & 0x3FF);
             }
             r[5*i + 0] = (uint8_t)(d[0]);
             r[5*i + 1] = (uint8_t)((d[0] >> 8) | (d[1] << 2));
@@ -3054,7 +3092,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[8];
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 11) & 0x7FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)(uint16_t)coeff, 11) & 0x7FF);
             }
             r[11*i + 0]  = (uint8_t)(d[0]);
             r[11*i + 1]  = (uint8_t)((d[0] >> 8) | (d[1] << 3));

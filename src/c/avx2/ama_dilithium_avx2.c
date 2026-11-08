@@ -23,6 +23,7 @@
 #include <immintrin.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* MSVC needs <intrin.h> for __popcnt; GCC/Clang expose __builtin_popcount
  * unconditionally once <immintrin.h> is included. */
@@ -145,8 +146,17 @@ static inline void ntt_butterfly_dil_avx2(__m256i *a, __m256i *b, int32_t zeta) 
  * Used for len=1 scalar fallback in NTT/invNTT.
  * ============================================================================ */
 static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
+    /* The operand in a general-purpose register, so this sub-register
+     * fallback stays scalar: clang 18 auto-vectorised the len 4/2/1 layer
+     * loops and gathered the products' high dwords with VSHUFPS, which
+     * Intel's Data Operand Independent Timing list does not include
+     * (tools/check_ct_operand.py --target ml-dsa-sign). */
+    a = (int64_t)ama_ct_value_barrier_u64((uint64_t)a);
     int32_t t = (int32_t)((int64_t)(int32_t)a * DILITHIUM_QINV);
-    return (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
+    /* And the result: with only the input pinned, clang packed four
+     * iterations' reductions back into a vector after the barrier. */
+    return (int32_t)ama_ct_value_barrier_u32(
+        (uint32_t)(int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32));
 }
 
 /* ============================================================================

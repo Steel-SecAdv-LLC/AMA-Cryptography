@@ -120,37 +120,39 @@ static inline void blamka_g4(__m256i *a, __m256i *b,
 #define ROT_L2(x) _mm256_permute4x64_epi64((x), _MM_SHUFFLE(1, 0, 3, 2))
 #define ROT_L3(x) _mm256_permute4x64_epi64((x), _MM_SHUFFLE(2, 1, 0, 3))
 
-/* Apply one full BlaMka round to 16 contiguous qwords in v[].
- * Equivalent to blamka_round(v[0],...,v[15]) in the scalar path:
+/* One full BlaMka round on four register quads (a, b, c, d) = v[0..3],
+ * v[4..7], v[8..11], v[12..15].  Equivalent to blamka_round(v[0],...,v[15])
+ * in the scalar path:
  *   column-like: G(v0,v4,v8,v12) ... G(v3,v7,v11,v15)
- *   diagonal-like: G(v0,v5,v10,v15) ... G(v3,v4,v9,v14)
- */
-static inline void blamka_round16(uint64_t v[16]) {
-    __m256i a = _mm256_loadu_si256((const __m256i *)&v[0]);
-    __m256i b = _mm256_loadu_si256((const __m256i *)&v[4]);
-    __m256i c = _mm256_loadu_si256((const __m256i *)&v[8]);
-    __m256i d = _mm256_loadu_si256((const __m256i *)&v[12]);
-
+ *   diagonal-like: G(v0,v5,v10,v15) ... G(v3,v4,v9,v14) */
+static inline void blamka_round_regs(__m256i *a, __m256i *b, __m256i *c, __m256i *d) {
     /* Column-like pass: lanes already aligned. */
-    blamka_g4(&a, &b, &c, &d);
+    blamka_g4(a, b, c, d);
 
     /* Diagonal-like pass: rotate b/c/d lanes so the new 4 tuples match
      *   (v0,v5,v10,v15), (v1,v6,v11,v12), (v2,v7,v8,v13), (v3,v4,v9,v14). */
-    b = ROT_L1(b);
-    c = ROT_L2(c);
-    d = ROT_L3(d);
+    *b = ROT_L1(*b);
+    *c = ROT_L2(*c);
+    *d = ROT_L3(*d);
 
-    blamka_g4(&a, &b, &c, &d);
+    blamka_g4(a, b, c, d);
 
     /* Un-rotate: left-by-N and left-by-(4-N) are inverses mod 4. */
-    b = ROT_L3(b);
-    c = ROT_L2(c);
-    d = ROT_L1(d);
+    *b = ROT_L3(*b);
+    *c = ROT_L2(*c);
+    *d = ROT_L1(*d);
+}
 
-    _mm256_storeu_si256((__m256i *)&v[0],  a);
-    _mm256_storeu_si256((__m256i *)&v[4],  b);
-    _mm256_storeu_si256((__m256i *)&v[8],  c);
-    _mm256_storeu_si256((__m256i *)&v[12], d);
+/* Two 128-bit halves (qwords p[0..1] and q[0..1]) as one YMM register. */
+static inline __m256i load_pair2(const uint64_t *p, const uint64_t *q) {
+    return _mm256_inserti128_si256(
+        _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)p)),
+        _mm_loadu_si128((const __m128i *)q), 1);
+}
+
+static inline void store_pair2(uint64_t *p, uint64_t *q, __m256i v) {
+    _mm_storeu_si128((__m128i *)p, _mm256_castsi256_si128(v));
+    _mm_storeu_si128((__m128i *)q, _mm256_extracti128_si256(v, 1));
 }
 
 /* ============================================================================
@@ -163,6 +165,19 @@ static inline void blamka_round16(uint64_t v[16]) {
  *                   blamka_round( Z[2c+0], Z[2c+1], Z[2c+16], Z[2c+17],
  *                                 Z[2c+32], Z[2c+33], ... , Z[2c+113] )
  *   result  = R XOR Z
+ *
+ * Every XOR is fused into the round beside it: R = X ^ Y feeds the row pass
+ * in registers, and R ^ Z is taken on the column pass's output, which goes
+ * straight to `out`.  The previous layout ran each XOR, the Z = R copy and the
+ * column gather/scatter as separate load-to-store loops, and with no integer
+ * instruction on any of those chains clang 18's execution-domain pass moved
+ * them as VMOVUPS/VXORPS -- 192 consuming sites on password-derived blocks,
+ * none on Intel's Data Operand Independent Timing list
+ * (tools/check_ct_operand.py --target argon2id).  Here every chain touches
+ * the round's VPMULUDQ/VPADDQ/shift arithmetic.  The column pairs are joined
+ * and split with VINSERTI128/VEXTRACTI128 rather than through a scratch
+ * buffer.  tests/c/test_argon2_g_avx2_equiv.c holds the kernel to the scalar
+ * G; the RFC 9106 vectors hold both.
  * ============================================================================ */
 
 void ama_argon2_g_avx2(uint64_t out[128],
@@ -171,52 +186,53 @@ void ama_argon2_g_avx2(uint64_t out[128],
     uint64_t R[128];
     uint64_t Z[128];
 
-    /* R = X XOR Y (vectorized 4 qwords at a time) */
-    for (int i = 0; i < 128; i += 4) {
-        __m256i vx = _mm256_loadu_si256((const __m256i *)(x + i));
-        __m256i vy = _mm256_loadu_si256((const __m256i *)(y + i));
-        _mm256_storeu_si256((__m256i *)(R + i), _mm256_xor_si256(vx, vy));
-    }
-
-    memcpy(Z, R, sizeof(Z));
-
-    /* Row-wise BlaMka: 8 rows of 16 qwords each (contiguous). */
+    /* Row pass: R = X ^ Y, then Z = blamka_round(R) row by row. */
     for (int row = 0; row < 8; row++) {
-        blamka_round16(&Z[row * 16]);
+        const int o = row * 16;
+        __m256i a = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o)),
+                                     _mm256_loadu_si256((const __m256i *)(y + o)));
+        __m256i b = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o + 4)),
+                                     _mm256_loadu_si256((const __m256i *)(y + o + 4)));
+        __m256i c = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o + 8)),
+                                     _mm256_loadu_si256((const __m256i *)(y + o + 8)));
+        __m256i d = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)(x + o + 12)),
+                                     _mm256_loadu_si256((const __m256i *)(y + o + 12)));
+        _mm256_storeu_si256((__m256i *)(R + o), a);
+        _mm256_storeu_si256((__m256i *)(R + o + 4), b);
+        _mm256_storeu_si256((__m256i *)(R + o + 8), c);
+        _mm256_storeu_si256((__m256i *)(R + o + 12), d);
+        blamka_round_regs(&a, &b, &c, &d);
+        _mm256_storeu_si256((__m256i *)(Z + o), a);
+        _mm256_storeu_si256((__m256i *)(Z + o + 4), b);
+        _mm256_storeu_si256((__m256i *)(Z + o + 8), c);
+        _mm256_storeu_si256((__m256i *)(Z + o + 12), d);
     }
 
-    /* Column-wise BlaMka: gather non-contiguous stride-16 pairs into a
-     * scratch buffer, run blamka_round16, scatter back. The 8 column
-     * groups each take two consecutive qwords per row (2c, 2c+1). */
-    uint64_t scratch[16];
+    /* Column pass: the 16 qwords of column group `col` are the pairs
+     * (Z[2col + 16r], Z[2col + 16r + 1]) for r = 0..7, in row order, so the
+     * quads are rows (0,1), (2,3), (4,5), (6,7).  out = R ^ round(...). */
     for (int col = 0; col < 8; col++) {
-        for (int row = 0; row < 8; row++) {
-            scratch[2 * row    ] = Z[2 * col + row * 16    ];
-            scratch[2 * row + 1] = Z[2 * col + row * 16 + 1];
-        }
-
-        blamka_round16(scratch);
-
-        for (int row = 0; row < 8; row++) {
-            Z[2 * col + row * 16    ] = scratch[2 * row    ];
-            Z[2 * col + row * 16 + 1] = scratch[2 * row + 1];
-        }
+        const int o = 2 * col;
+        __m256i a = load_pair2(Z + o, Z + o + 16);
+        __m256i b = load_pair2(Z + o + 32, Z + o + 48);
+        __m256i c = load_pair2(Z + o + 64, Z + o + 80);
+        __m256i d = load_pair2(Z + o + 96, Z + o + 112);
+        blamka_round_regs(&a, &b, &c, &d);
+        store_pair2(out + o, out + o + 16, _mm256_xor_si256(a, load_pair2(R + o, R + o + 16)));
+        store_pair2(out + o + 32, out + o + 48,
+                    _mm256_xor_si256(b, load_pair2(R + o + 32, R + o + 48)));
+        store_pair2(out + o + 64, out + o + 80,
+                    _mm256_xor_si256(c, load_pair2(R + o + 64, R + o + 80)));
+        store_pair2(out + o + 96, out + o + 112,
+                    _mm256_xor_si256(d, load_pair2(R + o + 96, R + o + 112)));
     }
 
-    /* out = R XOR Z (vectorized) */
-    for (int i = 0; i < 128; i += 4) {
-        __m256i vz = _mm256_loadu_si256((const __m256i *)(Z + i));
-        __m256i vr = _mm256_loadu_si256((const __m256i *)(R + i));
-        _mm256_storeu_si256((__m256i *)(out + i), _mm256_xor_si256(vz, vr));
-    }
-
-    /* R/Z/scratch hold password-derived block material; the driver scrubs
-     * its heap matrix (ama_argon2.c) but the last invocation's stack frame
-     * would otherwise survive.  Same INVARIANT-6/12 treatment the AVX2
+    /* R and Z hold password-derived block material; the driver scrubs its
+     * heap matrix (ama_argon2.c) but the last invocation's stack frame would
+     * otherwise survive.  Same INVARIANT-6/12 treatment the AVX2
      * dilithium/AES-GCM kernels give their staging buffers. */
     ama_secure_memzero(R, sizeof(R));
     ama_secure_memzero(Z, sizeof(Z));
-    ama_secure_memzero(scratch, sizeof(scratch));
 }
 
 #else

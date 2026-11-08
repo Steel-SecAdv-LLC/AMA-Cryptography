@@ -22,6 +22,7 @@
 #include "../include/ama_dispatch.h"
 #include "../include/ama_uint128.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -916,6 +917,11 @@ ama_error_t ama_chacha20poly1305_decrypt(
      * would corrupt memory that was never written, so it is still not done.
      */
     int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it bounds
+     * the decryption below so a forgery writes no plaintext: public by
+     * contract (internal/ama_ct_declassify.h).  The comparison above is
+     * constant time; the tags and the key stay secret. */
+    AMA_CT_DECLASSIFY(&tag_match, sizeof(tag_match));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
     /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1),

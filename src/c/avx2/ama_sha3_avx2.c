@@ -29,6 +29,7 @@
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* ============================================================================
  * Keccak-f[1600] round constants
@@ -48,24 +49,6 @@ static const uint64_t RC[24] = {
     0x0000000080000001ULL, 0x8000000080008008ULL,
 };
 
-/* Rotation offsets for rho step */
-static const int ROTC[25] = {
-     0,  1, 62, 28, 27,
-    36, 44,  6, 55, 20,
-     3, 10, 43, 25, 39,
-    41, 45, 15, 21,  8,
-    18,  2, 61, 56, 14,
-};
-
-/* Pi step permutation indices */
-static const int PI[25] = {
-     0, 10, 20,  5, 15,
-    16,  1, 11, 21,  6,
-     7, 17,  2, 12, 22,
-    23,  8, 18,  3, 13,
-    14, 24,  9, 19,  4,
-};
-
 /* ============================================================================
  * AVX2-vectorized rotate left for 64-bit lanes
  * ============================================================================ */
@@ -76,74 +59,126 @@ static inline __m256i rotl64_avx2(__m256i x, int n) {
     );
 }
 
+/* rho rotation by a compile-time count; lane 0's count is 0 (no rotation). */
+static inline __m256i kx4_rot(__m256i x, int n) {
+    return n == 0 ? x : rotl64_avx2(x, n);
+}
+
 /* ============================================================================
  * 4-way parallel Keccak-f[1600] for SPHINCS+ tree hashing
  *
  * Interleaves four independent Keccak states into AVX2 registers:
  * each YMM register holds the same lane index from all four states.
  * ============================================================================ */
+/* Pack and unpack in the integer domain only.
+ *
+ * `_mm256_set_epi64x` of four memory words was lowered by clang 18 to
+ * VMOVQ/VMOVLHPS/VINSERTF128, and once the first instruction of the chain was
+ * FP-domain, clang's execution-domain pass carried the whole permutation into
+ * it: VMOVAPS spills, VXORPS theta, VANDNPS chi -- 51 consuming sites, none on
+ * Intel's Data Operand Independent Timing list (tools/check_ct_operand.py).
+ * Each lane word goes through a general-purpose register
+ * (the barrier keeps the compiler from folding the loads back into an FP
+ * load-high), then VMOVQ/VPINSRQ/VINSERTI128 build the vector and
+ * VEXTRACTI128/VPEXTRQ take it apart -- all listed, all integer, so every
+ * chain the rounds start from is integer and stays there. */
+static inline __m256i keccak_x4_pack(const uint64_t states[4][25], int i) {
+    const __m128i lo = _mm_insert_epi64(
+        _mm_cvtsi64_si128((long long)ama_ct_value_barrier_u64(states[0][i])),
+        (long long)ama_ct_value_barrier_u64(states[1][i]), 1);
+    const __m128i hi = _mm_insert_epi64(
+        _mm_cvtsi64_si128((long long)ama_ct_value_barrier_u64(states[2][i])),
+        (long long)ama_ct_value_barrier_u64(states[3][i]), 1);
+    return _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
+}
+
+static inline void keccak_x4_unpack(uint64_t states[4][25], int i, __m256i v) {
+    const __m128i lo = _mm256_castsi256_si128(v);
+    const __m128i hi = _mm256_extracti128_si256(v, 1);
+    states[0][i] = ama_ct_value_barrier_u64((uint64_t)_mm_cvtsi128_si64(lo));
+    states[1][i] = ama_ct_value_barrier_u64((uint64_t)_mm_extract_epi64(lo, 1));
+    states[2][i] = ama_ct_value_barrier_u64((uint64_t)_mm_cvtsi128_si64(hi));
+    states[3][i] = ama_ct_value_barrier_u64((uint64_t)_mm_extract_epi64(hi, 1));
+}
+
+/* One Keccak-f[1600] round, 4-way: state A in, state E out (never the same
+ * array -- the caller alternates two, so no state copy is ever made, which
+ * was the last load-to-store-only chain left for clang to move as VMOVAPS). */
+static inline void kx4_round(const __m256i A[25], __m256i E[25], uint64_t rc) {
+    __m256i C[5], D[5];
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC unroll 25
+#endif
+    for (int x = 0; x < 5; x++) {
+        C[x] = _mm256_xor_si256(_mm256_xor_si256(A[x], A[x + 5]),
+               _mm256_xor_si256(A[x + 10], _mm256_xor_si256(A[x + 15], A[x + 20])));
+    }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC unroll 25
+#endif
+    for (int x = 0; x < 5; x++) {
+        D[x] = _mm256_xor_si256(C[(x + 4) % 5], rotl64_avx2(C[(x + 1) % 5], 1));
+    }
+
+#define KX4_B(src, rot, d) kx4_rot(_mm256_xor_si256(A[src], D[d]), rot)
+#define KX4_PLANE(E, y, s0, r0, d0, s1, r1, d1, s2, r2, d2, s3, r3, d3, s4, r4, d4) \
+    do {                                                                   \
+            const __m256i b0 = KX4_B(s0, r0, d0), b1 = KX4_B(s1, r1, d1);      \
+            const __m256i b2 = KX4_B(s2, r2, d2), b3 = KX4_B(s3, r3, d3);      \
+            const __m256i b4 = KX4_B(s4, r4, d4);                              \
+            (E)[5 * (y) + 0] = _mm256_xor_si256(b0, _mm256_andnot_si256(b1, b2)); \
+            (E)[5 * (y) + 1] = _mm256_xor_si256(b1, _mm256_andnot_si256(b2, b3)); \
+            (E)[5 * (y) + 2] = _mm256_xor_si256(b2, _mm256_andnot_si256(b3, b4)); \
+            (E)[5 * (y) + 3] = _mm256_xor_si256(b3, _mm256_andnot_si256(b4, b0)); \
+            (E)[5 * (y) + 4] = _mm256_xor_si256(b4, _mm256_andnot_si256(b0, b1)); \
+        } while (0)
+    KX4_PLANE(E, 0, 0,  0, 0,  6, 44, 1,  12, 43, 2,  18, 21, 3,  24, 14, 4);
+    KX4_PLANE(E, 1, 3, 28, 3,  9, 20, 4,  10,  3, 0,  16, 45, 1,  22, 61, 2);
+    KX4_PLANE(E, 2, 1,  1, 1,  7,  6, 2,  13, 25, 3,  19,  8, 4,  20, 18, 0);
+    KX4_PLANE(E, 3, 4, 27, 4,  5, 36, 0,  11, 10, 1,  17, 15, 2,  23, 56, 3);
+    KX4_PLANE(E, 4, 2, 62, 2,  8, 55, 3,  14, 39, 4,  15, 41, 0,  21,  2, 1);
+#undef KX4_PLANE
+#undef KX4_B
+
+    /* Iota */
+    E[0] = _mm256_xor_si256(E[0], _mm256_set1_epi64x((int64_t)rc));
+}
+
 void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]) {
     /* Pack: ymm_lane[i] holds { state0[i], state1[i], state2[i], state3[i] } */
     __m256i S[25];
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC unroll 25
+#endif
     for (int i = 0; i < 25; i++) {
-        S[i] = _mm256_set_epi64x(
-            (int64_t)states[3][i], (int64_t)states[2][i],
-            (int64_t)states[1][i], (int64_t)states[0][i]
-        );
+        S[i] = keccak_x4_pack((const uint64_t (*)[25])states, i);
     }
 
-    for (int round = 0; round < 24; round++) {
-        /* Theta */
-        __m256i C0 = _mm256_xor_si256(_mm256_xor_si256(S[0], S[5]),
-                     _mm256_xor_si256(S[10], _mm256_xor_si256(S[15], S[20])));
-        __m256i C1 = _mm256_xor_si256(_mm256_xor_si256(S[1], S[6]),
-                     _mm256_xor_si256(S[11], _mm256_xor_si256(S[16], S[21])));
-        __m256i C2 = _mm256_xor_si256(_mm256_xor_si256(S[2], S[7]),
-                     _mm256_xor_si256(S[12], _mm256_xor_si256(S[17], S[22])));
-        __m256i C3 = _mm256_xor_si256(_mm256_xor_si256(S[3], S[8]),
-                     _mm256_xor_si256(S[13], _mm256_xor_si256(S[18], S[23])));
-        __m256i C4 = _mm256_xor_si256(_mm256_xor_si256(S[4], S[9]),
-                     _mm256_xor_si256(S[14], _mm256_xor_si256(S[19], S[24])));
-
-        __m256i D0 = _mm256_xor_si256(C4, rotl64_avx2(C1, 1));
-        __m256i D1 = _mm256_xor_si256(C0, rotl64_avx2(C2, 1));
-        __m256i D2 = _mm256_xor_si256(C1, rotl64_avx2(C3, 1));
-        __m256i D3 = _mm256_xor_si256(C2, rotl64_avx2(C4, 1));
-        __m256i D4 = _mm256_xor_si256(C3, rotl64_avx2(C0, 1));
-
-        __m256i Darr[5] = {D0, D1, D2, D3, D4};
-        for (int i = 0; i < 25; i++)
-            S[i] = _mm256_xor_si256(S[i], Darr[i % 5]);
-
-        /* Rho and Pi */
-        __m256i B[25];
-        for (int i = 0; i < 25; i++) {
-            int r = ROTC[i];
-            B[PI[i]] = (r == 0) ? S[i] : rotl64_avx2(S[i], r);
-        }
-
-        /* Chi */
-        for (int y = 0; y < 25; y += 5) {
-            S[y+0] = _mm256_xor_si256(B[y+0], _mm256_andnot_si256(B[y+1], B[y+2]));
-            S[y+1] = _mm256_xor_si256(B[y+1], _mm256_andnot_si256(B[y+2], B[y+3]));
-            S[y+2] = _mm256_xor_si256(B[y+2], _mm256_andnot_si256(B[y+3], B[y+4]));
-            S[y+3] = _mm256_xor_si256(B[y+3], _mm256_andnot_si256(B[y+4], B[y+0]));
-            S[y+4] = _mm256_xor_si256(B[y+4], _mm256_andnot_si256(B[y+0], B[y+1]));
-        }
-
-        /* Iota */
-        __m256i rc = _mm256_set1_epi64x((int64_t)RC[round]);
-        S[0] = _mm256_xor_si256(S[0], rc);
+    /* Each round writes a fresh state plane by plane.  For output plane y,
+     * the five rho/pi sources are rotated (theta-applied) lanes of the input
+     * state, so every XOR and ANDN in theta, rho, pi and chi takes at least
+     * one operand straight from an integer-only shift or produces one for
+     * it: no chain is load-to-store only, which is what let clang's domain
+     * pass pick VXORPS/VANDNPS/VMOVAPS (see keccak_x4_pack).  The (source
+     * lane, rotation, theta column) triples are FIPS 202's pi^-1 and rho
+     * offsets (sec. 3.2.2-3.2.3); tests/c/test_keccak_equiv.c and
+     * tests/c/test_sha3_avx512_kat.c hold the kernel to the scalar
+     * permutation and to the KATs.  24 rounds, in pairs: S -> T -> S. */
+    __m256i T[25];
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC unroll 1
+#endif
+    for (int round = 0; round < 24; round += 2) {
+        kx4_round(S, T, RC[round]);
+        kx4_round(T, S, RC[round + 1]);
     }
 
     /* Unpack back to separate states */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC unroll 25
+#endif
     for (int i = 0; i < 25; i++) {
-        uint64_t tmp[4];
-        _mm256_storeu_si256((__m256i *)tmp, S[i]);
-        states[0][i] = tmp[0];
-        states[1][i] = tmp[1];
-        states[2][i] = tmp[2];
-        states[3][i] = tmp[3];
+        keccak_x4_unpack(states, i, S[i]);
     }
 }
 

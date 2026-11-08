@@ -67,6 +67,7 @@
 #include "internal/ama_test_csprng.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_ed25519_canonical.h"
+#include "internal/ama_ct_declassify.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -287,6 +288,13 @@ static ama_error_t nonce_generate(uint8_t out[32],
     /* Reject the negligible-probability zero scalar (fail closed). */
     uint8_t acc = 0;
     for (int i = 0; i < 32; i++) acc |= out[i];
+    /* The verdict is the AMA_ERROR_CRYPTO this returns (probability
+     * ~2^-252); the nonce bytes stay secret. */
+    {
+        uint8_t is_zero = (uint8_t)(acc == 0);
+        AMA_CT_DECLASSIFY(&is_zero, sizeof(is_zero));
+        acc = (uint8_t)(1u ^ is_zero);
+    }
     if (acc == 0) {
         ama_secure_memzero(out, 32);
         return AMA_ERROR_CRYPTO;
@@ -689,6 +697,9 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         /* Constant-time zero check — reject zero scalar (identity pk) */
         uint8_t nonzero = 0;
         for (int i = 0; i < 32; i++) nonzero |= group_secret[i];
+        /* The verdict is the AMA_ERROR_INVALID_PARAM returned below. */
+        nonzero = (uint8_t)(nonzero != 0);
+        AMA_CT_DECLASSIFY(&nonzero, sizeof(nonzero));
         if (nonzero == 0) {
             ama_secure_memzero(group_secret, 32);
             return AMA_ERROR_INVALID_PARAM;
@@ -903,7 +914,11 @@ AMA_API ama_error_t ama_frost_round2_sign(
      * caller's buffer zeroed, and before any hashing, so no concurrent call
      * can find it unconsumed while this one signs.  From here on the nonces
      * are read from `nonce_local` only. */
-    const int claimed = frost_claim_nonce_pair(nonce_local, nonce_pair);
+    int claimed = frost_claim_nonce_pair(nonce_local, nonce_pair);
+    /* Whether the pair was unconsumed and non-degenerate is the
+     * AMA_ERROR_INVALID_PARAM verdict returned below; the nonces stay
+     * secret. */
+    AMA_CT_DECLASSIFY(&claimed, sizeof(claimed));
 
     if (!sig_share || !message || !participant_share ||
         !commitments || !signer_indices || !group_public_key) {
@@ -963,8 +978,15 @@ AMA_API ama_error_t ama_frost_round2_sign(
         for (size_t i = 0; i < (size_t)num_signers; i++) {
             if (signer_indices[i] == participant_index) { pos = i; break; }
         }
-        if (ama_ed25519_point_from_scalar(own_commitment, hiding_nonce) != AMA_SUCCESS ||
-            ama_ed25519_point_from_scalar(own_commitment + 32, binding_nonce) != AMA_SUCCESS) {
+        ama_error_t pt_rc = ama_ed25519_point_from_scalar(own_commitment, hiding_nonce);
+        ama_error_t pt_rc2 = ama_ed25519_point_from_scalar(own_commitment + 32, binding_nonce);
+        /* Both verdicts are returned to the caller as
+         * AMA_ERROR_INVALID_PARAM; the commitment is public (it was
+         * broadcast in round 1), the nonces stay secret. */
+        AMA_CT_DECLASSIFY(&pt_rc, sizeof(pt_rc));
+        AMA_CT_DECLASSIFY(&pt_rc2, sizeof(pt_rc2));
+        AMA_CT_DECLASSIFY(own_commitment, AMA_FROST_COMMITMENT_BYTES);
+        if (pt_rc != AMA_SUCCESS || pt_rc2 != AMA_SUCCESS) {
             rc = AMA_ERROR_INVALID_PARAM;
             goto consume;
         }

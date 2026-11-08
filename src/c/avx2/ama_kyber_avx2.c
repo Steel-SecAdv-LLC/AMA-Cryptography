@@ -29,6 +29,7 @@
 #include <immintrin.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* Kyber-1024 parameters */
 #define KYBER_Q       3329
@@ -48,9 +49,16 @@
  * Matches the generic C implementation in ama_kyber.c.
  * ============================================================================ */
 static inline int16_t montgomery_reduce_scalar(int32_t a) {
-    int16_t u = (int16_t)((int64_t)a * KYBER_QINV_VAL);
-    int32_t t = (int32_t)u * KYBER_Q;
-    t = a - t;
+    /* The unsigned-residue form of src/c/ama_kyber.c's montgomery_reduce
+     * (bit-identical; see the derivation there): no sign extension of the
+     * secret residue, which gcc emits as CWDE, and the operand pinned in a
+     * general-purpose register so this sub-register fallback stays scalar --
+     * clang 18 auto-vectorised the len 8/4/2 layer loop and moved the
+     * coefficients with VMOVUPS, which Intel's Data Operand Independent
+     * Timing list does not include (tools/check_ct_operand.py). */
+    a = (int32_t)ama_ct_value_barrier_u32((uint32_t)a);
+    const uint32_t ul = ((uint32_t)a * (uint32_t)KYBER_QINV_VAL) & 0xFFFFu;
+    int32_t t = a - (int32_t)ul * KYBER_Q + (int32_t)(ul >> 15) * (KYBER_Q << 16);
     t >>= 16;
     return (int16_t)t;
 }
@@ -273,7 +281,11 @@ void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
          * [8*i + j] for j = 0..7; extracting eight 4-bit nibbles from
          * each lane fills eight coefficients per lane. */
         for (int j = 0; j < 8; j++) {
-            uint32_t dj = dvec[j];
+            /* The nibble extraction is scalar by construction (one 32-bit
+             * lane per pass); the barrier keeps it so -- clang 18 lifted it
+             * back into YMM registers and copied the secret coefficients
+             * through VMOVUPS. */
+            uint32_t dj = ama_ct_value_barrier_u32(dvec[j]);
             int base = i * 64 + j * 8;
             for (int k = 0; k < 8; k++) {
                 int16_t a = (int16_t)((dj >> (4 * k + 0)) & 0x3);

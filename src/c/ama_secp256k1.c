@@ -1755,8 +1755,12 @@ static void sc_zero(secp256k1_sc *r) {
 static int sc_is_zero(const secp256k1_sc *a) {
     uint64_t acc = 0;
     int i;
+    /* Limb by limb in general-purpose registers.  Vectorised, this OR
+     * reduction of a secret scalar was emitted with MOVHLPS (gcc 14) and
+     * MOVMSKPS (clang 18) -- neither is on Intel's Data Operand Independent
+     * Timing list (tools/check_ct_operand.py). */
     for (i = 0; i < SC_LIMBS; i++)
-        acc |= a->v[i];
+        acc |= ama_ct_value_barrier_u64(a->v[i]);
     return acc == 0;
 }
 

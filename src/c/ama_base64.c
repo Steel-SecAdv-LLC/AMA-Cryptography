@@ -36,6 +36,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_ct_barrier.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,7 +46,11 @@
  * bit when both hold, and negation widens it to a mask with no branch and no
  * signed shift. */
 static uint32_t in_range(uint32_t c, uint32_t lo, uint32_t hi) {
-    uint32_t t = ((lo - 1u - c) & (c - hi - 1u)) >> 31;
+    /* Each mask in a general-purpose register: clang 18 SLP-vectorised the
+     * four range tests of enc6 and gathered their sign bits with MOVMSKPS,
+     * which is not on Intel's Data Operand Independent Timing list
+     * (tools/check_ct_operand.py --target base64). */
+    uint32_t t = ama_ct_value_barrier_u32((lo - 1u - c) & (c - hi - 1u)) >> 31;
     return 0u - t;
 }
 
@@ -69,6 +74,12 @@ static uint32_t char63(ama_base64_variant_t variant) {
 
 static char enc6(uint32_t v, uint32_t c62, uint32_t c63) {
     uint32_t out = 0;
+    /* One sextet in a general-purpose register.  clang 18 vectorised the four
+     * enc6 calls of a group with SHUFPS/ANDPS, neither of which is on Intel's
+     * Data Operand Independent Timing list; v is secret when the input is a
+     * private key (tools/check_ct_operand.py --target base64).  in_range keeps
+     * each of the masks below scalar in the same way. */
+    v = ama_ct_value_barrier_u32(v);
     out |= in_range(v, 0u, 25u) & (v + (uint32_t)'A');
     out |= in_range(v, 26u, 51u) & (v - 26u + (uint32_t)'a');
     out |= in_range(v, 52u, 61u) & (v - 52u + (uint32_t)'0');

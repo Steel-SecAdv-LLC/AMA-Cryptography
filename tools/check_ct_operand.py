@@ -35,6 +35,20 @@ computation stays attached to its own address.  This script disassembles
 every recorded address with objdump, normalises the mnemonic, and fails on
 any that is not on the list.
 
+One class of site is decided by a second instrument rather than by the list.
+A site whose only tainted use flows into a conditional exit or indirect
+target (BRANCH without OTHER, :func:`is_branch_only`) is a class (a)
+question, and this tool's byte-granular shadow over-approximates it.  When
+the run has any such site, the same driver is run under Memcheck, whose
+definedness tracking is bit-exact, and the gate fails if Memcheck reports a
+conditional jump, move or address on the secret.  So a branch is never
+waved through on the strength of a label: it is cleared by the bit-exact
+instrument in the same run, or the run fails.
+
+``--inventory`` reports unlisted sites without failing on them.  It is a
+measurement mode for working on the code generation of a new target, not a
+CI setting: CI runs the default, which blocks.
+
 Why not static relational analysis or a DBI framework: a Valgrind tool is
 the only one of the three that runs the existing drivers (and their
 declassification points) without modification, on the same libraries the
@@ -63,7 +77,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import platform
+import stat
 import re
 import shutil
 import subprocess
@@ -138,6 +154,54 @@ def _load_sibling(name: str) -> ModuleType:
     return module
 
 
+#: Drivers for targets the Memcheck taint lane does not run.  Argon2id's
+#: second half indexes memory by password-derived words BY SPECIFICATION
+#: (RFC 9106 sec. 3.4.1.2, data-dependent addressing), so Memcheck reports the
+#: algorithm itself as a class (b) address on the secret, and the target cannot
+#: sit in check_ghash_constant_time._TAINT_DRIVERS, whose lane fails on every
+#: such report.  Class (c) has no such exception: how the index is COMPUTED is
+#: implementation, and this gate found it computed with two divisions on the
+#: password-derived words (src/c/ama_argon2.c argon2_index_alpha), now removed.
+#: The same TAINT/UNTAINT prelude as every taint driver.
+_OPERAND_ONLY_DRIVERS: dict[str, str] = {
+    "argon2id": r"""
+#include <stdint.h>
+#include <string.h>
+#include <valgrind/memcheck.h>
+#include "ama_cryptography.h"
+#define TAINT(ptr, len) VALGRIND_MAKE_MEM_UNDEFINED((ptr), (len))
+#define UNTAINT(ptr, len) VALGRIND_MAKE_MEM_DEFINED((ptr), (len))
+/* Secret: the password.  t = 2 passes over 64 KiB in 4 lanes, so both the
+ * data-independent half and the data-dependent half run, references cross
+ * lanes, and the second pass's reference windows wrap. */
+int main(void) {
+    uint8_t pwd[24], salt[16], out[32];
+    memcpy(pwd, "correct horse battery st", sizeof pwd);
+    memset(salt, 0x5A, sizeof salt);
+    TAINT(pwd, sizeof pwd);
+    ama_error_t rc = ama_argon2id(pwd, sizeof pwd, salt, sizeof salt, 2, 64, 4, out, sizeof out);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    static volatile uint8_t sink;
+    sink = (uint8_t)(sink ^ out[0]);
+    return 0;
+}
+""",
+}
+
+#: The Memcheck report that settles a branch-only site: a conditional jump or
+#: move on the secret.  The adjudication asks exactly that question; an
+#: address on the secret is class (b), which the Memcheck taint lane decides
+#: for every target it runs (and which Argon2id is by specification).
+_CONDITIONAL_REPORT = "Conditional jump or move depends on uninitialised value"
+
+
+def driver_source(ghash: ModuleType, target: str) -> str:
+    """The taint driver for ``target``: the shared one, or an operand-only one."""
+    shared: dict[str, str] = ghash._TAINT_DRIVERS
+    return shared[target] if target in shared else _OPERAND_ONLY_DRIVERS[target]
+
+
 def host_isa() -> str:
     machine = platform.machine().lower()
     if machine in ("x86_64", "amd64"):
@@ -174,7 +238,7 @@ CLASS_BITS = {"DIV": 1, "FP": 2, "SQRT": 4, "BRANCH": 8, "OTHER": 16}
 BLOCKING_CLASSES = ("DIV", "FP", "SQRT")
 
 _IROP = re.compile(r"\b(Iop_[A-Za-z0-9_]+)\b")
-_FP_NAME = re.compile(r"F(?:16|32|64|128)|Fx\d|F0x\d|(?<![A-Z])D(?:32|64|128)")
+_FP_NAME = re.compile(r"F(?:16|32|64|128)|Fx\d|F0x\d|(?<![A-Z])D(?:32|64|128)|(?<![A-Za-z])Q?Fto")
 
 
 def op_class(name: str) -> Optional[str]:
@@ -183,7 +247,11 @@ def op_class(name: str) -> Optional[str]:
     VEX names every operation by what it computes, so the families are read
     from the name: a ``Div`` (integer, floating or decimal), a ``Sqrt``
     (including the reciprocal estimates), or any operation over an F16/F32/
-    F64/F128 or decimal value or an FP vector lane (``Fx4``, ``F0x2``).
+    F64/F128 or decimal value or an FP vector lane (``Fx4``, ``F0x2``), or a
+    conversion out of floating point whose name carries no width (``FtoI32Sx4``,
+    ``QFtoI32Sx4``). No VEX release through 3.26 spells a conversion that way --
+    there it is ``F32toI32Sx4_RZ`` -- but the table is generated from whichever
+    header the host installs, so a later spelling must not fall through to None.
     ``Reinterp`` ops are bit casts with no arithmetic and are excluded.
     """
     body = name[len("Iop_") :]
@@ -271,7 +339,16 @@ def x86_canonical(text: str) -> str:
         return f"REP_{name}" if rep else name
     if mnemonic == "movsd" and "xmm" in operands:
         return "MOVSD(SSE)"
+    alias = _X86_PCLMUL_ALIAS.fullmatch(mnemonic)
+    if alias:
+        return f"{alias.group(1).upper()}PCLMULQDQ"
     return mnemonic.upper()
+
+
+#: objdump prints PCLMULQDQ with one of its four selector immediates as an
+#: assembler alias (``pclmullqlqdq`` is imm 0x00, ``pclmulhqhqdq`` 0x11 ...).
+#: They are one instruction, and Intel's list names it PCLMULQDQ / VPCLMULQDQ.
+_X86_PCLMUL_ALIAS = re.compile(r"(v?)pclmul[lh]q[lh]qdq")
 
 
 def aarch64_canonical(text: str) -> str:
@@ -571,26 +648,70 @@ def _find_valgrind_dirs(plat: str) -> tuple[Path, Path, Path]:
     return libexec, archives, include
 
 
+def default_cache() -> Path:
+    """The per-user cache root: ``$XDG_CACHE_HOME`` or ``~/.cache``.
+
+    Not the shared temporary directory: a staged tool found there could have
+    been planted by another local user, and :func:`build_tool` executes it.
+    """
+    root = os.environ.get("XDG_CACHE_HOME")
+    base = Path(root) if root and Path(root).is_absolute() else Path.home() / ".cache"
+    return base / "ama-ctoperand"
+
+
+def _require_private_dir(path: Path) -> None:
+    """Create ``path`` (0700) or refuse it unless only the caller can write it.
+
+    The staged tool is executed and its report is the gate's evidence, so the
+    directory holding it, and the cache root above it, must be a real
+    directory owned by the caller and writable by no one else.  A symlink,
+    another owner, or a group/world write bit is refused rather than
+    repaired: the planted content may already be in place.
+    """
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"tool cache {path}: {exc}") from exc
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise ValueError(f"tool cache {path} is not a plain directory; refusing to use it")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and st.st_uid != getuid():
+        raise ValueError(
+            f"tool cache {path} is owned by uid {st.st_uid}, not the caller; refusing to use it"
+        )
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError(
+            f"tool cache {path} is writable by group or others "
+            f"(mode {stat.S_IMODE(st.st_mode):o}); refusing to use it"
+        )
+
+
 def build_tool(isa: str, cache: Path) -> Path:
     """Build ctoperand and stage a VALGRIND_LIB directory; return that directory.
 
     Cached per cache directory and rebuilt whenever the tool source or the
-    generated operation-class table differs from the staged copy.
+    generated operation-class table differs from the staged copy.  The cache
+    root and the stage are checked by :func:`_require_private_dir` before
+    anything in them is trusted.
     """
     plat, defines = _valgrind_platform(isa)
+    stage = cache / f"vglib-{plat}"
+    _require_private_dir(cache)
+    if stage.exists() or stage.is_symlink():
+        _require_private_dir(stage)
     libexec, archives, include = _find_valgrind_dirs(plat)
     header_text, _ = generate_opclass_header(include / "libvex_ir.h")
     # Reused only when the staged copy of the inputs is byte-identical to the
     # current ones: an edited tool or a different VEX header always rebuilds.
     inputs = TOOL_SOURCE.read_bytes() + b"\0" + header_text.encode("utf-8")
-    stage = cache / f"vglib-{plat}"
     tool = stage / f"ctoperand-{plat}"
     stamp = stage / "inputs"
     if tool.is_file() and stamp.is_file() and stamp.read_bytes() == inputs:
         return stage
     if stage.exists():
         shutil.rmtree(stage)
-    stage.mkdir(parents=True)
+    _require_private_dir(stage)
     (stage / "ct_opclass.h").write_text(header_text, encoding="utf-8")
     obj = stage / "ctoperand.o"
     cflags = [
@@ -645,6 +766,13 @@ def run_tool(stage: Path, driver: Path, env: dict[str, str], workdir: Path) -> O
     log = workdir / "ctoperand.log"
     run_env = dict(env)
     run_env["VALGRIND_LIB"] = str(stage)
+    # Resolve every symbol at load, as the project's own binaries and the
+    # shipped shared object are linked (-z relro -z now, CMakeLists.txt).
+    # Lazily bound, the driver's first call through each PLT slot entered
+    # ld.so's resolver trampoline, whose XSAVE/XRSTOR saved the caller's
+    # registers -- secret ones included -- and would be reported as
+    # consumption by a harness artifact the library does not ship.
+    run_env["LD_BIND_NOW"] = "1"
     proc = subprocess.run(
         [
             "valgrind",
@@ -677,7 +805,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--lib", required=True, type=Path)
     parser.add_argument("--include", type=Path, default=REPO_ROOT / "include")
     parser.add_argument("--cc", default="cc")
-    parser.add_argument("--target", required=True, choices=sorted(ghash._TAINT_DRIVERS))
+    parser.add_argument(
+        "--target", choices=sorted(set(ghash._TAINT_DRIVERS) | set(_OPERAND_ONLY_DRIVERS))
+    )
+    parser.add_argument(
+        "--static",
+        action="store_true",
+        help="List every instruction of the archive members named by --member against "
+        "the vendor list, without running anything: for kernels Valgrind cannot "
+        "execute (AVX-512, VAES).",
+    )
+    parser.add_argument("--member", action="append", default=[], metavar="OBJECT")
     parser.add_argument("--dispatch-only", default=None, metavar="SLOT")
     parser.add_argument("--optimized-witness", type=Path, default=None)
     parser.add_argument(
@@ -688,14 +826,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "secret reaching an instruction class the vendor list admits (multiply).",
     )
     parser.add_argument(
-        "--require-listed",
+        "--inventory",
         action="store_true",
-        help="Also FAIL on any consuming mnemonic outside the vendor list (the "
-        "inventory). Off by default: see the module docstring for why that half "
-        "is a measurement and not a blocking check.",
+        help="Report consuming mnemonics outside the vendor list without failing on "
+        "them (a measurement mode; CI runs the default, which blocks).",
     )
-    parser.add_argument("--cache", type=Path, default=Path(tempfile.gettempdir()) / "ama-ctoperand")
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        default=default_cache(),
+        help="Tool build cache (default: $XDG_CACHE_HOME/ama-ctoperand or "
+        "~/.cache/ama-ctoperand). Must be a directory only the caller can write.",
+    )
     args = parser.parse_args(argv)
+    if args.static:
+        if not args.member:
+            parser.error("--static needs at least one --member")
+        return static_main(args)
+    if args.target is None:
+        parser.error("--target is required (or --static)")
     # The sibling gate reads its tier pin from a module global; set it there so
     # the wiring probe and the driver environment see the same pin.
     vars(ghash)["_DISPATCH_ONLY"] = args.dispatch_only
@@ -737,7 +886,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         workdir = Path(tmp)
         spellings = derive_x86_spellings(allowed, workdir) if isa == "x86_64" else {}
         driver, why = ghash.build_driver(
-            ghash._TAINT_DRIVERS[args.target], args.lib, args.include, args.cc, workdir
+            driver_source(ghash, args.target), args.lib, args.include, args.cc, workdir
         )
         if driver is None:
             print(
@@ -780,6 +929,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"CT-OPERAND CHECK INCONCLUSIVE — {exc}", file=sys.stderr)
             return 2
         verdict = classify(report, isa, allowed, spellings, deny)
+        branch_only = [v for v in verdict.unlisted if is_branch_only(v[0].classes)]
+        memcheck: Optional[tuple[int, str]] = None
+        if branch_only:
+            ran = ghash._run_taint(driver, workdir)
+            memcheck = (
+                None
+                if ran is None
+                else (
+                    sum(1 for line in ran[1].splitlines() if _CONDITIONAL_REPORT in line),
+                    ran[1],
+                )
+            )
+            if memcheck is None:
+                print(
+                    "CT-OPERAND CHECK INCONCLUSIVE — the Memcheck run that adjudicates "
+                    f"{len(branch_only)} branch-only site(s) did not complete.",
+                    file=sys.stderr,
+                )
+                return 2
 
     head = report.header
     print(f"[{args.target}] secret-operand analysis ({isa}, vendor list: {ALLOWLISTS.name}):")
@@ -818,19 +986,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
-    if verdict.unlisted:
+    latency = [v for v in verdict.unlisted if not is_branch_only(v[0].classes)]
+    reports = memcheck[0] if memcheck is not None else None
+    if branch_only:
         print(
-            f"\n  INVENTORY — {len(verdict.unlisted)} consuming instruction(s) whose mnemonic "
-            "the vendor list does not name (reported, not blocking; see "
-            "docs/constant-time-testing.md for the reviewed classification):"
+            f"\n  {len(branch_only)} branch-only site(s) (class (a)); adjudicated by a "
+            f"bit-exact Memcheck run of the same driver: {reports} report(s)."
         )
-        for site, name, text in sorted(verdict.unlisted, key=lambda v: (v[1], v[0].obj, v[0].svma)):
-            label = (
-                "class (a) branch: adjudicated by the Memcheck lane; "
-                if is_branch_only(site.classes)
-                else ""
-            )
-            print(f"  - {name}: `{text}`  [{label}{_where(site)}]")
+        for site, name, text in sorted(branch_only, key=lambda v: (v[0].obj, v[0].svma)):
+            print(f"  - {name}: `{text}`  [{_where(site)}]")
+        if reports and memcheck is not None:
+            for line in memcheck[1].splitlines()[:40]:
+                print(f"    {line}")
+    if latency:
+        print(
+            f"\n  {len(latency)} consuming instruction(s) whose mnemonic the vendor list "
+            "does not name:"
+        )
+        for site, name, text in sorted(latency, key=lambda v: (v[1], v[0].obj, v[0].svma)):
+            print(f"  - {name}: `{text}`  [{_where(site)}]")
     if verdict.class_violations:
         print(
             f"\n  {len(verdict.class_violations)} instruction(s) feed a secret-derived operand "
@@ -849,26 +1023,151 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # tables walks into garbage) are noise, not a call chain.
             for frame in [f for f in site.frames[1:] if "(in " in f or "(" in f][:5]:
                 print(f"         {frame}")
-        print(
-            f"\n{args.target.upper()} CT-OPERAND CHECK FAILED — a secret-derived operand reaches "
-            "an instruction class no vendor data-independent-timing list admits "
-            "(division, floating point, square root)."
+
+    status, reason = outcome(verdict, reports, args.inventory)
+    word = {0: "PASSED", 1: "FAILED", 2: "INCONCLUSIVE"}[status]
+    print(f"\n{args.target.upper()} CT-OPERAND CHECK {word} — {reason}")
+    return status
+
+
+def outcome(verdict: Verdict, memcheck_reports: Optional[int], inventory: bool) -> tuple[int, str]:
+    """The exit status and its reason, from the verdict alone.
+
+    ``memcheck_reports`` is the report count of the bit-exact Memcheck run of
+    the same driver, which is made exactly when the verdict has a branch-only
+    site, and None when it was not made.  In order: a DIV/FP/SQRT site fails;
+    a branch-only site with no Memcheck run is inconclusive, and one with
+    Memcheck reports fails; an unlisted non-branch site fails unless
+    ``inventory``; otherwise the run passes.
+    """
+    if verdict.unresolved:
+        return 2, f"{len(verdict.unresolved)} recorded instruction(s) could not be disassembled."
+    if verdict.class_violations:
+        return 1, (
+            "a secret-derived operand reaches an instruction class no vendor "
+            "data-independent-timing list admits (division, floating point, square root)."
         )
-        return 1
-    if args.require_listed and verdict.unlisted:
+    branch_only = [v for v in verdict.unlisted if is_branch_only(v[0].classes)]
+    latency = [v for v in verdict.unlisted if not is_branch_only(v[0].classes)]
+    if branch_only and memcheck_reports is None:
+        return 2, f"{len(branch_only)} branch-only site(s) and no Memcheck run to adjudicate them."
+    if branch_only and memcheck_reports:
+        return 1, (
+            f"Memcheck reports {memcheck_reports} use(s) of secret data in a branch, "
+            "move or address."
+        )
+    if latency and not inventory:
+        return 1, f"{len(latency)} consuming instruction(s) are not on the vendor list."
+    if latency:
+        return 0, (
+            "no secret-derived operand reaches a division, floating-point or square-root "
+            f"operation; --inventory: {len(latency)} unlisted consuming instruction(s) "
+            "reported above, not blocking."
+        )
+    return 0, (
+        "no secret-derived operand reaches a division, floating-point or square-root "
+        "operation; every other consuming instruction is on the vendor list"
+        + (", and every branch-only site is clear under Memcheck." if branch_only else ".")
+    )
+
+
+#: Instructions the static listing does not judge.  A control transfer is
+#: leakage class (a), whose question is which way it goes, not its operand
+#: latency; the padding forms consume no operand at all.
+_X86_CONTROL = re.compile(r"J[A-Z]+|CALL|RET|JMP")
+_X86_PADDING = {"NOP", "ENDBR64", "INT3", "UD2"}
+
+
+def static_listing(
+    objects: Sequence[Path], allowed: set[str], spellings: dict[str, str]
+) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
+    """Every instruction of every function in ``objects``, against the list.
+
+    For kernels Valgrind cannot execute (AVX-512, VAES), there is no taint to
+    say which instruction sees a secret, so the check is taken over ALL of
+    them: each instruction must be on the vendor list, a control transfer,
+    or padding (``xchg ax,ax`` is the two-byte NOP).  An over-approximation
+    of the dynamic gate -- an instruction on public data is held to it too --
+    so passing it is the stronger statement.  Returns the mnemonic counts and
+    the (object, mnemonic, text) of every instruction outside the rule.
+    """
+    counts: dict[str, int] = {}
+    bad: list[tuple[str, str, str]] = []
+    for obj in objects:
+        out = subprocess.run(
+            ["objdump", "-d", "--no-show-raw-insn", "-M", "intel", str(obj)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for line in out.splitlines():
+            m = re.match(r"\s+[0-9a-f]+:\s+(\S.*)$", line)
+            if not m:
+                continue
+            text = m.group(1).split("#")[0].strip()
+            name = x86_canonical(text)
+            name = spellings.get(name, name)
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            if name in allowed or _X86_CONTROL.fullmatch(name) or name in _X86_PADDING:
+                continue
+            if name == "XCHG" and re.fullmatch(r"xchg\s+ax,\s*ax", text):
+                continue
+            bad.append((obj.name, name, text))
+    return counts, bad
+
+
+def static_main(args: argparse.Namespace) -> int:
+    isa = host_isa()
+    if isa != "x86_64":
         print(
-            f"\n{args.target.upper()} CT-OPERAND CHECK FAILED (--require-listed) — "
-            f"{len(verdict.unlisted)} consuming instruction(s) are not on the vendor list."
+            "CT-OPERAND STATIC CHECK INCONCLUSIVE — the static listing is x86-64 only.",
+            file=sys.stderr,
+        )
+        return 2
+    allowed, _ = load_allowlist(isa)
+    with tempfile.TemporaryDirectory(prefix="ama-ctoperand-static-") as tmp:
+        workdir = Path(tmp)
+        try:
+            members = subprocess.run(
+                ["ar", "t", str(args.lib)], capture_output=True, text=True, check=True
+            ).stdout.split()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            print(f"CT-OPERAND STATIC CHECK INCONCLUSIVE — {args.lib}: {exc}", file=sys.stderr)
+            return 2
+        missing = [m for m in args.member if m not in members]
+        if missing:
+            print(
+                f"CT-OPERAND STATIC CHECK INCONCLUSIVE — {args.lib} has no member(s) "
+                f"{missing}: the kernel was not built, so nothing was checked.",
+                file=sys.stderr,
+            )
+            return 2
+        subprocess.run(["ar", "x", str(args.lib.resolve()), *args.member], cwd=workdir, check=True)
+        objects = [workdir / m for m in args.member]
+        spellings = derive_x86_spellings(allowed, workdir)
+        counts, bad = static_listing(objects, allowed, spellings)
+    total = sum(counts.values())
+    print(f"static listing of {', '.join(args.member)}: {total:,} instruction(s)")
+    print("  mnemonics: " + ", ".join(f"{k} x{v}" for k, v in sorted(counts.items())))
+    if total == 0:
+        print(
+            "CT-OPERAND STATIC CHECK INCONCLUSIVE — no instruction was disassembled.",
+            file=sys.stderr,
+        )
+        return 2
+    if bad:
+        for obj, name, text in bad[:60]:
+            print(f"  - {obj}: {name}: `{text}`")
+        print(
+            f"\nCT-OPERAND STATIC CHECK FAILED — {len(bad)} instruction(s) are neither on "
+            "the vendor list, nor a control transfer, nor padding."
         )
         return 1
     print(
-        f"\n{args.target.upper()} CT-OPERAND CHECK PASSED — no secret-derived operand reaches a "
-        "division, floating-point or square-root operation"
-        + (
-            f"; {len(verdict.unlisted)} unlisted consuming instruction(s) inventoried above."
-            if verdict.unlisted
-            else "; every consuming instruction is on the vendor list."
-        )
+        "\nCT-OPERAND STATIC CHECK PASSED — every instruction is on the vendor list, a "
+        "control transfer or padding."
     )
     return 0
 

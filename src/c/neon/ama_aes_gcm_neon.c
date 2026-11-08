@@ -18,6 +18,7 @@
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 #include "ama_neon_internal.h"
+#include "../internal/ama_ct_declassify.h"
 
 #if defined(__ARM_FEATURE_AES)
 
@@ -534,6 +535,11 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
      * See ama_aes_gcm_avx2.c for the rationale; closes the dudect
      * leak at test_dudect.c::test_aes_gcm_tag_verify. */
     int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it bounds
+     * the decryption below so a forgery writes no plaintext: public by
+     * contract (internal/ama_ct_declassify.h).  The comparison above is
+     * constant time; the tags and the key stay secret. */
+    AMA_CT_DECLASSIFY(&tag_match, sizeof(tag_match));
     size_t bound_mask = (size_t)0 - (size_t)tag_match;
     size_t bounded_full      = full_blocks & bound_mask;
     size_t bounded_remaining = remaining   & bound_mask;

@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-11-07 |
+| Last Updated | 2026-11-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -28,6 +28,71 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > them to 5.0.0 was a claim that does not resolve against the published
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
+
+### Secret operands: every consuming instruction vendor-listed, every primitive measured — 2026-11-08
+
+The class (c) gate added on 2026-11-07 blocked only on division,
+floating-point and square-root operations and reported every other unlisted
+consuming instruction as an open inventory. Every inventory row is now cured
+at source, the gate blocks on all of them, and it measures every
+secret-handling primitive, both compilers, AArch64, and -- statically -- the
+AVX-512 and VAES kernels Valgrind cannot run.
+
+- **Blocking verdict.** `tools/check_ct_operand.py` fails on any consuming
+  instruction outside the vendor list. A branch-only site (class (a)) is
+  settled in the same run by Memcheck on the same driver; `--inventory` is a
+  measurement mode CI may not use. The decision is `outcome()`, unit-tested;
+  three mutants of it are killed.
+- **Cured at source** (table in `docs/constant-time-testing.md`):
+  `REP MOVSQ`/`REP STOSQ` (GCC string-op strategy pinned in
+  `CMakeLists.txt`); `SHUFPS`/`CWDE` in ML-KEM (Compress_d scalar, normalised
+  coefficients zero-extended, `montgomery_reduce` from the unsigned residue,
+  bit-identical, `tests/c/test_kyber_montgomery.c`); `SHUFPS` in SHAKE output;
+  `LEAVE` in the Ed25519 15-limb select; `MOVHLPS`/`MOVMSKPS` in Ascon and
+  secp256k1; and every clang FP-domain encoding (AVX2 Keccak x4 restructured
+  plane by plane, Argon2 G with fused XORs, value barriers on the scalar
+  secret loops of ML-KEM, ML-DSA, base64 and Ed25519). gcc 13.3.0, gcc
+  14.2.0 and clang 18.1.3 pass all 24 targets on the archive. Under clang
+  the VAES GCM kernel re-reads its round keys per call and assembles partial
+  blocks without `memcpy`, so no plaintext staging buffer remains.
+- **A real secret division, removed.** Argon2id computed the reference lane
+  and index with `%` on password-derived words. Now Lemire-Kaser-Kurz
+  `fastmod_u32` (checked for all 1,095,216,660,480 (n, lane count) pairs) and
+  a masked subtraction; the lane selection by mask. RFC 9106 vectors
+  unchanged. `tools/check_secret_division.py` had allowed these divides
+  as irremovable "without deviating from RFC 9106"; that is withdrawn,
+  and its `ama_argon2id_core` ceiling drops from 10 to the measured 5
+  (gcc 14; gcc 13 emits 3), every one on public geometry.
+- **New targets** (count and/or taint drivers in
+  `tools/check_ghash_constant_time.py`): `ml-dsa-sign`, `ml-kem-keygen`,
+  `hkdf`, `frost-sign`, `aead-bulk` (AES-NI GCM and AVX2 ChaCha20 x8, also
+  pinned to `aes-gcm-aesni`), and the operand-only `argon2id`.
+- **What they found, fixed:** ML-DSA MakeHint branched on the secret r0 (now
+  branch-free); ML-DSA wrote every attempt's hint positions at a
+  secret-dependent index (now fixed slots, packed after acceptance); the
+  values FIPS 204 publishes or that decide only a discarded candidate are
+  declassified where computed (rho, c~, the accepted z and hint, each
+  rejection decision per FIPS 204 sec. 3.6.1 note 3, each RejBoundedPoly
+  accept bit); ML-KEM rho; FROST's returned verdicts; and the bulk-AEAD tag
+  verdict that bounds decryption, in all five decrypt kernels.
+- **AVX-512 and VAES:** `--static` holds every instruction of the production
+  objects to the list. Under clang it found `VMOVAPS` stack copies of the
+  YMM round-key schedule and a `VMOVLHPS` pack; the VAES kernel now
+  broadcasts each round key at its use and the AVX-512 Keccak packs in the
+  integer domain. Both pass under gcc and clang; the rewritten kernels pass
+  their KATs and equivalence tests on AVX-512 hardware.
+- **AArch64:** `secret-operand-check-arm64`, native on `ubuntu-24.04-arm`,
+  against Arm's DIT list.
+- **Instrument:** an `OR` with all ones or an `AND` with zero no longer
+  carries taint (gcc 14 builds `UINT64_MAX` as `or rax, -1`); objdump's
+  `PCLMULQDQ` selector aliases are normalised; the gate's driver runs bound
+  at load, as the shipped `.so` is.
+- **Review findings (pull request 434):** the tool cache moved from the shared
+  temporary directory to a per-user one and is refused when another user
+  owns it, it is a symlink, or it is group/world-writable; a failed
+  store-conditional no longer overwrites the shadow of the word it did not
+  write; the SSE probe build is `-mno-avx` and asserts its encoding by name;
+  width-less `FtoI`/`QFtoI` conversion names classify as FP.
 
 ### Secret operands at variable-latency instructions: a gate for class (c) — 2026-11-07
 

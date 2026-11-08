@@ -706,6 +706,10 @@ if(AMA_USE_NATIVE_PQC)
     # unconditional; the argument for the reciprocal multiply otherwise lives
     # only in a comment.
     add_ama_test(test_kyber_compress test_kyber_compress.c)
+    # montgomery_reduce's unsigned-residue form (no CWDE on the secret
+    # residue) held bit-identical to FIPS 203's signed form over every input
+    # domain the library calls it with.  Fails on a dropped correction term.
+    add_ama_test(test_kyber_montgomery test_kyber_montgomery.c)
     # FIPS 203 Sec 7.3 decapsulation input check 3 (the hash check) is
     # performed by every decapsulation entry point, for all three parameter
     # sets; implicit rejection and a dk_PKE-only mutation stay on the
