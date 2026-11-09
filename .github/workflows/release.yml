@@ -531,7 +531,7 @@ jobs:
         # neither the v3.2.0 tag object nor its commit — so every wheel job
         # aborted with "Unable to resolve action … unable to find version".
         # That is why no release before then produced artifacts.
-        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3  # v4.3.4
+        uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e  # v4.3.5
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
@@ -960,7 +960,7 @@ jobs:
         # runs after a wheel is built and cannot change its contents, so
         # skipping it here halves the wall clock without weakening the
         # comparison.  `build-wheels` still runs it on the wheels that ship.
-        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3  # v4.3.4
+        uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e  # v4.3.5
         env:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
@@ -1432,7 +1432,7 @@ jobs:
       # release and takes the update path).  Without them a re-run silently
       # resets the title to the bare tag and overwrites the notes.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           # `name:` is deliberately NOT set.  On the update path the action
