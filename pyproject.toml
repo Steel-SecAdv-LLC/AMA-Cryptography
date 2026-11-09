@@ -34,7 +34,7 @@ requires = [
     "setuptools>=84.2.1",
     "wheel>=0.48.0",
     "cmake>=4.4.4",
-    "Cython>=3.3.0",
+    "Cython>=3.3.1",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -96,7 +96,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.3.0",
+    "Cython>=3.3.1",
 ]
 monitoring = [
     # NumPy for mathematical monitoring (equations, double_helix_engine)
@@ -159,12 +159,12 @@ hsm = [
     # compatibility alias that made that compile, so install with the
     # alias restored at the compiler command line, exactly as CI does
     # (see .github/workflows/ci.yml):
-    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18,!=1.5.19"
+    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11!=1.5.19,>=1.5.21"
     # (MSVC: set CL=-DPyInt_FromLong=PyLong_FromLong instead.)
     # From 1.5.19 the sdist self-provisions SWIG >= 4.5 through its build
     # requirements and compiles without the alias.
-    "PyKCS11>=1.5.18,!=1.5.19; sys_platform == 'win32'",
-    "PyKCS11>=1.5.18; sys_platform != 'win32'",
+    "PyKCS11!=1.5.19,>=1.5.21; sys_platform == 'win32'",
+    "PyKCS11>=1.5.21; sys_platform != 'win32'",
 ]
 benchmark = [
     # Peer cryptographic libraries for benchmarks/comparative_benchmark.py.
@@ -219,7 +219,7 @@ dev = [
     # revises its stable style on calendar majors; ruff's default rule set
     # moves on minors).  Capped so one CI run measures one black and one ruff.
     "black>=26.10.1,<27",
-    "ruff>=0.17.3,<0.18",
+    "ruff>=0.17.4,<0.18",
     # Floor and lock moved to 2.4.0 together with the lint-lane and
     # pre-commit pins (test_lint_job_environment.py holds them in lockstep).
     # The 2.3→2.4 boundary changed one measured behaviour: 2.4.0 stopped
@@ -240,7 +240,7 @@ dev = [
     # no silent-Any outcome to have: reaching it would need an
     # `ignore_missing_imports` override for setuptools, and the override list
     # below does not contain one.)
-    "types-setuptools>=84.0.0.20261006,<84.1",
+    "types-setuptools>=84.2.0.20261104,<84.3",
     # PyYAML is imported directly by thirteen modules under tests/ and tools/
     # (the workflow, gate-coverage, secret-scan and severity-gate checkers all
     # parse YAML structurally rather than by regex).  It arrived only as a
@@ -258,7 +258,7 @@ dev = [
     # floated only here.  test_every_gate_tool_is_pinned_coherently holds all
     # of them to the lock.
     "PyYAML>=6.0.3,<6.1",
-    "types-PyYAML>=6.0.12.20261030,<6.1",
+    "types-PyYAML>=6.0.12.20261103,<6.1",
     # Floor raised to the enforcement pin and capped below the next minor:
     # ci.yml pins bandit==1.9.4, and the suppression-hygiene premise tests
     # assert bandit's nosec attribution, which MOVED inside the old
@@ -280,7 +280,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.3.0",
+    "Cython>=3.3.1",
     "numpy>=1.24.0",
     # Build and packaging — mirrors requirements-dev.txt's "Build and
     # packaging" block, which documents the two files as equivalent.  These
