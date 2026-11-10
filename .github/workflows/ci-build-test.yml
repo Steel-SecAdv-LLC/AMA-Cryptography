@@ -179,7 +179,7 @@ jobs:
   c-library-no-native-pqc:
     name: C Library (AMA_USE_NATIVE_PQC=OFF configuration guard)
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
@@ -257,6 +257,62 @@ jobs:
               print("  listed, not exported:", sorted(listed - exported))
               sys.exit(1)
           PY
+
+      - name: Stack-scrub tests on the Windows x64 build (MinGW, run under Wine)
+        # The two stack tests ran on Linux only, and the Windows x64 calling
+        # convention does two things neither System V nor AAPCS64 does: a
+        # caller reserves a 32-byte home area above every return address,
+        # which the callee may write, and a frame of a page or more is probed
+        # by a helper that pushes a call-clobbered register.  Measured on this
+        # build the first time it was run (2026-11-10, gcc 13.2, Wine 9.0): 29
+        # of 132 verdicts of test_stack_scrub failed with up to eight
+        # input-dependent bytes, and ama_secure_stack_wipe() left 32 bytes of
+        # its own frame unwritten (src/c/ama_consttime.c, ama_stack_wipe_cap).
+        # Native PQC on, so that every row runs; the tests link the static
+        # test archive, so no DLL export is needed.  This is the GNU compiler
+        # on Windows.  MSVC, which builds the wheels, has no inline assembly
+        # on x64 and these tests cannot be compiled by it.
+        #
+        # An exit of 77 is the tests' own skip and fails the step: this lane
+        # installs what they need, so a skip here is a defect (INVARIANT-47).
+        shell: bash
+        env:
+          WINEDEBUG: "-all"
+          WINEDLLOVERRIDES: "mscoree,mshtml="
+        run: |
+          set -euo pipefail
+          .github/scripts/apt-install.sh wine64
+          cmake -S . -B build-mingw-tests \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-mingw-tests --target test_stack_wipe_coverage test_stack_scrub -j4
+          wine=""
+          for candidate in wine64 wine /usr/lib/wine/wine64 /usr/lib/wine/wine; do
+            if command -v "$candidate" > /dev/null; then
+              wine=$(command -v "$candidate")
+              break
+            fi
+          done
+          if [ -z "$wine" ]; then
+            echo "::error::no Wine loader found after installing wine64"
+            exit 1
+          fi
+          # The stack protector's runtime, where this toolchain ships it as a DLL.
+          ssp=$(x86_64-w64-mingw32-gcc -print-file-name=libssp-0.dll)
+          if [ -f "$ssp" ]; then
+            WINEPATH=$(dirname "$ssp")
+            export WINEPATH
+          fi
+          export WINEPREFIX="$RUNNER_TEMP/wineprefix"
+          # A Windows program ends its lines CRLF; pipefail keeps Wine's exit status.
+          "$wine" build-mingw-tests/bin/test_stack_wipe_coverage.exe | tr -d '\r' | tee "$RUNNER_TEMP/coverage.txt"
+          "$wine" build-mingw-tests/bin/test_stack_scrub.exe | tr -d '\r' | tee "$RUNNER_TEMP/scrub.txt"
+          grep -q '^ok   the home area: 0 of 4 word(s) not zero after a wipe (4 of 4 written' "$RUNNER_TEMP/coverage.txt"
+          grep -q '^every wipe covers its depth' "$RUNNER_TEMP/coverage.txt"
+          grep -q 'entry point(s): cleared, and input-independent$' "$RUNNER_TEMP/scrub.txt"
 
       - name: Assert the default is still ON
         # A regression that flipped the default would make the job above green

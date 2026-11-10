@@ -93,6 +93,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -2897,6 +2898,135 @@ def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
     )
 
 
+#: Kernels a target exists to measure: by dispatcher pin (``None`` is "as
+#: dispatched") and by ISA.  A run of such a target is INCONCLUSIVE unless
+#: every kernel named for its pin executed, in each lane by that lane's own
+#: evidence: callgrind's per-function record in the count lane, a callgrind
+#: replay of the same driver in the taint lane, and a site where the secret
+#: was consumed in ``tools/check_ct_operand.py``.
+#:
+#: The dispatcher confirming a pin (:func:`_dispatch_pin_was_honoured`) says
+#: which function it WIRED.  It says nothing about whether the workload
+#: reached it, and that is the gap this closes: ``aead-bulk`` ran 256-byte
+#: messages, below the 512 bytes at which ``chacha20_xor`` enters the x8
+#: kernel, so its count and taint lanes passed over the scalar ChaCha20 while
+#: naming the AVX2 and NEON kernels (Copilot review, 2026-11-08).  The operand
+#: gate was given the check then; these two lanes were not until 2026-11-10.
+#:
+#: As dispatched, only the ChaCha20 kernel is named on x86-64: which AES-GCM
+#: tier the dispatcher selects depends on the CPUID Valgrind reports (AES-NI
+#: here, VAES on a host and release that expose it), and the pinned run names
+#: that tier instead.  Measured 2026-11-10, x86-64 under Valgrind 3.22, both
+#: drivers: as dispatched ``ama_chacha20_block_x8_avx2`` and the two
+#: ``ama_aes256_gcm_*_avx2`` functions execute; pinned to ``aes-gcm-aesni``
+#: the two GCM functions do and no x8 ChaCha20 does, because every other slot
+#: is left at its scalar fallback.
+#:
+#: On AArch64 the NEON x8 entry point is two calls to the x4 kernel and
+#: consumes nothing itself (CI's first AArch64 operand run with the check,
+#: 4831936, found no site in ``ama_chacha20_block_x8_neon``), so the x4 kernel
+#: is the one named.
+_REQUIRED_KERNELS: dict[str, dict[Optional[str], dict[str, tuple[str, ...]]]] = {
+    "aead-bulk": {
+        None: {
+            "x86_64": ("ama_chacha20_block_x8_avx2",),
+            "aarch64": ("ama_chacha20_block_x4_neon",),
+        },
+        "aes-gcm-aesni": {
+            "x86_64": ("ama_aes256_gcm_encrypt_avx2", "ama_aes256_gcm_decrypt_avx2"),
+        },
+    },
+}
+
+
+def host_isa() -> str:
+    """This host's ISA as :data:`_REQUIRED_KERNELS` spells it."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    return machine
+
+
+def required_kernels(target: str, pin: Optional[str], isa: str) -> Optional[tuple[str, ...]]:
+    """The kernels a run of ``target`` under ``pin`` must reach on ``isa``.
+
+    ``()`` for a target that names none.  ``None`` for a target that names
+    kernels and has no row for this pin: such a run has stated which tier it
+    measures and nothing can say whether it reached it, so the caller must
+    refuse the run and not treat the missing row as nothing to check.
+    """
+    rows = _REQUIRED_KERNELS.get(target)
+    if rows is None:
+        return ()
+    if pin not in rows:
+        return None
+    return rows[pin].get(isa, ())
+
+
+_CALLGRIND_FUNCTION = re.compile(r"^c?fn=\(\d+\) (\S+)", re.MULTILINE)
+
+
+def executed_functions(profile: Path) -> set[str]:
+    """Every function a callgrind profile records as having run.
+
+    Callgrind writes a name once, where the function first appears as the
+    subject (``fn=``) or the callee (``cfn=``) of a cost line, and writes
+    neither for a function that never executed.  A ``'N`` suffix marks a
+    recursion level, not another function.
+    """
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    return {name.split("'", 1)[0] for name in _CALLGRIND_FUNCTION.findall(text)}
+
+
+def _replay_functions(driver: Path, workdir: Path) -> Optional[set[str]]:
+    """The functions ``driver`` executes, from one more run under callgrind.
+
+    For the taint lane, whose own run is under Memcheck and records no
+    functions.  The driver, its arguments and its environment are the same,
+    and Memcheck's client requests are no-ops under any other tool, so the
+    replay takes the path the taint run took.
+    """
+    profile = workdir / "replay.callgrind.out"
+    proc = subprocess.run(
+        ["valgrind", "--tool=callgrind", f"--callgrind-out-file={profile}", str(driver)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_driver_env(),
+    )
+    if proc.returncode != 0 or not profile.is_file():
+        return None
+    return executed_functions(profile)
+
+
+def _kernels_refusal(target: str, executed: Optional[set[str]]) -> Optional[str]:
+    """Why this run did not measure the kernels it exists for, or ``None``."""
+    required = required_kernels(target, _DISPATCH_ONLY, host_isa())
+    if required is None:
+        return (
+            f"{target!r} names the kernels it measures, and none for "
+            f"--dispatch-only={_DISPATCH_ONLY!r}: add the row to _REQUIRED_KERNELS "
+            "with the kernel that pin selects."
+        )
+    if not required:
+        return None
+    if executed is None:
+        return (
+            "the function record of the run could not be read, so nothing shows which kernel ran."
+        )
+    missing = [kernel for kernel in required if kernel not in executed]
+    if missing:
+        return (
+            f"the kernel(s) this target exists to measure did not execute: "
+            f"{', '.join(missing)}. Either the workload no longer reaches them or the "
+            "dispatcher did not wire them, and the verdict would describe whatever ran "
+            "in their place."
+        )
+    return None
+
+
 def _driver_env() -> dict[str, str]:
     """The environment every driver invocation runs under.
 
@@ -3602,6 +3732,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 return 2
             reports, log = taint
+            refusal = (
+                _kernels_refusal(args.target, _replay_functions(driver, workdir))
+                if required_kernels(args.target, _DISPATCH_ONLY, host_isa()) != ()
+                else None
+            )
+            if refusal is not None:
+                print(f"CONSTANT-TIME CHECK INCONCLUSIVE — {refusal}", file=sys.stderr)
+                return 2
             print(f"[{args.target}] secret-taint analysis under Memcheck:")
             for line in wiring:
                 print(f"  wiring: {line}")
@@ -3640,6 +3778,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "CONSTANT-TIME CHECK INCONCLUSIVE — callgrind produced no measurement.",
                 file=sys.stderr,
             )
+            return 2
+        # The profile of the measurement just taken: what ran, not what was wired.
+        profile = workdir / "callgrind.out"
+        refusal = _kernels_refusal(
+            args.target, executed_functions(profile) if profile.is_file() else None
+        )
+        if refusal is not None:
+            print(f"CONSTANT-TIME CHECK INCONCLUSIVE — {refusal}", file=sys.stderr)
             return 2
         floors = {name: abs(floor_a[name] - floor_b[name]) for name in _METRICS}
         for name, value in floors.items():

@@ -325,6 +325,39 @@ code there is compiled without SIMD registers and cannot; and no copy goes
 through libc's SIMD `memcpy` (`src/c/internal/ama_string_ops.h`,
 `tests/test_no_libc_string_calls.py`).
 
+Nor does one return with any of its secret on the stack it used.  A compiler
+spills registers and hoists round keys into slots the source never named, so
+`ama_secure_memzero` cannot reach them: measured on the shipped build, three
+of the four words of an HKDF-SHA3-256 output and two of ML-KEM's
+implicit-rejection seed were in the dead stack after the call, in rows that
+searched for the whole value and reported nothing.  Every secret-handling
+entry point is therefore two functions (`src/c/internal/ama_stack_wipe.h`):
+an implementation that is never inlined, and an exported half that holds its
+caller's pointers and lengths and nothing else, calls the implementation, and
+zeroes the stack below itself to a depth measured for its family.
+`tests/c/test_stack_scrub.c` holds each of them to that on every lane that
+runs it, and names no secret to do it: after a call on each of two sets of
+inputs, every byte below the entry point's frame is zero or was never
+written, and the bytes of the frame itself are the same for both.
+`tests/c/test_stack_wipe_coverage.c` holds the wipe (every byte of the depth,
+no more, nothing of its own left below), and
+`tests/test_stack_scrub_surface.py` puts every export in one of three places:
+such an entry point, a helper with a row of its own, or the inventory of
+functions that are given no secret.  The depths are also the stack those
+entry points need (`include/ama_cryptography.h`, `ama_secure_stack_wipe`).
+Where the library itself calls such a primitive it calls the inner function,
+which clears nothing, so that one public call clears the stack once
+(`src/c/internal/ama_scrubbed_inner.h`; the same test fails on a call that
+does not).  All of this is measured on Linux, x86-64 and AArch64, and on the
+Windows x64 build a GNU compiler makes, which CI runs under Wine.  A library
+built by MSVC takes the same code and is measured by nothing: the tests need
+inline assembly that compiler does not have on x64.
+One limit is stated where it is measured: in an unoptimised build the six
+leaf helpers (`ama_consttime_*`, `ama_secure_memzero`,
+`ama_aes_sbox_consttime`) keep their arguments in their own frames like any
+other function compiled that way, and their rows are judged in optimised
+builds only.
+
 ## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 
 When the native constant-time C backend is unavailable, the library **must**

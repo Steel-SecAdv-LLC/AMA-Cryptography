@@ -363,6 +363,32 @@ add_ama_residue_probe(test_register_residue test_register_residue.c)
 if(AMA_USE_NATIVE_PQC)
     target_compile_definitions(test_register_residue PRIVATE AMA_REGISTER_RESIDUE_PQC_GROUP=1)
 endif()
+# Scrubbed entry points (INVARIANT-6): every secret-handling export returns
+# with the stack it used cleared, and with nothing input-dependent in its own
+# frame.  The harness names no secret: it reads what a call leaves below its
+# caller on two different sets of inputs (test_stack_scrub.c).  The library's
+# own flags decide which depths apply, and the probe is always -O2, so they
+# reach it as data from an object compiled with the directory's flags
+# (stack_scrub_build.c).  x86-64 and AArch64; every other target skips (77).
+add_library(ama_stack_scrub_build OBJECT stack_scrub_build.c)
+add_ama_residue_probe(test_stack_scrub test_stack_scrub.c)
+target_sources(test_stack_scrub PRIVATE $<TARGET_OBJECTS:ama_stack_scrub_build>)
+# The frame pointer stays a frame pointer in the harness's own functions, so
+# that what an entry point saves of it is a stack address in both passes
+# (test_stack_scrub.c, SCRUB_NORMALISE_REGISTERS).
+target_compile_options(test_stack_scrub PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-fno-omit-frame-pointer>)
+if(AMA_USE_NATIVE_PQC)
+    target_compile_definitions(test_stack_scrub PRIVATE AMA_STACK_SCRUB_PQC_GROUP=1)
+endif()
+if(AMA_AES_CONSTTIME)
+    target_compile_definitions(test_stack_scrub PRIVATE AMA_STACK_SCRUB_AES_CONSTTIME=1)
+endif()
+# The wipe those entry points use, measured alone: it writes every byte of
+# the depth it is asked for, no more, and leaves nothing of its own below
+# (test_stack_wipe_coverage.c).  The test archive, because the wipe's parts
+# are not exported from the shared library.
+add_ama_residue_probe(test_stack_wipe_coverage test_stack_wipe_coverage.c ama_cryptography_test)
 
 # The two in-house Ed25519 instantiations (fe51 and fe64-mulx) must be
 # byte-identical.  Drives both through the public API under

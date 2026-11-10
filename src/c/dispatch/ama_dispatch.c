@@ -1989,6 +1989,21 @@ static int dispatch_cache_save_at(int dfd, const char *basename,
     (void)dfd; (void)basename; (void)fingerprint; (void)v;
     return -1;
 }
+#ifdef AMA_TESTING_MODE
+/* dispatch_cache_path_sanitize_for_tests() below is compiled on every target
+ * and calls this.  There is no cache file here, so every path is refused.
+ * Until 2026-11-10 nothing on this side declared it: the call was an
+ * implicit declaration (an error from GCC 14 on), and the test archive
+ * linked only where -flto discarded the caller (MinGW gcc 13.2 with
+ * AMA_ENABLE_LTO=OFF: "undefined reference to `dispatch_cache_path_split'").
+ * Test builds only, so that a production build carries no unused function. */
+static int dispatch_cache_path_split(const char *path,
+                                     char *dir_out, size_t dir_outlen,
+                                     char *base_out, size_t base_outlen) {
+    (void)path; (void)dir_out; (void)dir_outlen; (void)base_out; (void)base_outlen;
+    return -1;
+}
+#endif
 #endif /* !_WIN32 */
 
 /* ============================================================================

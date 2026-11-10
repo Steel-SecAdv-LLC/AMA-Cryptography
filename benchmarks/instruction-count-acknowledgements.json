@@ -4,69 +4,11 @@
   "measured_on": "the ubuntu-latest (26.04) toolchain: gcc 15.2.0-16ubuntu1, cmake 4.2.3-2ubuntu2, valgrind 3.26.0, in a resolute chroot; trees without the x86-64 baseline pin built with -march=x86-64-v3 to reproduce the runner's amd64v3 compiler default; Release static library with LTO, driver -O2, AMA_DISPATCH_NO_AUTOTUNE=1, difference method at N=10; x86-64 host with AVX2/BMI2/ADX/VAES/VPCLMULQDQ/SHA-NI/AVX-512, dispatch fingerprint 'arch=x86-64 sha3=AVX2 kyber=AVX2 dilithium=AVX2 sphincs=AVX2 aes_gcm=AVX2 ed25519=Generic C chacha20poly1305=AVX2 argon2=AVX2 x25519=AVX2'. Calibrated before use: 702e253 measured here reproduced the runner's own A/B measurement of 702e253 (run 42244243340) on 17 of 18 operations exactly and ed25519_sign within 4 Ir (0.001%)",
   "tolerance_percent": 2.0,
   "acknowledgements": {
-    "aes_256_gcm_encrypt": {
-      "from": 4500,
-      "to": 5041,
-      "delta_percent": 12.02,
-      "reason": "Secret-operand gate cures, paid for in instructions: the AES-GCM partial-block and round-key changes that keep secret state out of FP-domain moves, the value barriers on secret scalar loops, and AMA_API's zero_call_used_regs(\"all\") epilogue on every exported call (register-residue fix, INVARIANT-6). The string-op header removed the fortified __memcpy_chk calls, which recovers part of it. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
-      "commits": [
-        "dba6bf4",
-        "b2b5001",
-        "fbefa4c"
-      ],
-      "supersedes": {
-        "from": 3885,
-        "to": 4500,
-        "delta_percent": 15.83,
-        "reason": "This branch pins the x86-64 ISA baseline (-march=x86-64 -mtune=generic) in CMakeLists.txt. The reference, 702e253, is built by the runner's Ubuntu 26.04 amd64v3 gcc 15, which defaults to x86-64-v3, so its non-kernel code -- the portable paths the dispatcher selects on a host WITHOUT AVX2 -- carried AVX2, VEX and BMI1/BMI2 instructions: tools/check_avx_scoping.py found them in 449 non-kernel symbols. With the pin that code is compiled for baseline x86-64 again, so it retires more instructions; the CPUID-gated kernels keep their per-file flags and are unchanged. This is the cost of the correction, not a regression: the higher count is the code a pre-AVX2 host can execute.",
-        "commits": [
-          "9be725c8"
-        ],
-        "supersedes": {
-          "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
-          "commits": [
-            "e8b9c8c",
-            "b8fffe3"
-          ],
-          "reason": "Security hardening, paid for in instructions. The AES-256 key schedule and the GHASH accumulator are scrubbed at exit where gcc -O3 had hoisted them somewhere the source never named (INVARIANT-6), and the AEAD accept/reject return is masked rather than branched, pinned by an instruction-invariance gate.",
-          "measured_on_gcc_13_3": {
-            "from": 3946,
-            "to": 4540,
-            "delta_percent": 15.05
-          },
-          "remeasured_on_26_04_toolchain": {
-            "from": 3837,
-            "to": 3885,
-            "delta_percent": 1.25,
-            "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
-          }
-        }
-      }
-    },
-    "chacha20poly1305_encrypt": {
-      "from": 11080,
-      "to": 11916,
-      "delta_percent": 7.55,
-      "reason": "The ChaCha20 x8 kernel re-broadcasts its initial rows from general registers at the add-back and stores each transposed half at once (no FP-domain spill under clang), and every exported call clears its call-clobbered registers on return (AMA_API, INVARIANT-6). The key words are loaded through value barriers after this measurement; that moves the count by well under the 2% tolerance. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
-      "commits": [
-        "b2b5001",
-        "fbefa4c"
-      ],
-      "supersedes": {
-        "from": 10475,
-        "to": 11080,
-        "delta_percent": 5.78,
-        "reason": "This branch pins the x86-64 ISA baseline (-march=x86-64 -mtune=generic) in CMakeLists.txt. The reference, 702e253, is built by the runner's Ubuntu 26.04 amd64v3 gcc 15, which defaults to x86-64-v3, so its non-kernel code -- the portable paths the dispatcher selects on a host WITHOUT AVX2 -- carried AVX2, VEX and BMI1/BMI2 instructions: tools/check_avx_scoping.py found them in 449 non-kernel symbols. With the pin that code is compiled for baseline x86-64 again, so it retires more instructions; the CPUID-gated kernels keep their per-file flags and are unchanged. This is the cost of the correction, not a regression: the higher count is the code a pre-AVX2 host can execute.",
-        "commits": [
-          "9be725c8"
-        ]
-      }
-    },
     "dilithium_keygen": {
       "from": 1457465,
-      "to": 855561,
-      "delta_percent": -41.3,
-      "reason": "The Keccak x4 AVX2 kernel was restructured on this branch so no compiler can pick FP-domain encodings for the lane state; it also retires far fewer instructions (callgrind, local gcc 13.3: ama_keccak_f1600_x4_avx2 10.73M Ir per 10 keygens before, kx4_round 2.71M plus 0.34M after). ML-DSA expands its matrix through SHAKE128 x4, so keygen, sign and verify all fall. The inverse NTT's explicit staging copy and arithmetic sign extension (dil_sext32) move it a little further (ama_dilithium_invntt_avx2 4.29M to 3.70M). Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 871444,
+      "delta_percent": -40.21,
+      "reason": "The Keccak x4 AVX2 kernel was restructured on this branch so no compiler can pick FP-domain encodings for the lane state; it also retires far fewer instructions (callgrind, local gcc 13.3: ama_keccak_f1600_x4_avx2 10.73M Ir per 10 keygens before, kx4_round 2.71M plus 0.34M after). ML-DSA expands its matrix through SHAKE128 x4, so keygen, sign and verify all fall. The inverse NTT's explicit staging copy and arithmetic sign extension (dil_sext32) move it a little further (ama_dilithium_invntt_avx2 4.29M to 3.70M). Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-DSA key generation clears 77,824 bytes: 9,819 Ir of the +15,801 measured locally; the remaining 6 thousand are in the two eta samplers, the same whole-program specialisation the kyber_keygen entry describes, lost in this benchmark's link and never present in the shared library.",
       "commits": [
         "dba6bf4",
         "fbefa4c"
@@ -97,13 +39,18 @@
             "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
           }
         }
+      },
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_before_the_stack_clearing": {
+        "to": 855561,
+        "runner_head_5536e51": 855643
       }
     },
     "dilithium_sign": {
       "from": 7446530,
-      "to": 5571698,
-      "delta_percent": -25.18,
-      "reason": "Same Keccak x4 restructure and NTT changes as dilithium_keygen. The interface change recorded under supersedes still stands and is still declared: DECLARED BREAKING CHANGE (ama_dilithium_sign moved to the FIPS 204 Sec 5.2 external interface), so 4.x signatures do not verify under 5.x and 5.x signatures do not verify under 4.x. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 5592075,
+      "delta_percent": -24.9,
+      "reason": "Same Keccak x4 restructure and NTT changes as dilithium_keygen. The interface change recorded under supersedes still stands and is still declared: DECLARED BREAKING CHANGE (ama_dilithium_sign moved to the FIPS 204 Sec 5.2 external interface), so 4.x signatures do not verify under 5.x and 5.x signatures do not verify under 4.x. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-DSA signing clears 176,128 bytes: 22,203 Ir, against +20,172 measured locally (the library's own hash calls became cheaper by the difference: they reach an inner function that clears nothing, src/c/internal/ama_scrubbed_inner.h).",
       "commits": [
         "dba6bf4",
         "fbefa4c"
@@ -134,6 +81,11 @@
             "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
           }
         }
+      },
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_before_the_stack_clearing": {
+        "to": 5571698,
+        "runner_head_5536e51": 5571903
       }
     },
     "dilithium_verify": {
@@ -258,25 +210,35 @@
     },
     "hkdf_derive": {
       "from": 36974,
-      "to": 37745,
-      "delta_percent": 2.09,
-      "reason": "AMA_API's zero_call_used_regs(\"all\") epilogue: HKDF calls several exported HMAC/SHA-3 entry points internally, each now clearing its call-clobbered registers on return (register-residue fix, INVARIANT-6; the same tree with and without the attribute measured +1.30% on gcc 13.3). Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 38347,
+      "delta_percent": 3.71,
+      "reason": "Two costs since the merge-base. AMA_API's zero_call_used_regs(\"all\") epilogue (+771 Ir, the entry under supersedes, measured by the runner on fbefa4c), and the stack clearing of INVARIANT-6: ama_hkdf() clears the 8,192 bytes its family is measured to need, 1,042 Ir. While the library's own HMAC and SHA-3 calls still went through the public entry points this was thirteen wipes and +4,222 Ir (measured 2026-11-10); they reach inner functions now and the derivation clears its stack once (src/c/internal/ama_scrubbed_inner.h).",
       "commits": [
         "fbefa4c"
       ],
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
       "supersedes": {
-        "from": 114982,
-        "to": 36825,
-        "delta_percent": -67.97,
-        "reason": "HKDF is extract-then-expand over HMAC-SHA3-256, so it inherits the Keccak gain. Re-measured 2026-11-06 on the 26.04 toolchain (gcc 15.2): 2dcef5c6 114,982 Ir to 2db626de 36,825 Ir, -67.97%; the percentage above is the gcc 13.3 figure (117,640 to 39,867 Ir).",
+        "from": 36974,
+        "to": 37745,
+        "delta_percent": 2.09,
+        "reason": "AMA_API's zero_call_used_regs(\"all\") epilogue: HKDF calls several exported HMAC/SHA-3 entry points internally, each now clearing its call-clobbered registers on return (register-residue fix, INVARIANT-6; the same tree with and without the attribute measured +1.30% on gcc 13.3). Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
         "commits": [
-          "b40e60f"
+          "fbefa4c"
         ],
-        "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
-        "measured_on_gcc_13_3": {
-          "from": 117640,
-          "to": 39867,
-          "delta_percent": -66.11
+        "supersedes": {
+          "from": 114982,
+          "to": 36825,
+          "delta_percent": -67.97,
+          "reason": "HKDF is extract-then-expand over HMAC-SHA3-256, so it inherits the Keccak gain. Re-measured 2026-11-06 on the 26.04 toolchain (gcc 15.2): 2dcef5c6 114,982 Ir to 2db626de 36,825 Ir, -67.97%; the percentage above is the gcc 13.3 figure (117,640 to 39,867 Ir).",
+          "commits": [
+            "b40e60f"
+          ],
+          "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
+          "measured_on_gcc_13_3": {
+            "from": 117640,
+            "to": 39867,
+            "delta_percent": -66.11
+          }
         }
       }
     },
@@ -297,9 +259,9 @@
     },
     "kyber_decapsulate": {
       "from": 957064,
-      "to": 737814,
-      "delta_percent": -22.91,
-      "reason": "ML-KEM expands its matrix through SHAKE128 x4, so it inherits the Keccak x4 AVX2 restructure (see dilithium_keygen); decapsulation re-encrypts, so it falls with encapsulation. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 751100,
+      "delta_percent": -21.52,
+      "reason": "ML-KEM expands its matrix through SHAKE128 x4, so it inherits the Keccak x4 AVX2 restructure (see dilithium_keygen); decapsulation re-encrypts, so it falls with encapsulation. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +13,207 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
         "dba6bf4"
       ],
@@ -329,13 +291,18 @@
             "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
           }
         }
+      },
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_before_the_stack_clearing": {
+        "to": 737814,
+        "runner_head_5536e51": 737893
       }
     },
     "kyber_encapsulate": {
       "from": 804033,
-      "to": 570310,
-      "delta_percent": -29.07,
-      "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 582266,
+      "delta_percent": -27.58,
+      "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +11,920 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
         "dba6bf4"
       ],
@@ -365,13 +332,18 @@
             "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
           }
         }
+      },
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_before_the_stack_clearing": {
+        "to": 570310,
+        "runner_head_5536e51": 570346
       }
     },
     "kyber_keygen": {
       "from": 745903,
-      "to": 500294,
-      "delta_percent": -32.93,
-      "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+      "to": 513322,
+      "delta_percent": -31.18,
+      "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +12,951 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
         "dba6bf4"
       ],
@@ -401,6 +373,11 @@
             "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
           }
         }
+      },
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_before_the_stack_clearing": {
+        "to": 500294,
+        "runner_head_5536e51": 500371
       }
     },
     "secp256k1_ecdsa_sign": {
@@ -450,6 +427,103 @@
       "commits": [
         "9be725c8"
       ]
+    }
+  },
+  "retired": {
+    "_comment": "Entries the gate no longer reads: their operation is back within tolerance of the merge-base, where an entry whose 'from' the reference still measures is stale and fails. Kept for what they record.",
+    "aes_256_gcm_encrypt": {
+      "retired": "2026-11-10",
+      "why": "The exported AEAD wipe was a 196,608-byte frame probed page by page with a 4 KiB memset at its top (1,041 Ir, gcc 14.2); it is a 4,096-byte frame zeroed by one `rep stosq`, and a cap (564 Ir). Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 4,567 Ir on the runner against 4,500 at the merge-base (+1.49%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "entry": {
+        "from": 4500,
+        "to": 5041,
+        "delta_percent": 12.02,
+        "reason": "Secret-operand gate cures, paid for in instructions: the AES-GCM partial-block and round-key changes that keep secret state out of FP-domain moves, the value barriers on secret scalar loops, and AMA_API's zero_call_used_regs(\"all\") epilogue on every exported call (register-residue fix, INVARIANT-6). The string-op header removed the fortified __memcpy_chk calls, which recovers part of it. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+        "commits": [
+          "dba6bf4",
+          "b2b5001",
+          "fbefa4c"
+        ],
+        "supersedes": {
+          "from": 3885,
+          "to": 4500,
+          "delta_percent": 15.83,
+          "reason": "This branch pins the x86-64 ISA baseline (-march=x86-64 -mtune=generic) in CMakeLists.txt. The reference, 702e253, is built by the runner's Ubuntu 26.04 amd64v3 gcc 15, which defaults to x86-64-v3, so its non-kernel code -- the portable paths the dispatcher selects on a host WITHOUT AVX2 -- carried AVX2, VEX and BMI1/BMI2 instructions: tools/check_avx_scoping.py found them in 449 non-kernel symbols. With the pin that code is compiled for baseline x86-64 again, so it retires more instructions; the CPUID-gated kernels keep their per-file flags and are unchanged. This is the cost of the correction, not a regression: the higher count is the code a pre-AVX2 host can execute.",
+          "commits": [
+            "9be725c8"
+          ],
+          "supersedes": {
+            "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
+            "commits": [
+              "e8b9c8c",
+              "b8fffe3"
+            ],
+            "reason": "Security hardening, paid for in instructions. The AES-256 key schedule and the GHASH accumulator are scrubbed at exit where gcc -O3 had hoisted them somewhere the source never named (INVARIANT-6), and the AEAD accept/reject return is masked rather than branched, pinned by an instruction-invariance gate.",
+            "measured_on_gcc_13_3": {
+              "from": 3946,
+              "to": 4540,
+              "delta_percent": 15.05
+            },
+            "remeasured_on_26_04_toolchain": {
+              "from": 3837,
+              "to": 3885,
+              "delta_percent": 1.25,
+              "trees": "2dcef5c6 (merge-base) and 2db626de (the merge that recorded this entry)"
+            }
+          }
+        }
+      }
+    },
+    "chacha20poly1305_encrypt": {
+      "retired": "2026-11-10",
+      "why": "The exported AEAD wipe was a 196,608-byte frame probed page by page with a 4 KiB memset at its top (1,041 Ir, gcc 14.2); it is a 4,096-byte frame zeroed by one `rep stosq`, and a cap (564 Ir). Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 11,290 Ir on the runner against 11,080 at the merge-base (+1.90%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "entry": {
+        "from": 11080,
+        "to": 11916,
+        "delta_percent": 7.55,
+        "reason": "The ChaCha20 x8 kernel re-broadcasts its initial rows from general registers at the add-back and stores each transposed half at once (no FP-domain spill under clang), and every exported call clears its call-clobbered registers on return (AMA_API, INVARIANT-6). The key words are loaded through value barriers after this measurement; that moves the count by well under the 2% tolerance. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's.",
+        "commits": [
+          "b2b5001",
+          "fbefa4c"
+        ],
+        "supersedes": {
+          "from": 10475,
+          "to": 11080,
+          "delta_percent": 5.78,
+          "reason": "This branch pins the x86-64 ISA baseline (-march=x86-64 -mtune=generic) in CMakeLists.txt. The reference, 702e253, is built by the runner's Ubuntu 26.04 amd64v3 gcc 15, which defaults to x86-64-v3, so its non-kernel code -- the portable paths the dispatcher selects on a host WITHOUT AVX2 -- carried AVX2, VEX and BMI1/BMI2 instructions: tools/check_avx_scoping.py found them in 449 non-kernel symbols. With the pin that code is compiled for baseline x86-64 again, so it retires more instructions; the CPUID-gated kernels keep their per-file flags and are unchanged. This is the cost of the correction, not a regression: the higher count is the code a pre-AVX2 host can execute.",
+          "commits": [
+            "9be725c8"
+          ]
+        }
+      }
+    }
+  },
+  "pending_runner_measurement": {
+    "since": "2026-11-10",
+    "operations": [
+      "dilithium_keygen",
+      "dilithium_sign",
+      "hkdf_derive",
+      "kyber_decapsulate",
+      "kyber_encapsulate",
+      "kyber_keygen"
+    ],
+    "what": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+    "local_measurement": "gcc 14.2.0-4ubuntu2~24.04, valgrind 3.22.0, Release static library with LTO, driver -O2, AMA_DISPATCH_NO_AUTOTUNE=1, difference method at N=10, x86-64 host with AVX2/BMI2/ADX; A/B of 5536e51 against the working tree",
+    "local_delta_ir": {
+      "aes_256_gcm_encrypt": -474,
+      "chacha20poly1305_encrypt": -474,
+      "dilithium_keygen": 15801,
+      "dilithium_sign": 20172,
+      "dilithium_verify": -1061,
+      "hkdf_derive": 602,
+      "hmac_sha3_256": 324,
+      "kyber_decapsulate": 13207,
+      "kyber_encapsulate": 11920,
+      "kyber_keygen": 12951,
+      "sha3_256": 311,
+      "sha512": 564,
+      "x25519_scalarmult": 564
     }
   }
 }

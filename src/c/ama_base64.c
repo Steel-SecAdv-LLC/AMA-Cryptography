@@ -37,6 +37,7 @@
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ct_barrier.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -142,7 +143,19 @@ AMA_API size_t ama_base64_encoded_len(size_t bin_len, ama_base64_variant_t varia
     return full * 4u + tail;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_encode_body(char *out, size_t out_cap, const uint8_t *in, size_t in_len, ama_base64_variant_t variant, size_t *out_len);
+
 AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,
+                                      const uint8_t *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len) {
+    ama_error_t rc = ama_base64_encode_body(out, out_cap, in, in_len, variant, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_BASE64_BYTES);
+    return rc;
+}
+
+/* ama_base64_encode(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_encode_body(char *out, size_t out_cap,
                                       const uint8_t *in, size_t in_len,
                                       ama_base64_variant_t variant,
                                       size_t *out_len) {
@@ -191,7 +204,19 @@ AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_decode_body(uint8_t *out, size_t out_cap, const char *in, size_t in_len, ama_base64_variant_t variant, size_t *out_len);
+
 AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
+                                      const char *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len) {
+    ama_error_t rc = ama_base64_decode_body(out, out_cap, in, in_len, variant, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_BASE64_BYTES);
+    return rc;
+}
+
+/* ama_base64_decode(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_decode_body(uint8_t *out, size_t out_cap,
                                       const char *in, size_t in_len,
                                       ama_base64_variant_t variant,
                                       size_t *out_len) {

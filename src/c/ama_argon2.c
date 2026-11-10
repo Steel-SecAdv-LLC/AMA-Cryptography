@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 
 /* ============================================================================
  * CONSTANTS
@@ -973,6 +974,8 @@ static ama_error_t ama_argon2id_core(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, uint8_t *output, size_t out_len);
+
 /* ============================================================================
  * Public API (3 entry points)
  *
@@ -991,8 +994,18 @@ AMA_API ama_error_t ama_argon2id(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    uint8_t *output, size_t out_len)
-{
+    uint8_t *output, size_t out_len) {
+    ama_error_t rc = ama_argon2id_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, output, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len) {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
@@ -1000,12 +1013,24 @@ AMA_API ama_error_t ama_argon2id(
                              /*h0_out=*/NULL);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, uint8_t *output, size_t out_len);
+
 AMA_API ama_error_t ama_argon2id_legacy(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    uint8_t *output, size_t out_len)
-{
+    uint8_t *output, size_t out_len) {
+    ama_error_t rc = ama_argon2id_legacy_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, output, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id_legacy(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len) {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
@@ -1013,12 +1038,24 @@ AMA_API ama_error_t ama_argon2id_legacy(
                              /*h0_out=*/NULL);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_verify_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, const uint8_t *expected_tag, size_t tag_len);
+
 AMA_API ama_error_t ama_argon2id_legacy_verify(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    const uint8_t *expected_tag, size_t tag_len)
-{
+    const uint8_t *expected_tag, size_t tag_len) {
+    ama_error_t rc = ama_argon2id_legacy_verify_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, expected_tag, tag_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id_legacy_verify(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_verify_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len) {
     if (!expected_tag || tag_len < 4 || tag_len > AMA_ARGON2ID_MAX_TAG_LEN) {
         /* Upper bound: application-sane ceiling on Argon2 tag length
          * (``AMA_ARGON2ID_MAX_TAG_LEN`` = 1024, 32× the default 32-byte

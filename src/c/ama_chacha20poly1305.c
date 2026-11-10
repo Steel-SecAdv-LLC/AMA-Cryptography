@@ -23,6 +23,7 @@
 #include "../include/ama_dispatch.h"
 #include "../include/ama_uint128.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ct_declassify.h"
 #include <string.h>
 #include <stdint.h>
@@ -781,6 +782,8 @@ static void chacha20poly1305_compute_tag(const uint8_t poly_key[32],
  * PUBLIC API
  * ============================================================================ */
 
+static AMA_SCRUBBED_BODY ama_error_t ama_chacha20poly1305_encrypt_body(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *plaintext, size_t pt_len, const uint8_t *aad, size_t aad_len, uint8_t *ciphertext, uint8_t tag[16]);
+
 /**
  * @brief ChaCha20-Poly1305 AEAD encryption (RFC 8439)
  *
@@ -797,6 +800,20 @@ static void chacha20poly1305_compute_tag(const uint8_t poly_key[32],
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_chacha20poly1305_encrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[16]
+) {
+    ama_error_t rc = ama_chacha20poly1305_encrypt_body(key, nonce, plaintext, pt_len, aad, aad_len, ciphertext, tag);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
+    return rc;
+}
+
+/* ama_chacha20poly1305_encrypt(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_chacha20poly1305_encrypt_body(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t *plaintext, size_t pt_len,
@@ -828,11 +845,13 @@ ama_error_t ama_chacha20poly1305_encrypt(
                                  tag);
 
     ama_secure_memzero(poly_key, sizeof(poly_key));
-    /* chacha20_block scrubs its own state now; this covers the copies the
-     * compiler made of it (and of the NEON/AVX2 kernels' state). */
-    ama_secure_stack_wipe();
+    /* chacha20_block scrubs its own state; the copies the compiler made of
+     * it (and of the NEON/AVX2 kernels' state) are cleared by the entry
+     * point, which wipes the stack this body used. */
     return AMA_SUCCESS;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_chacha20poly1305_decrypt_body(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ciphertext, size_t ct_len, const uint8_t *aad, size_t aad_len, const uint8_t tag[16], uint8_t *plaintext);
 
 /**
  * @brief ChaCha20-Poly1305 AEAD decryption (RFC 8439)
@@ -854,6 +873,20 @@ ama_error_t ama_chacha20poly1305_encrypt(
  * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
  */
 ama_error_t ama_chacha20poly1305_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t tag[16],
+    uint8_t *plaintext
+) {
+    ama_error_t rc = ama_chacha20poly1305_decrypt_body(key, nonce, ciphertext, ct_len, aad, aad_len, tag, plaintext);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
+    return rc;
+}
+
+/* ama_chacha20poly1305_decrypt(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_chacha20poly1305_decrypt_body(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t *ciphertext, size_t ct_len,
@@ -956,9 +989,9 @@ ama_error_t ama_chacha20poly1305_decrypt(
     {
         ama_error_t rc = (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED &
                                        (int)(int32_t)(uint32_t)~(uint64_t)match_mask);
-        /* Unconditional and identical on both classes — see the AES-GCM
-         * decrypt tail and the aead-verify gate. */
-        ama_secure_stack_wipe();
+        /* The entry point clears the stack after this returns, on both
+         * classes alike — see the AES-GCM decrypt tail and the aead-verify
+         * gate. */
         return rc;
     }
 }

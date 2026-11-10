@@ -44,6 +44,8 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1083,16 +1085,16 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
     buf[DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
 
     ama_shake128_inc_init(&shake_ctx);
-    ama_shake128_inc_absorb(&shake_ctx, buf, DIL_SEEDBYTES + 2);
-    ama_shake128_inc_finalize(&shake_ctx);
-    ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake128_inc_absorb_inner(&shake_ctx, buf, DIL_SEEDBYTES + 2);
+    ama_shake128_inc_finalize_inner(&shake_ctx);
+    ama_shake128_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
     while (ctr < DIL_N) {
         if (pos + 3 > sizeof(stream)) {
             /* Squeeze more bytes from the XOF */
-            ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake128_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
         t  = stream[pos++];
@@ -1161,9 +1163,9 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
     ama_shake256_inc_init(&shake_ctx);
-    ama_shake256_inc_absorb(&shake_ctx, buf, DIL_CRHBYTES + 2);
-    ama_shake256_inc_finalize(&shake_ctx);
-    ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake256_inc_absorb_inner(&shake_ctx, buf, DIL_CRHBYTES + 2);
+    ama_shake256_inc_finalize_inner(&shake_ctx);
+    ama_shake256_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
@@ -1171,7 +1173,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         uint8_t t0, t1;
 
         if (pos >= sizeof(stream)) {
-            ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake256_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
 
@@ -1317,7 +1319,7 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ama_shake256(buf, DIL_CRHBYTES + 2, stream, P->polyz_packedbytes);
+    ama_shake256_inner(buf, DIL_CRHBYTES + 2, stream, P->polyz_packedbytes);
     dil_polyz_unpack(a, stream, P);
     /* `stream` is the packed masking vector y and `buf` carries rhoprime
      * (INVARIANT-12). y is the ephemeral whose disclosure, with the emitted
@@ -1408,9 +1410,9 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t *seed, const dil_param
 
     /* Absorb seed, finalize, then squeeze first block */
     ama_shake256_inc_init(&shake_ctx);
-    ama_shake256_inc_absorb(&shake_ctx, seed, P->ctildebytes);
-    ama_shake256_inc_finalize(&shake_ctx);
-    ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+    ama_shake256_inc_absorb_inner(&shake_ctx, seed, P->ctildebytes);
+    ama_shake256_inc_finalize_inner(&shake_ctx);
+    ama_shake256_inc_squeeze_inner(&shake_ctx, buf, sizeof(buf));
 
     /* First 8 bytes encode signs */
     signs = 0;
@@ -1426,7 +1428,7 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t *seed, const dil_param
         do {
             if (pos >= sizeof(buf)) {
                 /* Squeeze next block from the same SHAKE256 state */
-                ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+                ama_shake256_inc_squeeze_inner(&shake_ctx, buf, sizeof(buf));
                 pos = 0;
             }
             b = buf[pos++];
@@ -1911,7 +1913,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
         memcpy(h_input, seedbuf, DIL_SEEDBYTES);
         h_input[DIL_SEEDBYTES] = (uint8_t)P->k;
         h_input[DIL_SEEDBYTES + 1] = (uint8_t)P->l;
-        ama_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
+        ama_shake256_inner(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
         ama_secure_memzero(h_input, sizeof(h_input));
     }
     rho = seedbuf;
@@ -2002,7 +2004,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     }
 
     /* Compute tr = H(pk) */
-    ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(public_key, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* Pack secret key: rho || key || tr || s1 || s2 || t0 */
     memcpy(secret_key, rho, DIL_SEEDBYTES);
@@ -2201,7 +2203,7 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
         }
     }
 
-    ama_shake256(pk, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(pk, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* Precedence matches the pre-row-wise implementation: an out-of-range
      * coefficient is a malformed key (INVALID_PARAM), and only a well-formed
@@ -2249,19 +2251,19 @@ static ama_error_t dil_hash_mu(const uint8_t *tr,
 
     rc = ama_shake256_inc_init(&ctx);
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_absorb(&ctx, tr, DIL_TRBYTES);
+        rc = ama_shake256_inc_absorb_inner(&ctx, tr, DIL_TRBYTES);
     }
     if (rc == AMA_SUCCESS && prefix_len) {
-        rc = ama_shake256_inc_absorb(&ctx, prefix, prefix_len);
+        rc = ama_shake256_inc_absorb_inner(&ctx, prefix, prefix_len);
     }
     if (rc == AMA_SUCCESS && message_len) {
-        rc = ama_shake256_inc_absorb(&ctx, message, message_len);
+        rc = ama_shake256_inc_absorb_inner(&ctx, message, message_len);
     }
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_finalize(&ctx);
+        rc = ama_shake256_inc_finalize_inner(&ctx);
     }
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_squeeze(&ctx, mu, DIL_CRHBYTES);
+        rc = ama_shake256_inc_squeeze_inner(&ctx, mu, DIL_CRHBYTES);
     }
     /* The absorbed state is a function of the message and of tr; neither is a
      * long-term secret, but the state is scrubbed on every path regardless
@@ -2469,7 +2471,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
     }
     memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
-    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
+    ama_shake256_inner(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
                  rhoprime, DIL_CRHBYTES);
 
     /* Rejection sampling loop
@@ -2525,7 +2527,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
             memcpy(challenge_seed, mu, DIL_CRHBYTES);
             memcpy(challenge_seed + DIL_CRHBYTES, w1_packed, w1_len);
-            ama_shake256(challenge_seed, DIL_CRHBYTES + w1_len,
+            ama_shake256_inner(challenge_seed, DIL_CRHBYTES + w1_len,
                         signature, P->ctildebytes);
         }
         /* c~ is the signature's first field, and SampleInBall below branches
@@ -2746,7 +2748,7 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     }
 
     /* Compute tr = H(pk) */
-    ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(public_key, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* mu = H(tr || prefix || M) — streamed, no allocation. */
     {
@@ -2817,7 +2819,7 @@ static ama_error_t dil_verify_internal(const dil_params *P,
                                 i * P->polyw1_packedbytes,
                             &w1prime.vec[i], P);
         }
-        ama_shake256(challenge_input, challenge_len, c_tilde2, P->ctildebytes);
+        ama_shake256_inner(challenge_input, challenge_len, c_tilde2, P->ctildebytes);
         ama_secure_memzero(challenge_input, sizeof(challenge_input));
     }
 
@@ -2867,14 +2869,36 @@ AMA_API const char *ama_ml_dsa_param_set_name(ama_ml_dsa_param_set_t ps) {
     return P ? P->name : NULL;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_body(ama_ml_dsa_param_set_t ps, uint8_t *public_key, uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_keypair(ama_ml_dsa_param_set_t ps,
+                                       uint8_t *public_key, uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_keypair_body(ps, public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_KEYGEN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_body(ama_ml_dsa_param_set_t ps,
                                        uint8_t *public_key, uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_keygen_internal(P, NULL, public_key, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_from_seed_body(ama_ml_dsa_param_set_t ps, const uint8_t xi[32], uint8_t *public_key, uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
+                                                 const uint8_t xi[32],
+                                                 uint8_t *public_key,
+                                                 uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_keypair_from_seed_body(ps, xi, public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_KEYGEN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_keypair_from_seed(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_from_seed_body(ama_ml_dsa_param_set_t ps,
                                                  const uint8_t xi[32],
                                                  uint8_t *public_key,
                                                  uint8_t *secret_key) {
@@ -2883,7 +2907,18 @@ AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
     return dil_keygen_internal(P, xi, public_key, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_pubkey_from_privkey_body(ama_ml_dsa_param_set_t ps, const uint8_t *secret_key, uint8_t *public_key);
+
 AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
+                                                   const uint8_t *secret_key,
+                                                   uint8_t *public_key) {
+    ama_error_t rc = ama_ml_dsa_pubkey_from_privkey_body(ps, secret_key, public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_CHECK_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_pubkey_from_privkey(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_pubkey_from_privkey_body(ama_ml_dsa_param_set_t ps,
                                                    const uint8_t *secret_key,
                                                    uint8_t *public_key) {
     const dil_params *P = dil_params_for(ps);
@@ -2891,7 +2926,17 @@ AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
     return dil_pubkey_from_sk(P, secret_key, public_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_privkey_check_body(ama_ml_dsa_param_set_t ps, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
+                                             const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_privkey_check_body(ps, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_CHECK_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_privkey_check(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_privkey_check_body(ama_ml_dsa_param_set_t ps,
                                              const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P || !secret_key) return AMA_ERROR_INVALID_PARAM;
@@ -2948,7 +2993,20 @@ static ama_error_t dil_sign_ctx_variant(ama_ml_dsa_param_set_t ps,
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_ctx_body(ama_ml_dsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+                                        uint8_t *signature, size_t *signature_len,
+                                        const uint8_t *message, size_t message_len,
+                                        const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_sign_ctx_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_SIGN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_sign_ctx(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_ctx_body(ama_ml_dsa_param_set_t ps,
                                         uint8_t *signature, size_t *signature_len,
                                         const uint8_t *message, size_t message_len,
                                         const uint8_t *ctx, size_t ctx_len,
@@ -2957,7 +3015,20 @@ AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
                                 ctx, ctx_len, NULL, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_hedged_body(ama_ml_dsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_sign_hedged_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_SIGN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_sign_hedged(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_hedged_body(ama_ml_dsa_param_set_t ps,
                                            uint8_t *signature, size_t *signature_len,
                                            const uint8_t *message, size_t message_len,
                                            const uint8_t *ctx, size_t ctx_len,

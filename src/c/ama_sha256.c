@@ -13,6 +13,8 @@
  */
 
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "ama_sha256.h"
 #include <string.h>
 
@@ -267,9 +269,24 @@ void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]) {
     ama_secure_memzero(ctx, sizeof(*ctx));
 }
 
+static AMA_SCRUBBED_BODY void ama_sha256_body(uint8_t *out, const uint8_t *in, size_t inlen);
+
 void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
+    ama_sha256_body(out, in, inlen);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA256_BYTES);
+}
+
+/* ama_sha256() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_sha256_inner(uint8_t *out, const uint8_t *in, size_t inlen) {
     ama_sha256_ctx ctx;
     ama_sha256_init(&ctx);
     ama_sha256_update(&ctx, in, inlen);
     ama_sha256_final(&ctx, out);
+}
+
+/* ama_sha256_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_sha256_body(uint8_t *out, const uint8_t *in, size_t inlen) {
+    ama_sha256_inner(out, in, inlen);
 }

@@ -31,6 +31,8 @@
  */
 
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
@@ -170,8 +172,19 @@ static const uint8_t rcon_ct[10] = {
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
 };
 
+static AMA_SCRUBBED_BODY void ama_aes256_key_expansion_consttime_body(const uint8_t key[32], uint8_t round_keys[240]);
+
 void ama_aes256_key_expansion_consttime(const uint8_t key[32],
                                          uint8_t round_keys[240]) {
+    ama_aes256_key_expansion_consttime_body(key, round_keys);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AES_BYTES);
+}
+
+/* ama_aes256_key_expansion_consttime() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_aes256_key_expansion_consttime_inner(const uint8_t key[32],
+                                              uint8_t round_keys[240]) {
     uint8_t temp[4];
     int i;
 
@@ -203,10 +216,17 @@ void ama_aes256_key_expansion_consttime(const uint8_t key[32],
     }
 }
 
+/* ama_aes256_key_expansion_consttime_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_aes256_key_expansion_consttime_body(const uint8_t key[32], uint8_t round_keys[240]) {
+    ama_aes256_key_expansion_consttime_inner(key, round_keys);
+}
+
 /* GF(2^8) multiplication by 2 (xtime) — same as table-based version */
 static inline uint8_t xtime_ct(uint8_t x) {
     return (uint8_t)((x << 1) ^ (((x >> 7) & 1) * 0x1b));
 }
+
+static AMA_SCRUBBED_BODY void ama_aes256_encrypt_block_consttime_body(const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]);
 
 /**
  * AES-256 encrypt a single block using the constant-time S-box.
@@ -215,6 +235,16 @@ static inline uint8_t xtime_ct(uint8_t x) {
 void ama_aes256_encrypt_block_consttime(const uint8_t round_keys[240],
                                          const uint8_t in[16],
                                          uint8_t out[16]) {
+    ama_aes256_encrypt_block_consttime_body(round_keys, in, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AES_BYTES);
+}
+
+/* ama_aes256_encrypt_block_consttime() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_aes256_encrypt_block_consttime_inner(const uint8_t round_keys[240],
+                                              const uint8_t in[16],
+                                              uint8_t out[16]) {
     uint8_t state[16];
     uint8_t t[16];
     int round;
@@ -260,4 +290,9 @@ void ama_aes256_encrypt_block_consttime(const uint8_t round_keys[240],
     }
 
     memcpy(out, state, 16);
+}
+
+/* ama_aes256_encrypt_block_consttime_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_aes256_encrypt_block_consttime_body(const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]) {
+    ama_aes256_encrypt_block_consttime_inner(round_keys, in, out);
 }

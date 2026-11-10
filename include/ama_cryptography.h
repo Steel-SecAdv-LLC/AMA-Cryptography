@@ -551,10 +551,28 @@ AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
  * `AMA_STACK_WIPE_BYTES` of it.
  *
  * Call it from the frame that called the primitive, immediately after it
- * returns, so the wipe lands where the primitive's frame was.  Every AEAD
- * entry point in this library does.  It is a backstop for compiler-made
- * copies, not a substitute for scrubbing named buffers, and it clears only
- * what is BELOW the current frame — never the caller's own locals.
+ * returns, so the wipe lands where the primitive's frame was.  It is a
+ * backstop for compiler-made copies, not a substitute for scrubbing named
+ * buffers, and it clears only what is BELOW the current frame — never the
+ * caller's own locals.
+ *
+ * The library's own secret-handling entry points need no such call.  Each
+ * one clears the stack it used before it returns, to a depth measured for
+ * its family (src/c/internal/ama_stack_wipe.h has the table and what it was
+ * measured on).  This function is for a caller's own code that handled a
+ * secret below the current frame.
+ *
+ * STACK REQUIREMENT.  An entry point clears its family's depth whether or
+ * not a given call wrote that far, so that depth is the stack the entry
+ * point needs below it.  In an optimised build it runs from 1 KiB (Base64,
+ * Ascon-Hash256) through 4 KiB (the AEADs, SHA-512, X25519) and 16 KiB
+ * (Ed25519, the NIST curves, Argon2id's own frames) to 44 KiB for ML-KEM,
+ * 76 KiB for ML-DSA key generation and 172 KiB for ML-DSA signing.  A
+ * thread that calls ML-DSA signing needs a stack larger than the 128 KiB
+ * some C libraries give a thread by default; it needed more than that
+ * before the depth was cleared as well (154,479 bytes measured).
+ * tests/c/test_pq_parser_stack.c holds the three post-quantum figures under
+ * the budgets it states.
  */
 AMA_API void ama_secure_stack_wipe(void);
 

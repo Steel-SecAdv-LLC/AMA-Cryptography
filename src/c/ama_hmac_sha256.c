@@ -15,6 +15,8 @@
  */
 
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "ama_hmac_sha256.h"
 #include "ama_sha256.h"
 #include <stdlib.h>
@@ -62,9 +64,21 @@ static int hmac_args_are_dereferenceable(const uint8_t *key, size_t key_len,
     return 1;
 }
 
+static AMA_SCRUBBED_BODY void ama_hmac_sha256_body(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len, uint8_t out[32]);
+
 void ama_hmac_sha256(const uint8_t *key, size_t key_len,
                       const uint8_t *data, size_t data_len,
                       uint8_t out[32]) {
+    ama_hmac_sha256_body(key, key_len, data, data_len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HMAC_SHA256_BYTES);
+}
+
+/* ama_hmac_sha256() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_hmac_sha256_inner(const uint8_t *key, size_t key_len,
+                           const uint8_t *data, size_t data_len,
+                           uint8_t out[32]) {
     uint8_t k_prime[AMA_SHA256_BLOCK_SIZE];
     uint8_t ipad[AMA_SHA256_BLOCK_SIZE];
     uint8_t opad[AMA_SHA256_BLOCK_SIZE];
@@ -87,7 +101,7 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
     ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
         /* Key longer than block size: K' = SHA-256(key), zero-padded */
-        ama_sha256(k_prime, key, key_len);
+        ama_sha256_inner(k_prime, key, key_len);
     } else {
         /* Key fits in block: K' = key, zero-padded.  A zero-length key
          * (RFC 2104 permits it; callers may pass NULL for it) must not
@@ -123,7 +137,23 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
     ama_secure_memzero(inner_hash, sizeof(inner_hash));
 }
 
+/* ama_hmac_sha256_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_hmac_sha256_body(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len, uint8_t out[32]) {
+    ama_hmac_sha256_inner(key, key_len, data, data_len, out);
+}
+
+static AMA_SCRUBBED_BODY void ama_hmac_sha256_2_body(const uint8_t *key, size_t key_len, const uint8_t *data1, size_t data1_len, const uint8_t *data2, size_t data2_len, uint8_t out[32]);
+
 void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                        const uint8_t *data1, size_t data1_len,
+                        const uint8_t *data2, size_t data2_len,
+                        uint8_t out[32]) {
+    ama_hmac_sha256_2_body(key, key_len, data1, data1_len, data2, data2_len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HMAC_SHA256_BYTES);
+}
+
+/* ama_hmac_sha256_2(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_hmac_sha256_2_body(const uint8_t *key, size_t key_len,
                         const uint8_t *data1, size_t data1_len,
                         const uint8_t *data2, size_t data2_len,
                         uint8_t out[32]) {
@@ -145,7 +175,7 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     /* Derive K' — see ama_hmac_sha256() for INVARIANT-6 rationale. */
     ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
-        ama_sha256(k_prime, key, key_len);
+        ama_sha256_inner(k_prime, key, key_len);
     } else if (key_len > 0) {
         memcpy(k_prime, key, key_len);
     }

@@ -5,8 +5,11 @@
  * @brief ARM SVE2-optimized ML-DSA-65 (Dilithium) NTT / invNTT
  *
  * SVE2 scalable-vector intrinsics for Dilithium polynomial arithmetic.
- * All loops use VL-agnostic predicated iteration (svwhilelt / svcntw)
- * so the same binary runs on any SVE2 vector width (128-2048 bit).
+ * Every vector loop steps by one whole vector under a constant predicate
+ * (svptrue), so the same binary runs on any SVE2 vector width (128-2048
+ * bit); see WHOLE VECTORS UNDER A CONSTANT PREDICATE below for why the
+ * loops are no longer svwhilelt-predicated, and what a vector length that
+ * is not a power of two gets.
  *
  * Dilithium uses q = 8380417 (23-bit prime), so products are up to
  * ~46 bits.  The NTT butterfly requires 64-bit widening multiply
@@ -90,6 +93,36 @@ static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
  */
 
 /* ============================================================================
+ * WHOLE VECTORS UNDER A CONSTANT PREDICATE
+ *
+ * The loops below were svwhilelt_b32-predicated, with svcntp_b32 for the
+ * number of active lanes, until 2026-11-10.  WHILELT and CNTP take register
+ * operands and are not on Arm's DIT list, and Valgrind cannot execute SVE,
+ * so the secret-operand gate could neither run this file nor admit it by
+ * reading it (src/c/sve2/ama_kyber_sve2.c has the whole of the argument).
+ * Every loop now steps by one full vector under svptrue with plain integer
+ * bounds, and the file is compiled without the auto-vectoriser.  The ranges
+ * are 256 coefficients and the powers of two under it, tiled by whole
+ * vectors exactly when the lane count is a power of two; for a vector
+ * length that is not (the architecture allows 384 bits, 12 lanes) this
+ * returns 0 and both transforms take the scalar path throughout.
+ * ============================================================================ */
+static inline uint64_t dil_sve2_lanes(void) {
+    const uint64_t lanes = svcntw();
+    return (lanes & (lanes - 1u)) == 0u ? lanes : 0u;
+}
+
+/* log2 of a lane count dil_sve2_lanes() returned.  The vector loops count
+ * whole vectors up to `range >> shift` and form the offset as `v << shift`:
+ * stepping an offset by a lane count the compiler cannot see is a power of
+ * two made clang 18.1 compute the trip count with UDIV (measured
+ * 2026-11-10, one in each forward NTT), and no division is on the DIT list
+ * whatever its operands are. */
+static inline unsigned dil_sve2_shift(uint64_t lanes) {
+    return lanes != 0u ? 63u - (unsigned)__builtin_clzll(lanes) : 0u;
+}
+
+/* ============================================================================
  * Forward NTT — Cooley-Tukey butterfly (SVE2 vectorized, 32-bit Dilithium)
  *
  * Signature: void (*)(int32_t poly[256], const int32_t zetas[256])
@@ -102,20 +135,29 @@ static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
  * ============================================================================ */
 void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
                              const int32_t zetas[256]) {
-    unsigned int len, start, j, k;
+    unsigned int log_len, block, len, start, j, k;
     int32_t zeta, t;
-    const uint64_t vl_w = svcntw();  /* Number of int32_t lanes */
+    const uint64_t lanes = dil_sve2_lanes();  /* int32_t lanes, or 0: scalar */
+    const unsigned shift = dil_sve2_shift(lanes);
+    const svbool_t pg = svptrue_b32();
 
     /* Secret staging buffers, hoisted to function scope and scrubbed once on
      * return — see SECRET SCRATCH above. */
     int32_t hi_buf[64], t_buf[64];
 
     k = 0;
-    for (len = 128; len > 0; len >>= 1) {
-        for (start = 0; start < DILITHIUM_N; start += 2 * len) {
+    /* Layers by the log of their stride and blocks by their count, so every
+     * bound is a shift.  Written as `len >>= 1` and `start += 2 * len`, the
+     * number of blocks was a quotient the compiler could not see to be a
+     * power of two, and clang 18.1 formed it with UDIV (measured 2026-11-10
+     * in both forward transforms); no division is on the DIT list. */
+    for (log_len = 8; log_len-- > 0;) {
+        len = 1u << log_len;
+        for (block = 0; block < ((unsigned)DILITHIUM_N >> (log_len + 1u)); block++) {
+            start = block << (log_len + 1u);
             zeta = zetas[++k];
 
-            if (len >= vl_w) {
+            if (lanes != 0u && len >= lanes) {
                 /* Vectorized Cooley-Tukey butterfly.
                  * For each pair (poly[lo_idx], poly[hi_idx]):
                  *   t = montgomery_reduce((int64_t)zeta * poly[hi_idx])
@@ -132,11 +174,8 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
                  * within a single vector, not broadcast-scalar × vector.
                  * The loads and stores are still fully vectorized.
                  */
-                size_t i = 0;
-                while (i < len) {
-                    svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)len);
-                    uint64_t active = svcntp_b32(pg, pg);
-
+                for (size_t v = 0; v < ((size_t)len >> shift); v++) {
+                    const size_t i = v << shift;
                     svint32_t lo = svld1_s32(pg, poly + start + i);
                     svint32_t hi = svld1_s32(pg, poly + start + len + i);
 
@@ -146,7 +185,7 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
                      * hi_buf/t_buf are function-scope secret scratch. */
                     svst1_s32(pg, hi_buf, hi);
 
-                    for (uint64_t e = 0; e < active; e++) {
+                    for (uint64_t e = 0; e < lanes; e++) {
                         t_buf[e] = dil_montgomery_reduce_scalar(
                             (int64_t)zeta * hi_buf[e]);
                     }
@@ -154,8 +193,6 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
                     svint32_t vt = svld1_s32(pg, t_buf);
                     svst1_s32(pg, poly + start + len + i, svsub_s32_x(pg, lo, vt));
                     svst1_s32(pg, poly + start + i,       svadd_s32_x(pg, lo, vt));
-
-                    i += svcntw();
                 }
             } else {
                 /* Scalar path for narrow layers */
@@ -180,26 +217,28 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
  * ============================================================================ */
 void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
                                 const int32_t zetas[256]) {
-    unsigned int start, len, j, k;
+    unsigned int log_len, block, start, len, j, k;
     int32_t t_scalar, zeta;
     const int32_t f = 41978;  /* Mont^(-1) * N^(-1) mod q */
-    const uint64_t vl_w = svcntw();
+    const uint64_t lanes = dil_sve2_lanes();  /* int32_t lanes, or 0: scalar */
+    const unsigned shift = dil_sve2_shift(lanes);
+    const svbool_t pg = svptrue_b32();
 
     /* Secret staging buffers, hoisted to function scope and scrubbed once on
      * return — see SECRET SCRATCH above. */
     int32_t diff_buf[64], hi_buf[64], buf[64];
 
     k = 256;
-    for (len = 1; len < DILITHIUM_N; len <<= 1) {
-        for (start = 0; start < DILITHIUM_N; start += 2 * len) {
+    /* Layers and blocks by shifts, as in the forward transform. */
+    for (log_len = 0; log_len <= 7; log_len++) {
+        len = 1u << log_len;
+        for (block = 0; block < ((unsigned)DILITHIUM_N >> (log_len + 1u)); block++) {
+            start = block << (log_len + 1u);
             zeta = -zetas[--k];
 
-            if (len >= vl_w) {
-                size_t i = 0;
-                while (i < len) {
-                    svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)len);
-                    uint64_t active = svcntp_b32(pg, pg);
-
+            if (lanes != 0u && len >= lanes) {
+                for (size_t v = 0; v < ((size_t)len >> shift); v++) {
+                    const size_t i = v << shift;
                     svint32_t lo = svld1_s32(pg, poly + start + i);
                     svint32_t hi = svld1_s32(pg, poly + start + len + i);
 
@@ -214,7 +253,7 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
                      * diff_buf/hi_buf are function-scope secret scratch. */
                     svst1_s32(pg, diff_buf, diff);
 
-                    for (uint64_t e = 0; e < active; e++) {
+                    for (uint64_t e = 0; e < lanes; e++) {
                         hi_buf[e] = dil_montgomery_reduce_scalar(
                             (int64_t)zeta * diff_buf[e]);
                     }
@@ -222,8 +261,6 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
                     svst1_s32(pg, poly + start + i,       sum);
                     svint32_t vhi = svld1_s32(pg, hi_buf);
                     svst1_s32(pg, poly + start + len + i, vhi);
-
-                    i += svcntw();
                 }
             } else {
                 /* Scalar path for narrow layers */
@@ -239,22 +276,22 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
     }
 
     /* Final scaling by f = Mont^{-1} * N^{-1} mod q */
-    {
-        size_t i = 0;
-        while (i < DILITHIUM_N) {
-            svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
-            uint64_t active = svcntp_b32(pg, pg);
-
+    if (lanes != 0u) {
+        for (size_t v = 0; v < ((size_t)DILITHIUM_N >> shift); v++) {
+            const size_t i = v << shift;
             svint32_t va = svld1_s32(pg, poly + i);
             svst1_s32(pg, buf, va);  /* buf is function-scope secret scratch */
 
-            for (uint64_t e = 0; e < active; e++) {
+            for (uint64_t e = 0; e < lanes; e++) {
                 buf[e] = dil_montgomery_reduce_scalar((int64_t)f * buf[e]);
             }
 
             svint32_t vr = svld1_s32(pg, buf);
             svst1_s32(pg, poly + i, vr);
-            i += svcntw();
+        }
+    } else {
+        for (size_t i = 0; i < DILITHIUM_N; i++) {
+            poly[i] = dil_montgomery_reduce_scalar((int64_t)f * poly[i]);
         }
     }
     AMA_DILITHIUM_SVE2_SCRUB(diff_buf);

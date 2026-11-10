@@ -66,6 +66,8 @@
 #include "../include/ama_cryptography.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_ed25519_canonical.h"
 #include "internal/ama_ct_declassify.h"
@@ -87,8 +89,10 @@
 #endif
 
 /* SHA-512 via the wrapper in ama_ed25519.c (avoids pulling in header-only
- * internal/ama_sha2.h which triggers -Werror=unused-function). */
-#define sha512 ama_ed25519_sha512
+ * internal/ama_sha2.h which triggers -Werror=unused-function).  Its inner
+ * function (internal/ama_scrubbed_inner.h): a FROST entry point clears the
+ * stack once, for every hash under it. */
+#define sha512 ama_ed25519_sha512_inner
 
 /* Random bytes from the OS CSPRNG, or from the hook a test has set so it can
  * simulate an entropy-source failure and assert that FROST aborts instead of
@@ -110,12 +114,12 @@ static const uint8_t SCALAR_ZERO[32] = { 0 };
 
 static void scalar_add(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) {
     /* c = a + 1*b mod l */
-    ama_ed25519_sc_muladd(c, a, SCALAR_ONE, b);
+    ama_ed25519_sc_muladd_inner(c, a, SCALAR_ONE, b);
 }
 
 static void scalar_mul(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) {
     /* c = 0 + a*b mod l */
-    ama_ed25519_sc_muladd(c, SCALAR_ZERO, a, b);
+    ama_ed25519_sc_muladd_inner(c, SCALAR_ZERO, a, b);
 }
 
 /* Constant-time negation mod the Ed25519 group order l.
@@ -153,7 +157,7 @@ static void scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
     uint8_t tmp[64];
     memcpy(tmp, neg, 32);
     memset(tmp + 32, 0, 32);  // PUBLIC-DATA: tmp+32 padding — zero-extend lower 32 bytes of tmp[64] before sc_reduce; tmp itself scrubbed at function exit (added in this commit)
-    ama_ed25519_sc_reduce(tmp);
+    ama_ed25519_sc_reduce_inner(tmp);
     memcpy(neg, tmp, 32);
     /* Scrub tmp before return: tmp[0..31] holds the reduced negated
      * scalar (secret-derived) and was previously left on the stack
@@ -197,7 +201,7 @@ static ama_error_t scalar_random(uint8_t s[32]) {
         ama_secure_memzero(s, 32);
         return rc;
     }
-    ama_ed25519_sc_reduce(buf);
+    ama_ed25519_sc_reduce_inner(buf);
     memcpy(s, buf, 32);
     ama_secure_memzero(buf, 64);
 
@@ -282,7 +286,7 @@ static ama_error_t nonce_generate(uint8_t out[32],
     ama_secure_memzero(buf, sizeof(buf));
     ama_secure_memzero(random_bytes, 32);
 
-    ama_ed25519_sc_reduce(hash);
+    ama_ed25519_sc_reduce_inner(hash);
     memcpy(out, hash, 32);
     ama_secure_memzero(hash, 64);
 
@@ -446,7 +450,7 @@ static ama_error_t compute_binding_factor(uint8_t rho[32],
     sha512(buf, buf_len, hash);
     free(buf);
 
-    ama_ed25519_sc_reduce(hash);
+    ama_ed25519_sc_reduce_inner(hash);
     memcpy(rho, hash, 32);
 
     return AMA_SUCCESS;
@@ -524,7 +528,7 @@ static ama_error_t compute_challenge(uint8_t c[32],
     sha512(buf, buf_len, hash);
     free(buf);
 
-    ama_ed25519_sc_reduce(hash);
+    ama_ed25519_sc_reduce_inner(hash);
     memcpy(c, hash, 32);
 
     return AMA_SUCCESS;
@@ -671,6 +675,8 @@ static int frost_claim_nonce_pair(uint8_t local[AMA_FROST_NONCE_BYTES],
     return locked && !frost_is_all_zero(local, AMA_FROST_NONCE_BYTES);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_keygen_trusted_dealer_body(uint8_t threshold, uint8_t num_participants, uint8_t *group_public_key, uint8_t *participant_shares, const uint8_t *secret_key);
+
 /* ======================================================================
  * PUBLIC API: TRUSTED DEALER KEY GENERATION
  * ====================================================================== */
@@ -680,8 +686,19 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
     uint8_t num_participants,
     uint8_t *group_public_key,
     uint8_t *participant_shares,
-    const uint8_t *secret_key)
-{
+    const uint8_t *secret_key) {
+    ama_error_t rc = ama_frost_keygen_trusted_dealer_body(threshold, num_participants, group_public_key, participant_shares, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_FROST_BYTES);
+    return rc;
+}
+
+/* ama_frost_keygen_trusted_dealer(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_keygen_trusted_dealer_body(
+    uint8_t threshold,
+    uint8_t num_participants,
+    uint8_t *group_public_key,
+    uint8_t *participant_shares,
+    const uint8_t *secret_key) {
     if (!group_public_key || !participant_shares)
         return AMA_ERROR_INVALID_PARAM;
     if (threshold < 2 || num_participants < threshold)
@@ -692,7 +709,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         uint8_t wide[64];
         memcpy(wide, secret_key, 32);
         memset(wide + 32, 0, 32);  // PUBLIC-DATA: wide+32 padding — zero-extend lower 32 bytes of wide[64] before sc_reduce
-        ama_ed25519_sc_reduce(wide);
+        ama_ed25519_sc_reduce_inner(wide);
         memcpy(group_secret, wide, 32);
         ama_secure_memzero(wide, 64);
         /* Constant-time zero check — reject zero scalar (identity pk) */
@@ -715,7 +732,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         }
     }
 
-    if (ama_ed25519_point_from_scalar(group_public_key, group_secret) != AMA_SUCCESS) {
+    if (ama_ed25519_point_from_scalar_inner(group_public_key, group_secret) != AMA_SUCCESS) {
         ama_secure_memzero(group_secret, 32);
         ama_secure_memzero(group_public_key, 32);
         return AMA_ERROR_INVALID_PARAM;
@@ -746,7 +763,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         uint8_t *share = participant_shares + i * 64;
         poly_eval(share, (const uint8_t (*)[32])coeffs,
                   threshold - 1, (uint8_t)(i + 1));
-        if (ama_ed25519_point_from_scalar(share + 32, share) != AMA_SUCCESS) {
+        if (ama_ed25519_point_from_scalar_inner(share + 32, share) != AMA_SUCCESS) {
             /* Scrub every share derived so far plus the coefficients: no
              * partial share material may survive a failed keygen. */
             ama_secure_memzero(participant_shares, (size_t)num_participants * 64);
@@ -764,6 +781,8 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
 
     return AMA_SUCCESS;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_round1_commit_body(uint8_t *nonce_pair, uint8_t *commitment, const uint8_t *participant_share);
 
 /* ======================================================================
  * PUBLIC API: ROUND 1 — NONCE COMMITMENT
@@ -791,8 +810,17 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
 AMA_API ama_error_t ama_frost_round1_commit(
     uint8_t *nonce_pair,
     uint8_t *commitment,
-    const uint8_t *participant_share)
-{
+    const uint8_t *participant_share) {
+    ama_error_t rc = ama_frost_round1_commit_body(nonce_pair, commitment, participant_share);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_FROST_BYTES);
+    return rc;
+}
+
+/* ama_frost_round1_commit(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_round1_commit_body(
+    uint8_t *nonce_pair,
+    uint8_t *commitment,
+    const uint8_t *participant_share) {
     if (!nonce_pair || !commitment || !participant_share)
         return AMA_ERROR_INVALID_PARAM;
 
@@ -818,8 +846,8 @@ AMA_API ama_error_t ama_frost_round1_commit(
         return rc;
     }
 
-    if (ama_ed25519_point_from_scalar(commitment, nonce_pair) != AMA_SUCCESS ||
-        ama_ed25519_point_from_scalar(commitment + 32, nonce_pair + 32) != AMA_SUCCESS) {
+    if (ama_ed25519_point_from_scalar_inner(commitment, nonce_pair) != AMA_SUCCESS ||
+        ama_ed25519_point_from_scalar_inner(commitment + 32, nonce_pair + 32) != AMA_SUCCESS) {
         ama_secure_memzero(nonce_pair, 64);
         ama_secure_memzero(commitment, 64);
         return AMA_ERROR_INVALID_PARAM;
@@ -827,6 +855,8 @@ AMA_API ama_error_t ama_frost_round1_commit(
 
     return AMA_SUCCESS;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_round2_sign_body(uint8_t *sig_share, const uint8_t *message, size_t message_len, const uint8_t *participant_share, uint8_t participant_index, uint8_t *nonce_pair, const uint8_t *commitments, const uint8_t *signer_indices, uint8_t num_signers, const uint8_t *group_public_key);
 
 /* ======================================================================
  * PUBLIC API: ROUND 2 — SIGNATURE SHARE
@@ -892,8 +922,24 @@ AMA_API ama_error_t ama_frost_round2_sign(
     const uint8_t *commitments,
     const uint8_t *signer_indices,
     uint8_t num_signers,
-    const uint8_t *group_public_key)
-{
+    const uint8_t *group_public_key) {
+    ama_error_t rc = ama_frost_round2_sign_body(sig_share, message, message_len, participant_share, participant_index, nonce_pair, commitments, signer_indices, num_signers, group_public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_FROST_BYTES);
+    return rc;
+}
+
+/* ama_frost_round2_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_frost_round2_sign_body(
+    uint8_t *sig_share,
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t *participant_share,
+    uint8_t participant_index,
+    uint8_t *nonce_pair,
+    const uint8_t *commitments,
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *group_public_key) {
     /* `nonce_pair` is NULL-checked first and alone, because every exit below
      * scrubs it: the buffer must be known addressable before any other
      * validation is allowed to return. */
@@ -979,8 +1025,8 @@ AMA_API ama_error_t ama_frost_round2_sign(
         for (size_t i = 0; i < (size_t)num_signers; i++) {
             if (signer_indices[i] == participant_index) { pos = i; break; }
         }
-        ama_error_t pt_rc = ama_ed25519_point_from_scalar(own_commitment, hiding_nonce);
-        ama_error_t pt_rc2 = ama_ed25519_point_from_scalar(own_commitment + 32, binding_nonce);
+        ama_error_t pt_rc = ama_ed25519_point_from_scalar_inner(own_commitment, hiding_nonce);
+        ama_error_t pt_rc2 = ama_ed25519_point_from_scalar_inner(own_commitment + 32, binding_nonce);
         /* Both verdicts are returned to the caller as
          * AMA_ERROR_INVALID_PARAM; the commitment is public (it was
          * broadcast in round 1), the nonces stay secret. */
@@ -1022,13 +1068,13 @@ AMA_API ama_error_t ama_frost_round2_sign(
      */
 
     /* tmp1 = hiding_nonce + binding_nonce * rho */
-    ama_ed25519_sc_muladd(tmp1, hiding_nonce, binding_nonce, rho);
+    ama_ed25519_sc_muladd_inner(tmp1, hiding_nonce, binding_nonce, rho);
 
     /* tmp2 = lambda * secret_share */
     scalar_mul(tmp2, lambda, secret_share);
 
     /* z_i = tmp1 + tmp2 * challenge */
-    ama_ed25519_sc_muladd(sig_share, tmp1, tmp2, challenge);
+    ama_ed25519_sc_muladd_inner(sig_share, tmp1, tmp2, challenge);
 
 consume:
     /* The caller's buffer was zeroed by the claim at entry; what is left is
@@ -1163,7 +1209,7 @@ static ama_error_t verify_share_core(
     scalar_mul(lambda_c, lambda, challenge);
 
     /* LHS = z_i * G */
-    rc = ama_ed25519_point_from_scalar(lhs, sig_share);
+    rc = ama_ed25519_point_from_scalar_inner(lhs, sig_share);
     if (rc != AMA_SUCCESS) goto done;
 
     /* comm_share = D_i + rho_i * E_i */

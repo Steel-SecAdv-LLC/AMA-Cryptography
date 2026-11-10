@@ -44,6 +44,8 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ct_barrier.h"
 #include "internal/ama_ct_declassify.h"
 #include <stdlib.h>
@@ -506,13 +508,13 @@ static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8
     buf[33] = y;
 
     ama_shake128_inc_init(&shake_ctx);
-    ama_shake128_inc_absorb(&shake_ctx, buf, 34);
-    ama_shake128_inc_finalize(&shake_ctx);
-    ama_shake128_inc_squeeze(&shake_ctx, stream, initial_len);
+    ama_shake128_inc_absorb_inner(&shake_ctx, buf, 34);
+    ama_shake128_inc_finalize_inner(&shake_ctx);
+    ama_shake128_inc_squeeze_inner(&shake_ctx, stream, initial_len);
 
     ctr = kyber_rej_uniform_from_stream(a, 0u, stream, initial_len);
     while (ctr < KYBER_N) {
-        ama_shake128_inc_squeeze(&shake_ctx, stream, KYBER_XOF_BLOCKBYTES);
+        ama_shake128_inc_squeeze_inner(&shake_ctx, stream, KYBER_XOF_BLOCKBYTES);
         ctr = kyber_rej_uniform_from_stream(a, ctr, stream, KYBER_XOF_BLOCKBYTES);
     }
 }
@@ -793,7 +795,7 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
             memcpy(buf, seed, 32);
             buf[32] = nonce + (uint8_t)i;
             buf[33] = 0;
-            ama_shake256(buf, 33, stream, noise_bytes);
+            ama_shake256_inner(buf, 33, stream, noise_bytes);
             if (eta == 3) {
                 kyber_poly_cbd3(&r->vec[i], stream);
             } else {
@@ -820,7 +822,7 @@ static void kyber_cbd_poly(poly* r, const uint8_t seed[32], uint8_t nonce, unsig
 
     memcpy(buf, seed, 32);
     buf[32] = nonce;
-    ama_shake256(buf, 33, stream, noise_bytes);
+    ama_shake256_inner(buf, 33, stream, noise_bytes);
     if (eta == 3) {
         kyber_poly_cbd3(r, stream);
     } else {
@@ -917,7 +919,7 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
             uint8_t g_input[33];
             memcpy(g_input, d, 32);
             g_input[32] = (uint8_t)P->k;
-            ama_sha3_512(g_input, 33, buf);
+            ama_sha3_512_inner(g_input, 33, buf);
             ama_secure_memzero(g_input, sizeof(g_input));
         }
         rho = buf;
@@ -968,7 +970,7 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
         memcpy(secret_key + t_bytes, public_key, P->pk_bytes);
 
         /* H(pk) */
-        ama_sha3_256(public_key, P->pk_bytes, secret_key + t_bytes + P->pk_bytes);
+        ama_sha3_256_inner(public_key, P->pk_bytes, secret_key + t_bytes + P->pk_bytes);
 
         /* z for implicit rejection */
         if (z_in) {
@@ -1176,10 +1178,10 @@ static ama_error_t kyber_encapsulate_internal(
         {
             uint8_t pk_hash[32];
             uint8_t g_input[64];
-            ama_sha3_256(public_key, P->pk_bytes, pk_hash);
+            ama_sha3_256_inner(public_key, P->pk_bytes, pk_hash);
             memcpy(g_input, m, 32);
             memcpy(g_input + 32, pk_hash, 32);
-            ama_sha3_512(g_input, 64, kr);
+            ama_sha3_512_inner(g_input, 64, kr);
             ama_secure_memzero(g_input, sizeof(g_input));
         }
 
@@ -1264,7 +1266,7 @@ static ama_error_t kyber_decapsulate_internal(
          * derived. */
         {
             uint8_t h_computed[32];
-            ama_sha3_256(pk, P->pk_bytes, h_computed);
+            ama_sha3_256_inner(pk, P->pk_bytes, h_computed);
             if (ama_consttime_memcmp(h_computed, h_pk, 32) != 0) {
                 return AMA_ERROR_INVALID_PARAM;
             }
@@ -1306,7 +1308,7 @@ static ama_error_t kyber_decapsulate_internal(
             uint8_t g_input[64];
             memcpy(g_input, m, 32);
             memcpy(g_input + 32, h_pk, 32);
-            ama_sha3_512(g_input, 64, kr);
+            ama_sha3_512_inner(g_input, 64, kr);
             ama_secure_memzero(g_input, sizeof(g_input));
         }
 
@@ -1329,7 +1331,7 @@ static ama_error_t kyber_decapsulate_internal(
             uint8_t rej_input[32 + AMA_ML_KEM_MAX_CIPHERTEXT_BYTES];
             memcpy(rej_input, z, 32);
             memcpy(rej_input + 32, ciphertext, P->ct_bytes);
-            ama_shake256(rej_input, 32 + P->ct_bytes, ss_reject, 32);
+            ama_shake256_inner(rej_input, 32 + P->ct_bytes, ss_reject, 32);
             ama_secure_memzero(rej_input, sizeof(rej_input));
 
             /* Start with the valid shared secret (kr), then conditionally
@@ -2040,7 +2042,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             uint8_t noise_stream[KYBER_ETA2 * KYBER_N / 4];
             memcpy(noise_buf, coins, 32);
             noise_buf[32] = 2 * (uint8_t)KYBER_K;
-            ama_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
+            ama_shake256_inner(noise_buf, 33, noise_stream, sizeof(noise_stream));
             kyber_poly_cbd_eta(&epp, noise_stream);
         }
 
@@ -2203,7 +2205,18 @@ AMA_API const char *ama_ml_kem_param_set_name(ama_ml_kem_param_set_t ps) {
     return P ? P->name : NULL;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_keypair_body(ama_ml_kem_param_set_t ps, uint8_t *pk, size_t pk_len, uint8_t *sk, size_t sk_len);
+
 AMA_API ama_error_t ama_ml_kem_keypair(ama_ml_kem_param_set_t ps,
+                                       uint8_t *pk, size_t pk_len,
+                                       uint8_t *sk, size_t sk_len) {
+    ama_error_t rc = ama_ml_kem_keypair_body(ps, pk, pk_len, sk, sk_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_keypair_body(ama_ml_kem_param_set_t ps,
                                        uint8_t *pk, size_t pk_len,
                                        uint8_t *sk, size_t sk_len) {
     const kyber_params *P = kyber_params_for(ps);
@@ -2211,7 +2224,20 @@ AMA_API ama_error_t ama_ml_kem_keypair(ama_ml_kem_param_set_t ps,
     return kyber_keygen_internal(P, pk, pk_len, sk, sk_len, NULL, NULL);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_keypair_from_seed_body(ama_ml_kem_param_set_t ps, const uint8_t d[32], const uint8_t z[32], uint8_t *pk, size_t pk_len, uint8_t *sk, size_t sk_len);
+
 AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
+                                                 const uint8_t d[32],
+                                                 const uint8_t z[32],
+                                                 uint8_t *pk, size_t pk_len,
+                                                 uint8_t *sk, size_t sk_len) {
+    ama_error_t rc = ama_ml_kem_keypair_from_seed_body(ps, d, z, pk, pk_len, sk, sk_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_keypair_from_seed(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_keypair_from_seed_body(ama_ml_kem_param_set_t ps,
                                                  const uint8_t d[32],
                                                  const uint8_t z[32],
                                                  uint8_t *pk, size_t pk_len,
@@ -2299,7 +2325,7 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     ek = secret_key + KYBER_T_BYTES(P);
     h_stored = ek + P->pk_bytes;
 
-    ama_sha3_256(ek, P->pk_bytes, h_computed);
+    ama_sha3_256_inner(ek, P->pk_bytes, h_computed);
     if (ama_consttime_memcmp(h_computed, h_stored, 32) != 0) {
         ama_secure_memzero(h_computed, sizeof(h_computed));
         return AMA_ERROR_VERIFY_FAILED;
@@ -2336,7 +2362,18 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_pubkey_from_privkey_body(ama_ml_kem_param_set_t ps, const uint8_t *sk, size_t sk_len, uint8_t *pk, size_t pk_len);
+
 AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
+                                                   const uint8_t *sk, size_t sk_len,
+                                                   uint8_t *pk, size_t pk_len) {
+    ama_error_t rc = ama_ml_kem_pubkey_from_privkey_body(ps, sk, sk_len, pk, pk_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_pubkey_from_privkey(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_pubkey_from_privkey_body(ama_ml_kem_param_set_t ps,
                                                    const uint8_t *sk, size_t sk_len,
                                                    uint8_t *pk, size_t pk_len) {
     const kyber_params *P = kyber_params_for(ps);
@@ -2344,7 +2381,17 @@ AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
     return kyber_pubkey_from_sk(P, sk, sk_len, pk, pk_len);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_privkey_check_body(ama_ml_kem_param_set_t ps, const uint8_t *sk, size_t sk_len);
+
 AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
+                                             const uint8_t *sk, size_t sk_len) {
+    ama_error_t rc = ama_ml_kem_privkey_check_body(ps, sk, sk_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_privkey_check(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_privkey_check_body(ama_ml_kem_param_set_t ps,
                                              const uint8_t *sk, size_t sk_len) {
     const kyber_params *P = kyber_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
@@ -2417,7 +2464,19 @@ AMA_API ama_error_t ama_ml_kem_pubkey_check(ama_ml_kem_param_set_t ps,
     return kyber_pubkey_check(P, pk, pk_len);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_encapsulate_body(ama_ml_kem_param_set_t ps, const uint8_t *pk, size_t pk_len, uint8_t *ct, size_t *ct_len, uint8_t *ss, size_t ss_len);
+
 AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *pk, size_t pk_len,
+                                           uint8_t *ct, size_t *ct_len,
+                                           uint8_t *ss, size_t ss_len) {
+    ama_error_t rc = ama_ml_kem_encapsulate_body(ps, pk, pk_len, ct, ct_len, ss, ss_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_encapsulate(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_encapsulate_body(ama_ml_kem_param_set_t ps,
                                            const uint8_t *pk, size_t pk_len,
                                            uint8_t *ct, size_t *ct_len,
                                            uint8_t *ss, size_t ss_len) {
@@ -2438,7 +2497,19 @@ ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
 }
 #endif
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_decapsulate_body(ama_ml_kem_param_set_t ps, const uint8_t *ct, size_t ct_len, const uint8_t *sk, size_t sk_len, uint8_t *ss, size_t ss_len);
+
 AMA_API ama_error_t ama_ml_kem_decapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *ct, size_t ct_len,
+                                           const uint8_t *sk, size_t sk_len,
+                                           uint8_t *ss, size_t ss_len) {
+    ama_error_t rc = ama_ml_kem_decapsulate_body(ps, ct, ct_len, sk, sk_len, ss, ss_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_KEM_BYTES);
+    return rc;
+}
+
+/* ama_ml_kem_decapsulate(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_kem_decapsulate_body(ama_ml_kem_param_set_t ps,
                                            const uint8_t *ct, size_t ct_len,
                                            const uint8_t *sk, size_t sk_len,
                                            uint8_t *ss, size_t ss_len) {

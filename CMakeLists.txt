@@ -823,8 +823,18 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
             src/c/sve2/ama_argon2_sve2.c
         )
         if(NOT MSVC)
+            # No auto-vectoriser in the SVE2 kernels, for the reason the
+            # AVX-512 and VAES kernels have none (AMA_STATIC_CT_KERNEL_FLAGS
+            # above): Valgrind cannot execute SVE, so these objects are held
+            # to Arm's DIT list by reading them (tools/check_ct_operand.py
+            # --static, the secret-operand-check-arm64 job), and a listing
+            # admits only what the source wrote.  Measured 2026-11-10 with
+            # the vectoriser on: gcc 13.3 turned the scalar Keccak and the
+            # scalar reductions into WHILELO, UQDECD and FMOV, and clang 18.1
+            # computed a trip count with UDIV; none is on the list.  The
+            # x86-only -mtune-ctrl of that variable is not wanted here.
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
-                COMPILE_FLAGS "-march=armv9-a+sve2")
+                COMPILE_FLAGS "-march=armv9-a+sve2 -fno-tree-vectorize -fno-tree-slp-vectorize")
             # AMA_HAVE_SVE2_IMPL says "the SVE2 kernels exist in this build", so
             # src/c/dispatch/ama_dispatch.c may take the addresses of the nine
             # SVE2 kernel symbols src/c/sve2/ama_sve2_internal.h declares.  It
@@ -1483,6 +1493,15 @@ if(AMA_BUILD_TESTS)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)
+        # A consumer that defines nothing is taken for a user of the DLL and
+        # given __declspec(dllimport) (include/ama_cryptography.h), which an
+        # archive cannot satisfy.  Every test then referenced __imp_ama_* and
+        # linked only where -flto happened to resolve it: measured 2026-11-10
+        # with MinGW gcc 13.2, CMAKE_BUILD_TYPE=None, Debug, MinSizeRel and
+        # AMA_ENABLE_LTO=OFF all failed with "undefined reference to
+        # `__imp_ama_kem_decapsulate'".  The macro is the header's own name
+        # for "not the DLL"; it changes nothing else in a consumer.
+        target_compile_definitions(ama_cryptography_test INTERFACE AMA_BUILDING_STATIC)
     endif()
 
     add_subdirectory(tests/c)

@@ -519,6 +519,137 @@ class TestVerdict:
         assert gate.main(["--lib", str(lib), "--target", "x25519", "--deny", "NOTAMNEMONIC"]) == 2
 
 
+_A64_STATIC_PROBE = """
+        .arch armv9-a+sve2
+        .text
+        .globl admitted
+        .type admitted, %function
+admitted:
+        bti     c
+        add     x0, x1, x2
+        ld1h    z0.h, p0/z, [x1]
+        add     z0.h, z0.h, z1.h
+        ptrue   p0.h
+        pfalse  p1.b
+        cnth    x3
+        rdvl    x4, #1
+        adrp    x5, admitted
+        movz    w9, #0x2001
+        movz    w3, #0x1
+        movk    w9, #0x380, lsl #16
+        movn    x10, #0x0
+        movk    x10, #0x380, lsl #48
+        cbz     x0, 1f
+        subs    x0, x0, #1
+        b.ne    1f
+1:      ret
+        .size admitted, .-admitted
+
+        .globl refused
+        .type refused, %function
+refused:
+        movk    w9, #0x1
+        udiv    w0, w1, w2
+        whilelt p0.h, x1, x2
+        cntp    x0, p0, p0.h
+        fmov    w0, s0
+        movz    w9, #0x1
+        add     w9, w9, w1
+        movk    w9, #0x2, lsl #16
+        movz    w11, #0x1
+        bl      admitted
+        movk    w11, #0x2, lsl #16
+        movz    w12, #0x1
+2:      movk    w12, #0x2, lsl #16
+        subs    x0, x0, #1
+        b.ne    2b
+        movz    w13, #0x1
+        orr     x14, xzr, x13
+        movk    x13, #0x2, lsl #16
+        ret
+        .size refused, .-refused
+"""
+
+
+def _aarch64_cc() -> str | None:
+    """A compiler that targets AArch64 ELF: the native one or the cross one."""
+    if sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
+        return shutil.which("cc") or shutil.which("gcc")
+    return shutil.which("aarch64-linux-gnu-gcc")
+
+
+@pytest.mark.requires_aarch64_toolchain
+class TestStaticListingAArch64:
+    """The SVE2 lane: Valgrind cannot execute SVE, so the kernels are held to
+    Arm's DIT list by reading them.
+
+    The rule is the x86-64 one with two additions an AArch64 listing needs,
+    and each is held here from both sides.  Instructions that read no register
+    (an immediate, a page address, a constant predicate, the vector length)
+    have no row on the list and are admitted by name.  MOVK reads the register
+    it completes, and is admitted only where that register still holds the
+    immediate a MOVZ or MOVN wrote: refused with no such instruction before
+    it, after one whose register has since been named, across a call, at a
+    branch target, and after its register was read under its other width.
+    """
+
+    def _listing(self, gate: ModuleType, tmp_path: Path) -> tuple[dict[str, int], list[str]]:
+        compiler = _aarch64_cc()
+        objdump = gate.objdump_for("aarch64")
+        if compiler is None or objdump is None:
+            pytest.skip("no AArch64 compiler and disassembler on this host")
+        src = tmp_path / "probe.s"
+        obj = tmp_path / "probe.o"
+        src.write_text(_A64_STATIC_PROBE, encoding="utf-8")
+        subprocess.run([compiler, "-c", "-o", str(obj), str(src)], check=True)
+        assert gate.object_isa(obj) == "aarch64"
+        allowed, _ = gate.load_allowlist("aarch64")
+        counts, bad = gate.static_listing([obj], allowed, {}, "aarch64", objdump)
+        return counts, [text.split()[0] + " " + text.split()[1] for _, _, text in bad]
+
+    def test_what_is_admitted_and_what_is_refused(self, gate: ModuleType, tmp_path: Path) -> None:
+        counts, bad = self._listing(gate, tmp_path)
+        # Nothing in `admitted`; in `refused`, the five instructions that take
+        # register data and are not listed, and every MOVK whose register is
+        # not known to hold an immediate, in source order.
+        assert bad == [
+            "movk w9,",
+            "udiv w0,",
+            "whilelt p0.h,",
+            "cntp x0,",
+            "fmov w0,",
+            "movk w9,",
+            "movk w11,",
+            "movk w12,",
+            "movk x13,",
+        ], bad
+        assert {"HINT", "PTRUE", "PFALSE", "CNTH", "RDVL", "ADRP", "MOVZ", "MOVN"} <= set(counts)
+        assert counts["MOVK"] == 7
+
+    def test_the_archive_is_listed_against_its_own_architecture(
+        self, gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--static reads the ISA from the members, not from the host: the
+        same command lists an AArch64 archive on an x86-64 host that has the
+        cross binutils, and refuses rather than guess where it cannot."""
+        compiler = _aarch64_cc()
+        if compiler is None or gate.objdump_for("aarch64") is None:
+            pytest.skip("no AArch64 compiler and disassembler on this host")
+        src = tmp_path / "probe.s"
+        obj = tmp_path / "probe.o"
+        archive = tmp_path / "lib.a"
+        src.write_text(_A64_STATIC_PROBE, encoding="utf-8")
+        subprocess.run([compiler, "-c", "-o", str(obj), str(src)], check=True)
+        subprocess.run(["ar", "rcs", str(archive), str(obj)], check=True)
+        assert gate.main(["--static", "--lib", str(archive), "--member", "probe.o"]) == 1
+        out = capsys.readouterr().out
+        assert "(aarch64)" in out and "9 instruction(s) are neither" in out
+        junk = tmp_path / "junk.o"
+        junk.write_bytes(b"not an object")
+        subprocess.run(["ar", "rcs", str(tmp_path / "junk.a"), str(junk)], check=True)
+        assert gate.main(["--static", "--lib", str(tmp_path / "junk.a"), "--member", "junk.o"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # 4. The instrument itself
 # ---------------------------------------------------------------------------
@@ -570,6 +701,7 @@ _ENCODINGS = {"sse": ["-mno-avx"], "vex": ["-mavx"]}
 
 
 @pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("x86-64")
 @pytest.mark.skipif(
     platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe is written for the x86-64 lifting",
@@ -613,6 +745,7 @@ def test_a_reported_site_is_explained_by_its_own_ir(gate: ModuleType, tmp_path: 
 
 
 @pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("x86-64")
 @pytest.mark.skipif(
     platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe's expectations are written for the x86-64 lifting",
@@ -704,7 +837,126 @@ def test_the_tool_reports_each_class_on_the_secret_sites_only(
     assert vex == (fp_mnemonics if encoding == "vex" else set()), fp_mnemonics
 
 
+_PACKED_PROBE = r"""
+#include <stdint.h>
+#include <valgrind/memcheck.h>
+#if defined(__AVX__)
+#define V "v"
+#else
+#define V ""
+#endif
+/* One instruction per function, named in the source: which conversion the
+ * compiler would have chosen is not what is being measured. */
+#define PACKED(name, insn)                                                          \
+    __attribute__((noinline)) void name(const void *in, void *out) {               \
+        __asm__ volatile(V "movdqu (%0), %%xmm0\n\t" V insn " %%xmm0, %%xmm1\n\t"  \
+                         V "movdqu %%xmm1, (%1)"                                   \
+                         : : "r"(in), "r"(out) : "xmm0", "xmm1", "memory");        \
+    }
+PACKED(p_cvttps2dq, "cvttps2dq")
+PACKED(p_cvtps2dq, "cvtps2dq")
+PACKED(p_cvtdq2ps, "cvtdq2ps")
+PACKED(p_cvttpd2dq, "cvttpd2dq")
+PACKED(p_cvtpd2dq, "cvtpd2dq")
+PACKED(p_cvtdq2pd, "cvtdq2pd")
+PACKED(p_cvtps2pd, "cvtps2pd")
+PACKED(p_cvtpd2ps, "cvtpd2ps")
+PACKED(q_public, "cvttps2dq")
+int main(void) {
+    static float fsec[4] = { 1.5f, 2.5f, -3.5f, 4.0f }, fpub[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    static double dsec[2] = { 1.5, -2.5 };
+    static int32_t isec[4] = { 1, -2, 3, 4 };
+    static uint8_t out[9][16];
+    VALGRIND_MAKE_MEM_UNDEFINED(fsec, sizeof fsec);
+    VALGRIND_MAKE_MEM_UNDEFINED(dsec, sizeof dsec);
+    VALGRIND_MAKE_MEM_UNDEFINED(isec, sizeof isec);
+    p_cvttps2dq(fsec, out[0]);
+    p_cvtps2dq(fsec, out[1]);
+    p_cvtdq2ps(isec, out[2]);
+    p_cvttpd2dq(dsec, out[3]);
+    p_cvtpd2dq(dsec, out[4]);
+    p_cvtdq2pd(isec, out[5]);
+    p_cvtps2pd(fsec, out[6]);
+    p_cvtpd2ps(dsec, out[7]);
+    q_public(fpub, out[8]);
+    return 0;
+}
+"""
+
+_PACKED_CONVERSIONS = (
+    "cvttps2dq",
+    "cvtps2dq",
+    "cvtdq2ps",
+    "cvttpd2dq",
+    "cvtpd2dq",
+    "cvtdq2pd",
+    "cvtps2pd",
+    "cvtpd2ps",
+)
+
+
 @pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("x86-64")
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("x86_64", "amd64"),
+    reason="the probe's expectations are written for the x86-64 lifting",
+)
+@pytest.mark.parametrize("encoding", sorted(_ENCODINGS))
+def test_a_packed_conversion_of_a_secret_is_a_blocking_fp_site(
+    gate: ModuleType, tmp_path: Path, encoding: str
+) -> None:
+    """Every packed float/integer conversion on a secret is reported FP, and
+    blocks; the same instruction on a public value is not recorded.
+
+    ``test_op_class`` holds the NAME rule to the packed spellings.  This is
+    the instrument end of the same question: the instruction is executed, VEX
+    lifts it to whichever operations the installed release uses (3.22:
+    ``F32toI32Sx4`` and ``I32StoF32x4`` for the single-precision pairs, the
+    scalar ``F64toI32S``, ``I32StoF64``, ``F32toF64`` and ``F64toF32`` lane by
+    lane for the rest), and the site must come out FP whatever they are.
+    ``_PROBE`` cannot stand in for it: its one conversion, ``cvtsi2sd``, sits
+    in a function that multiplies as well, so that function is FP with or
+    without the conversion's class.  Mutation, 2026-11-10: with ``op_class``
+    made to return ``None`` for the conversion operations, this test fails in
+    both encodings and ``test_the_tool_reports_each_class_on_the_secret_sites
+    _only`` still passes.
+    """
+    if (
+        not shutil.which("valgrind")
+        or not Path("/usr/include/valgrind/pub_tool_tooliface.h").is_file()
+    ):
+        pytest.skip("valgrind or its tool headers are not installed")
+    stage = gate.build_tool("x86_64", tmp_path / "cache")
+    src = tmp_path / "packed.c"
+    exe = tmp_path / "packed"
+    src.write_text(_PACKED_PROBE, encoding="utf-8")
+    subprocess.run(
+        ["gcc", "-O2", "-g", *_ENCODINGS[encoding], str(src), "-o", str(exe)], check=True
+    )
+    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
+    assert text is not None
+    report = gate.parse_report(text)
+    allowed, _ = gate.load_allowlist("x86_64")
+    verdict = gate.classify(
+        report, "x86_64", allowed, gate.derive_x86_spellings(allowed, tmp_path), set()
+    )
+    assert report.header["tainted_bytes"] == 48
+    blocking: dict[str, set[tuple[str, str]]] = {}
+    for site, mnemonic, _ in verdict.class_violations:
+        blocking.setdefault(site.symbol.split("+", 1)[0], set()).update(
+            (mnemonic, c) for c in gate.class_names(site.classes) if c in gate.BLOCKING_CLASSES
+        )
+    # The conversion itself is what blocks, in the encoding the case names,
+    # and for the class FP alone; the loads and stores around it do not.
+    prefix = "V" if encoding == "vex" else ""
+    assert blocking == {
+        f"p_{name}": {(prefix + name.upper(), "FP")} for name in _PACKED_CONVERSIONS
+    }, blocking
+    assert not any(s.symbol.startswith("q_public+") for s in report.sites)
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("x86-64")
 @pytest.mark.skipif(
     platform.machine().lower() not in ("x86_64", "amd64"),
     reason="the probe's expectations are written for the x86-64 lifting",
@@ -817,6 +1069,25 @@ def test_the_avx512_and_vaes_kernels_get_the_static_listing() -> None:
     assert "for cc in gcc clang" in runs
 
 
+def test_the_sve2_kernels_get_the_static_listing() -> None:
+    """Valgrind executes no SVE, so the AArch64 job reads the SVE2 objects
+    instead: every file of ``src/c/sve2`` is a member of the listing, under
+    both compilers, from an archive built with the kernels in it and without
+    LTO (an LTO object holds no machine code to read)."""
+    runs = "\n".join(step.get("run", "") for step in _job("secret-operand-check-arm64")["steps"])
+    listing = next(
+        block for block in runs.split("set -euo pipefail") if "-DAMA_ENABLE_SVE2=ON" in block
+    )
+    assert "--static" in listing and "-DAMA_ENABLE_LTO=OFF" in listing
+    assert "for cc in gcc clang" in listing
+    sources = sorted(path.name for path in (REPO_ROOT / "src" / "c" / "sve2").glob("*.c"))
+    assert len(sources) == 8, sources
+    assert sorted(re.findall(r"--member (\S+)\.o\b", listing)) == sources
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    flags = cmake.split("set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES", 1)[1]
+    assert "-fno-tree-vectorize -fno-tree-slp-vectorize" in flags.split(")", 1)[0]
+
+
 def test_the_gate_also_measures_the_shipped_shared_object() -> None:
     runs = [step.get("run", "") for step in _job()["steps"]]
     assert any("libama_cryptography.so" in r and "check_ct_operand" in r for r in runs)
@@ -840,15 +1111,26 @@ def test_the_bulk_aead_workload_reaches_the_kernels_it_names(
     """chacha20_xor enters the x8 kernel only for 512 bytes or more, and the
     aead-bulk drivers once ran 256: the ChaCha20 kernels the target names
     never executed (Copilot review, 2026-11-08).  Both drivers carry a message
-    above that size, and the operand gate requires the kernel to consume the
-    secret when the dispatcher is not pinned."""
+    above that size, and every lane refuses a run that did not reach the
+    kernel its target and pin name: one table, in
+    ``check_ghash_constant_time``, read by the count and taint lanes there
+    and by the operand gate here (``tests/test_ghash_constant_time_gate.py``
+    holds the two lanes; this holds the third to the same table)."""
     for driver in (ghash._TAINT_DRIVERS["aead-bulk"], ghash._DRIVERS["aead-bulk"]):
         sizes = [int(n) for n in re.findall(r"\bpt\[(\d+)\]", driver)]
         assert sizes and min(sizes) > 512, sizes
-    assert gate._REQUIRED_KERNELS["aead-bulk"]["x86_64"] == ("ama_chacha20_block_x8_avx2",)
+    assert ghash.required_kernels("aead-bulk", None, "x86_64") == ("ama_chacha20_block_x8_avx2",)
     # The NEON x8 entry point only calls the x4 kernel twice; the x4 kernel
     # is where the secret is consumed.
-    assert gate._REQUIRED_KERNELS["aead-bulk"]["aarch64"] == ("ama_chacha20_block_x4_neon",)
+    assert ghash.required_kernels("aead-bulk", None, "aarch64") == ("ama_chacha20_block_x4_neon",)
+    # Pinned, the kernel is the pinned tier's; every other slot is scalar.
+    assert ghash.required_kernels("aead-bulk", "aes-gcm-aesni", "x86_64") == (
+        "ama_aes256_gcm_encrypt_avx2",
+        "ama_aes256_gcm_decrypt_avx2",
+    )
+    source = TOOL_PATH.read_text(encoding="utf-8")
+    assert "ghash.required_kernels(args.target, args.dispatch_only, isa)" in source
+    assert not hasattr(gate, "_REQUIRED_KERNELS"), "a second table would drift from the first"
 
 
 def test_the_hkdf_drivers_key_every_hmac_with_a_long_secret(ghash: ModuleType) -> None:
@@ -960,29 +1242,54 @@ def test_every_target_runs_and_any_failure_fails_the_step(name: str) -> None:
 
 def test_the_instrument_tests_run_where_valgrind_is_provisioned() -> None:
     """The tests that build and run the tool skip without valgrind's tool
-    headers, and no ordinary pytest lane installs them.  ci.yml's
-    security-checks job does, and runs ``-m requires_memcheck`` with
+    headers, and no ordinary pytest lane installs them.  Two jobs do, one per
+    architecture, and each runs ``-m requires_memcheck`` on this module with
     AMA_CI_REQUIRE_MEMCHECK set, which turns a skip into a failure
-    (INVARIANT-47): this module must be in that step and its tool tests must
-    carry the marker, or they pin nothing in CI."""
+    (INVARIANT-47): ci.yml's security-checks on x86-64, and dudect.yml's
+    secret-operand-check-arm64 on AArch64, where the guarded-write and
+    store-conditional probes are the only place those two paths of the tool
+    are executed at all.  A tool test must carry the marker, or it pins
+    nothing in CI; and one written for a single architecture must name it
+    with ``requires_host_isa``, or the other architecture's job fails on its
+    skip."""
     ci = yaml.safe_load(
         (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
-    steps = ci["jobs"]["security-checks"]["steps"]
-    step = next(s for s in steps if "-m requires_memcheck" in str(s.get("run", "")))
-    assert "tests/test_ct_operand_gate.py" in step["run"]
-    assert str((step.get("env") or {}).get("AMA_CI_REQUIRE_MEMCHECK")) == "1"
+    lanes = (ci["jobs"]["security-checks"]["steps"], _job("secret-operand-check-arm64")["steps"])
+    for steps in lanes:
+        step = next(s for s in steps if "-m requires_memcheck" in str(s.get("run", "")))
+        assert "tests/test_ct_operand_gate.py" in step["run"]
+        assert str((step.get("env") or {}).get("AMA_CI_REQUIRE_MEMCHECK")) == "1"
+    arm = [str(s.get("run", "")) for s in lanes[1]]
+    tests_at = next(i for i, run in enumerate(arm) if "-m requires_memcheck" in run)
+    gate_at = next(i for i, run in enumerate(arm) if "check_ct_operand.py" in run)
+    assert tests_at < gate_at, "the instrument is used before its own tests have run"
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    marked = {
-        node.name
+    decorators = {
+        node.name: [ast.unparse(d) for d in node.decorator_list]
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and any("requires_memcheck" in ast.unparse(d) for d in node.decorator_list)
+    }
+    marked = {
+        name for name, found in decorators.items() if any("requires_memcheck" in d for d in found)
     }
     assert {
         "test_the_tool_reports_each_class_on_the_secret_sites_only",
         "test_the_generated_class_table_is_nonempty_for_the_installed_vex",
+        "test_a_packed_conversion_of_a_secret_is_a_blocking_fp_site",
+        "test_a_failed_exchange_keeps_the_taint_of_the_word_it_left",
+        "test_a_failed_store_conditional_keeps_the_taint_of_the_word_it_left",
+        "test_a_guarded_write_does_not_charge_the_register_it_left_unchanged",
     } <= marked, marked
+    for name in sorted(marked):
+        found = decorators[name]
+        guard = next((d for d in found if "skipif" in d and "platform.machine" in d), None)
+        named = [d for d in found if "requires_host_isa" in d]
+        if guard is None:
+            assert not named, f"{name} names an instruction set it does not skip on"
+            continue
+        isa = "aarch64" if "aarch64" in guard else "x86-64"
+        assert named == [f"pytest.mark.requires_host_isa('{isa}')"], (name, named)
 
 
 def test_the_gate_scripts_are_in_both_path_filters() -> None:
@@ -1014,6 +1321,49 @@ int main(void) {
 """
 
 
+def _tool_present() -> bool:
+    return bool(shutil.which("valgrind")) and (
+        Path("/usr/include/valgrind/pub_tool_tooliface.h").is_file()
+    )
+
+
+def _run_probe(gate: ModuleType, isa: str, stage: Path, exe: Path, workdir: Path) -> Any:
+    """The report of ``exe`` under the tool staged at ``stage``, with every
+    site resolved to its symbol and static address."""
+    workdir.mkdir(exist_ok=True)
+    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, workdir)
+    assert text is not None
+    report = gate.parse_report(text)
+    allowed, _ = gate.load_allowlist(isa)
+    spellings = gate.derive_x86_spellings(allowed, workdir) if isa == "x86_64" else {}
+    gate.classify(report, isa, allowed, spellings, set())
+    return report
+
+
+def _mutant_tool(gate: ModuleType, isa: str, cache: Path, old: str, new: str) -> Path:
+    """The tool built from its source with one replacement: the form a probe
+    must be able to tell from the real one, or the probe pins nothing."""
+    source = gate.TOOL_SOURCE.read_text(encoding="utf-8")
+    assert source.count(old) == 1, f"mutation anchor drifted: {old!r}"
+    cache.mkdir()
+    mutated = cache / "ctoperand.c"
+    mutated.write_text(source.replace(old, new), encoding="utf-8")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(gate, "TOOL_SOURCE", mutated)
+        stage: Path = gate.build_tool(isa, cache / "stage")
+    return stage
+
+
+def _divides(gate: ModuleType, report: Any) -> set[str]:
+    """The functions in which a secret reached a division, by source name: a
+    compiler's clone of one (``name.constprop.0``) is that function."""
+    return {
+        site.symbol.split("+", 1)[0].split(".", 1)[0]
+        for site in report.sites
+        if site.classes & gate.CLASS_BITS["DIV"]
+    }
+
+
 @pytest.mark.requires_memcheck
 @pytest.mark.requires_host_isa("aarch64")
 @pytest.mark.skipif(
@@ -1029,11 +1379,18 @@ def test_a_guarded_write_does_not_charge_the_register_it_left_unchanged(
     ``mrs x5, dczid_el0`` -- a constant -- because x5 still held a secret
     (CI, fbefa4c).  The probe recreates that, and first requires the IR to
     show the guarded write, so a VEX that stopped chasing skips rather than
-    passing vacuously."""
-    if (
-        not shutil.which("valgrind")
-        or not Path("/usr/include/valgrind/pub_tool_tooliface.h").is_file()
-    ):
+    passing vacuously.
+
+    Corrected 2026-11-10 (AGENTS.md section 6.6).  As first written this test
+    could not fail, and no lane ran it to show that: it matched sites by a
+    symbol only :func:`classify` assigns, which it never called, so every
+    site's symbol was ``?``; and it compared, and dumped the IR at, the
+    address objdump prints, where a site carries the address the instruction
+    was loaded at.  Sites are now resolved, matched on their static address,
+    and the dump is asked for at the loaded one; and the probe function must
+    show a site of its own, so an empty report is a failure and not a pass.
+    """
+    if not _tool_present():
         pytest.skip("valgrind or its tool headers are not installed")
     stage = gate.build_tool("aarch64", tmp_path / "cache")
     src = tmp_path / "probe.c"
@@ -1052,11 +1409,172 @@ def test_a_guarded_write_does_not_charge_the_register_it_left_unchanged(
         if "mrs" in line and "dczid_el0" in line and ":" in line
     ]
     assert len(mrs) == 1, mrs
-    text = gate.run_tool(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path)
-    assert text is not None
-    report = gate.parse_report(text)
-    ir = gate.explain_sites(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path, [mrs[0]])
+    report = _run_probe(gate, "aarch64", stage, exe, tmp_path / "run")
+    own = [s for s in report.sites if s.symbol.startswith("guarded+")]
+    assert own, "the secret was consumed nowhere in the probe function"
+    loaded_at = mrs[0] + (own[0].ip - own[0].svma)
+    ir = gate.explain_sites(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path, [loaded_at])
     if not any("ITE(" in line for line in ir):
         pytest.skip("this VEX did not chase the branch; there is no guarded write to judge")
-    charged = [s for s in report.sites if s.symbol.startswith("guarded+") and s.ip == mrs[0]]
+    charged = [s for s in report.sites if s.svma == mrs[0]]
     assert not charged, "the mrs was charged for the register value it left unchanged"
+
+
+_EXCHANGE_MAIN = r"""
+__attribute__((noinline)) uint64_t d_failed(const uint64_t *w, uint64_t n) { return n / *w; }
+__attribute__((noinline)) uint64_t d_stored(const uint64_t *w, uint64_t n) { return n / *w; }
+__attribute__((noinline)) uint64_t d_public(const uint64_t *w, uint64_t n) { return n / *w; }
+int main(void) {
+    volatile uint64_t seed = 12345, big = 1000003;
+    static uint64_t failed_word, stored_word, public_word;
+    uint64_t secret = seed | 1;
+    failed_word = seed | 1;
+    stored_word = 7;
+    public_word = 7;
+    VALGRIND_MAKE_MEM_UNDEFINED(&failed_word, sizeof failed_word);
+    VALGRIND_MAKE_MEM_UNDEFINED(&secret, sizeof secret);
+    /* A public store that does not happen: the word still holds its secret. */
+    if (store_fails(&failed_word, 9) != 0)
+        return 3;
+    /* A secret stored: the word now holds it. */
+    if (store_succeeds(&stored_word, 7, secret) != 0)
+        return 4;
+    /* A public store to a public word: nothing secret anywhere. */
+    if (store_succeeds(&public_word, 7, 9) != 0)
+        return 5;
+    volatile uint64_t r1 = d_failed(&failed_word, big);
+    volatile uint64_t r2 = d_stored(&stored_word, big);
+    volatile uint64_t r3 = d_public(&public_word, big);
+    (void)r1; (void)r2; (void)r3;
+    return failed_word == 9 ? 6 : 0;
+}
+"""
+
+_CAS_PROBE = r"""
+#include <stdint.h>
+#include <valgrind/memcheck.h>
+/* lock cmpxchg stores `desired` only if the word equals `expected`. */
+__attribute__((noinline)) static int exchange(uint64_t *word, uint64_t expected, uint64_t desired) {
+    uint64_t old = expected;
+    unsigned char stored;
+    __asm__ volatile("lock cmpxchg %3, (%2)\n\tsete %1"
+                     : "+a"(old), "=q"(stored) : "r"(word), "r"(desired) : "cc", "memory");
+    return stored;
+}
+/* Expects 1, which the word is not: 0 when the store did not happen. */
+static int store_fails(uint64_t *word, uint64_t desired) { return exchange(word, 1, desired); }
+static int store_succeeds(uint64_t *word, uint64_t expected, uint64_t desired) {
+    return !exchange(word, expected, desired);
+}
+""" + _EXCHANGE_MAIN
+
+_LLSC_PROBE = r"""
+#include <stdint.h>
+#include <valgrind/memcheck.h>
+/* A store-conditional with no exclusive access open: it fails and writes
+ * nothing.  0 when the store did not happen. */
+__attribute__((noinline)) static int store_fails(uint64_t *word, uint64_t desired) {
+    uint32_t status;
+    __asm__ volatile("clrex\n\tstxr %w0, %2, [%1]"
+                     : "=&r"(status) : "r"(word), "r"(desired) : "memory");
+    return status == 0;
+}
+/* Load-exclusive, store-conditional, until the store happens. */
+__attribute__((noinline)) static int store_succeeds(uint64_t *word, uint64_t expected,
+                                                    uint64_t desired) {
+    uint64_t old;
+    uint32_t status;
+    __asm__ volatile("1:\tldxr %1, [%2]\n\tstxr %w0, %3, [%2]\n\tcbnz %w0, 1b"
+                     : "=&r"(status), "=&r"(old) : "r"(word), "r"(desired) : "memory");
+    return old != expected;
+}
+""" + _EXCHANGE_MAIN
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("x86-64")
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("x86_64", "amd64"),
+    reason="the probe is a lock cmpxchg",
+)
+def test_a_failed_exchange_keeps_the_taint_of_the_word_it_left(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """A compare-and-swap that does not store leaves the word, and so must
+    leave its taint.
+
+    The tool's shadow store for ``Ist_CAS`` is unconditional, and safe only
+    because it writes the union of what was loaded and what was offered: it
+    can add taint and never clear it.  The probe holds that property rather
+    than taking it from the source.  A secret word survives a public exchange
+    that fails and is still a secret when it divides (``d_failed``); a secret
+    offered and stored makes its word one (``d_stored``); a public exchange on
+    a public word makes nothing (``d_public``).  The mutant stores the taint
+    of the operands alone, which is what an ordinary store does, and must
+    lose ``d_failed``: if it does not, the probe cannot tell the two and holds
+    nothing.
+    """
+    if not _tool_present():
+        pytest.skip("valgrind or its tool headers are not installed")
+    src = tmp_path / "exchange.c"
+    exe = tmp_path / "exchange"
+    src.write_text(_CAS_PROBE, encoding="utf-8")
+    subprocess.run(["gcc", "-O2", "-g", str(src), "-o", str(exe)], check=True)
+    stage = gate.build_tool("x86_64", tmp_path / "cache")
+    report = _run_probe(gate, "x86_64", stage, exe, tmp_path / "run")
+    assert report.header["tainted_bytes"] == 16
+    assert _divides(gate, report) == {"d_failed", "d_stored"}
+    mutant = _mutant_tool(
+        gate,
+        "x86_64",
+        tmp_path / "mutant",
+        "call_st(&e, c->addr, total, or1(&e, ls, in_t), NULL);",
+        "call_st(&e, c->addr, total, in_t, NULL);",
+    )
+    assert _divides(gate, _run_probe(gate, "x86_64", mutant, exe, tmp_path / "mutant-run")) == {
+        "d_stored"
+    }
+
+
+@pytest.mark.requires_memcheck
+@pytest.mark.requires_host_isa("aarch64")
+@pytest.mark.skipif(
+    platform.machine().lower() not in ("aarch64", "arm64"),
+    reason="the probe is a load-exclusive / store-conditional pair",
+)
+def test_a_failed_store_conditional_keeps_the_taint_of_the_word_it_left(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """A store-conditional that fails writes nothing, so its shadow store must
+    not happen either.
+
+    The shadow store for ``Ist_LLSC`` is guarded by the statement's own
+    result, 1 only if the store happened.  Unguarded, a public store attempt
+    on a word that still holds a secret clears the word's taint, and the
+    secret's next use is not seen.  ``clrex`` then ``stxr`` fails on every
+    core: the probe returns non-zero, and the run fails, if it ever does not.
+    The mutant is the tool with the guard removed, and it must lose
+    ``d_failed``.  That is also what makes the test fail, instead of pass for
+    nothing, on a host where Valgrind lifts exclusives to its fallback and
+    there is no ``Ist_LLSC`` to guard: there the mutant and the tool agree.
+    """
+    if not _tool_present():
+        pytest.skip("valgrind or its tool headers are not installed")
+    src = tmp_path / "exclusive.c"
+    exe = tmp_path / "exclusive"
+    src.write_text(_LLSC_PROBE, encoding="utf-8")
+    subprocess.run(["gcc", "-O2", "-g", str(src), "-o", str(exe)], check=True)
+    stage = gate.build_tool("aarch64", tmp_path / "cache")
+    report = _run_probe(gate, "aarch64", stage, exe, tmp_path / "run")
+    assert report.header["tainted_bytes"] == 16
+    assert _divides(gate, report) == {"d_failed", "d_stored"}
+    mutant = _mutant_tool(
+        gate,
+        "aarch64",
+        tmp_path / "mutant",
+        "IRExpr_RdTmp(st->Ist.LLSC.result));",
+        "NULL);",
+    )
+    assert _divides(gate, _run_probe(gate, "aarch64", mutant, exe, tmp_path / "mutant-run")) == {
+        "d_stored"
+    }

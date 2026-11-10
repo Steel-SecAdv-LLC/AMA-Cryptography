@@ -57,6 +57,20 @@
  * register) is what keeps that copy from being made; the probe of
  * residue_probe.h pins it (poison, call below a gap, scan).
  *
+ * CORRECTED 2026-11-10 (AGENTS.md section 6.6), twice over.  These two rows
+ * look for the whole 32-byte value, which is the copy that was found and
+ * all they can find: with one 8-byte word as the needle, the HKDF row's own
+ * output had three of its four words in the dead stack of the shipped build
+ * while this row read clean, and src/c/internal/ama_keccak_round.h cited the
+ * row as evidence that there was nothing there.  The dead stack is now held
+ * by tests/c/test_stack_scrub.c, which names no needle, and cleared by every
+ * entry point (src/c/internal/ama_stack_wipe.h).  And the rows no longer pin
+ * the value barrier: with it removed from fe64_store64_le, every row of this
+ * file still passes (gcc 13.3 -O3, LTO), because whatever the compiler then
+ * does with the words, the entry point clears the stack it does it in and
+ * its return clears the registers.  The rows hold the property; the barrier
+ * is one of two things that produce it.
+ *
  * AARCH64 (added 2026-11-08, after review asked for it).  The same rows dump
  * x0-x18, q0-q31 and, where the kernel reports SVE, z0-z31 at the vector
  * length.  Measured there before the cures (gcc 13.3, qemu-aarch64 8.2):

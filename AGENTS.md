@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 101 C test suites, 295 Python test modules |
+| `tests/c/`, `tests/` | 103 C test suites, 296 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -480,6 +480,30 @@ figure fails CI, and they were re-measured on the 5.0.0 tree on 2026-09-24 on
 an AVX-512 VBMI + VAES + VPCLMULQDQ VM matching the recorded host definition
 (method and per-run data in `docs/BENCHMARK_HISTORY.md`). CI still cannot
 re-measure them: no runner it has carries that ISA.
+
+Two items from the 2026-11-10 pass (CHANGELOG, same date), carried forward
+and unassigned. The first needs a compiler and a lane that pass did not
+have; the second is a gap in what a gate measures.
+
+The stack clearing of INVARIANT-6 is measured on Linux, x86-64 and AArch64,
+and on the Windows x64 build a GNU compiler makes, which the gated MinGW job
+runs under Wine. A library built by MSVC, which is what the Windows wheels
+are, is measured by nothing: `tests/c/test_stack_scrub.c` and
+`tests/c/test_stack_wipe_coverage.c` need GNU C inline assembly, which MSVC
+does not have on x64, and no lane builds or runs the C tests with it. What
+clears this is a port of those two tests off inline assembly and a Windows
+lane that runs them. The first MinGW run found two defects no Linux lane
+could see (the home area, and the register a stack probe pushes), so the
+MSVC build is to be assumed to hold something of its own until it is
+measured, not assumed clean because the code is shared.
+
+The instruction-count gate measures eighteen operations, none of them
+SLH-DSA, PBKDF2, Argon2id, FROST or a NIST curve. While the library's own
+hash calls still went through the stack-clearing entry points,
+SLH-DSA-SHAKE-128s key generation cost 24% more instructions (callgrind,
+gcc 14.2) and no gate moved. `tests/test_stack_scrub_surface.py` now fails
+on that cause; nothing measures the effect, for that operation or the others
+named here.
 
 ---
 

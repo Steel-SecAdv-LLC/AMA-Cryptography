@@ -142,7 +142,7 @@ Sensitive material handling:
 - All key material is stored as `bytearray` for in-place zeroing
 - `SecureBuffer` context manager ensures zeroing even on exception
 - `secure_memzero()` writes zeros once through `volatile` 64-bit stores and then issues a compiler barrier, which is what resists dead-store elimination; a second pass would not add to that. The multi-pass description belonged to the opt-in pure-Python fallback (`AMA_ALLOW_PYTHON_MEMZERO`), never to the shipped native kernel (`src/c/ama_consttime.c`)
-- `ama_secure_stack_wipe()` complements it by zeroing the dead stack a just-returned primitive used, which is where an optimizing compiler's unnamed copies of a key schedule live
+- Every secret-handling C entry point clears the stack it used before it returns: an optimizing compiler's unnamed copies of a secret (a spilled register, a hoisted round key) live there, where `secure_memzero()` cannot reach them. Each such entry point is an exported half that holds only its caller's pointers and lengths and an implementation it calls and then zeroes below, to a depth measured for its family (`src/c/internal/ama_stack_wipe.h`; `tests/c/test_stack_scrub.c` holds every one of them to it). The library's own calls of such a primitive reach an inner function that clears nothing, so one public call clears the stack once. Measured on Linux (x86-64, AArch64) and on the Windows x64 build a GNU compiler makes; a library built by MSVC takes the same code and is not measured. `ama_secure_stack_wipe()` is the same wipe for a caller's own code
 - Optional `secure_mlock()` prevents key material from reaching swap
 - `SecureKeyStorage` uses AES-256-GCM encryption at rest
 

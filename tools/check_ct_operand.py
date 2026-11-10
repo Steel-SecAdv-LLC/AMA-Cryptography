@@ -105,22 +105,6 @@ ALLOWLISTS = TOOLS / "ct_operand" / "allowlists.json"
 #: reads 0, which is what the floor exists to refuse.
 MIN_CONSUMING_SITES = 8
 
-#: Kernels a target exists to measure, per ISA, which must consume the secret
-#: when the dispatcher is not pinned: a target that names a kernel but never
-#: reaches it measures nothing about it.  aead-bulk ran 256-byte messages,
-#: below the 512 bytes at which chacha20_xor enters the x8 kernel, so the AVX2
-#: and NEON ChaCha20 kernels it names never ran (Copilot review, 2026-11-08).
-_REQUIRED_KERNELS: dict[str, dict[str, tuple[str, ...]]] = {
-    "aead-bulk": {
-        "x86_64": ("ama_chacha20_block_x8_avx2",),
-        # The NEON x8 entry point is two calls to the x4 kernel and consumes
-        # nothing itself, so the secret is consumed under the x4 symbol
-        # (measured: CI's first AArch64 run with the check, 4831936, found no
-        # site in ama_chacha20_block_x8_neon).
-        "aarch64": ("ama_chacha20_block_x4_neon",),
-    },
-}
-
 #: x86 instruction prefixes objdump prints as separate words.
 _X86_PREFIXES = {
     "rep",
@@ -870,8 +854,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--static",
         action="store_true",
         help="List every instruction of the archive members named by --member against "
-        "the vendor list, without running anything: for kernels Valgrind cannot "
-        "execute (AVX-512, VAES).",
+        "the vendor list of the ISA they were compiled for, without running anything: "
+        "for kernels Valgrind cannot execute (AVX-512, VAES, SVE2).",
     )
     parser.add_argument("--member", action="append", default=[], metavar="OBJECT")
     parser.add_argument("--dispatch-only", default=None, metavar="SLOT")
@@ -1058,7 +1042,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
-    required = () if args.dispatch_only else _REQUIRED_KERNELS.get(args.target, {}).get(isa, ())
+    # The table is check_ghash_constant_time's: one statement of which kernel
+    # each target and pin exists to measure, held by all three lanes.
+    required = ghash.required_kernels(args.target, args.dispatch_only, isa)
+    if required is None:
+        print(
+            f"\n{args.target.upper()} CT-OPERAND CHECK INCONCLUSIVE — the target names the "
+            f"kernels it measures, and none for --dispatch-only={args.dispatch_only!r} "
+            "(check_ghash_constant_time._REQUIRED_KERNELS).",
+            file=sys.stderr,
+        )
+        return 2
     reached = {site.symbol.split("+", 1)[0] for site in report.sites}
     unreached = [kernel for kernel in required if kernel not in reached]
     if unreached:
@@ -1175,56 +1169,163 @@ def outcome(verdict: Verdict, memcheck_reports: Optional[int], inventory: bool) 
 _X86_CONTROL = re.compile(r"J[A-Z]+|CALL|RET|JMP")
 _X86_PADDING = {"NOP", "ENDBR64", "INT3", "UD2"}
 
+#: AArch64 control transfers, by the spelling ``objdump -M no-aliases`` gives
+#: after :func:`aarch64_canonical` drops a condition suffix.
+_A64_CONTROL = re.compile(r"B|BL|BR|BLR|RET|RETAA|RETAB|CBZ|CBNZ|TBZ|TBNZ")
+#: With aliases off every hint prints as ``hint #imm``: NOP, BTI, PACIASP and
+#: AUTIASP.  None takes a data operand (the two PAC hints sign and check the
+#: return address against the stack pointer).
+_A64_PADDING = {"HINT"}
+#: AArch64 instructions that read no register at all, so there is no operand
+#: for a timing to depend on, and that Arm's DIT list accordingly has no row
+#: for: an immediate moved into a register (MOVZ, MOVN), a page address
+#: (ADRP), a constant predicate (PTRUE, PFALSE), and the vector length or a
+#: count of its elements (RDVL, CNTB/H/W/D), which is a property of the
+#: machine.  Enumerated, not inferred from the operand text: each name here
+#: was read against its encoding, and a mnemonic that is not here fails the
+#: listing even if every operand it prints is a constant.
+_A64_NO_DATA_OPERAND = {
+    "MOVZ",
+    "MOVN",
+    "ADRP",
+    "PTRUE",
+    "PFALSE",
+    "RDVL",
+    "CNTB",
+    "CNTH",
+    "CNTW",
+    "CNTD",
+}
+#: MOVK keeps the other 48 bits of its destination, so it does read a
+#: register.  It is admitted in one position only: where the register it
+#: reads still holds the immediate a MOVZ or MOVN put there, which is how a
+#: compiler builds a constant wider than sixteen bits (``movz w9, #0x2001``
+#: then ``movk w9, #0x380, lsl #16`` is ML-DSA's QINV).  "Still holds" is
+#: decided from the listing alone, and conservatively: the MOVZ or MOVN is in
+#: the same straight-line run (no control transfer and no branch target in
+#: between), and no instruction between the two so much as names the
+#: register, by either of its widths.  Every instruction that changes a
+#: general register names it or is a control transfer, so an immediate that
+#: passes this is one.
+_A64_MOVE_WIDE_START = {"MOVZ", "MOVN"}
+_A64_GENERAL_REGISTER = re.compile(r"\b[wx](\d{1,2})\b")
+_A64_BRANCH_TARGET = re.compile(r"\b([0-9a-f]+) <")
+
+_ELF_MACHINE = re.compile(r"^\s*Machine:\s+(.+?)\s*$", re.MULTILINE)
+
+
+def object_isa(obj: Path) -> Optional[str]:
+    """The ISA an ELF object was compiled for, as the allowlists spell it."""
+    proc = subprocess.run(["readelf", "-h", str(obj)], capture_output=True, text=True, check=False)
+    found = _ELF_MACHINE.search(proc.stdout)
+    if proc.returncode != 0 or not found:
+        return None
+    machine = found.group(1)
+    if "X86-64" in machine:
+        return "x86_64"
+    if "AArch64" in machine:
+        return "aarch64"
+    return None
+
+
+def objdump_for(isa: str) -> Optional[str]:
+    """A disassembler for ``isa``: the host's own, or the cross one."""
+    if isa == host_isa():
+        return shutil.which("objdump")
+    prefix = {"aarch64": "aarch64-linux-gnu-", "x86_64": "x86_64-linux-gnu-"}.get(isa)
+    return shutil.which(f"{prefix}objdump") if prefix else None
+
 
 def static_listing(
-    objects: Sequence[Path], allowed: set[str], spellings: dict[str, str]
+    objects: Sequence[Path],
+    allowed: set[str],
+    spellings: dict[str, str],
+    isa: str = "x86_64",
+    objdump: str = "objdump",
 ) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
     """Every instruction of every function in ``objects``, against the list.
 
-    For kernels Valgrind cannot execute (AVX-512, VAES), there is no taint to
-    say which instruction sees a secret, so the check is taken over ALL of
-    them: each instruction must be on the vendor list, a control transfer,
-    or padding (``xchg ax,ax`` is the two-byte NOP).  An over-approximation
-    of the dynamic gate -- an instruction on public data is held to it too --
-    so passing it is the stronger statement.  Returns the mnemonic counts and
-    the (object, mnemonic, text) of every instruction outside the rule.
+    For kernels Valgrind cannot execute (AVX-512, VAES, SVE2), there is no
+    taint to say which instruction sees a secret, so the check is taken over
+    ALL of them.  On x86-64 each instruction must be on the vendor list, a
+    control transfer, or padding (``xchg ax,ax`` is the two-byte NOP).  On
+    AArch64 it must be on the list, a control transfer, a hint, one of the
+    instructions that read no register (:data:`_A64_NO_DATA_OPERAND`), or a
+    MOVK into a register that still holds a move-wide immediate
+    (:data:`_A64_MOVE_WIDE_START`).  An over-approximation of the dynamic gate --
+    an instruction on public data is held to it too -- so passing it is the
+    stronger statement.  What it does not judge is what a control transfer
+    branches ON: that is the Memcheck lane's question, and no lane asks it of
+    a kernel only this listing reads.  Returns the mnemonic counts and the
+    (object, mnemonic, text) of every instruction outside the rule.
     """
     counts: dict[str, int] = {}
     bad: list[tuple[str, str, str]] = []
+    options = ["-M", "intel"] if isa == "x86_64" else ["-M", "no-aliases"]
+    comment = "#" if isa == "x86_64" else "//"
     for obj in objects:
         out = subprocess.run(
-            ["objdump", "-d", "--no-show-raw-insn", "-M", "intel", str(obj)],
+            [objdump, "-d", "--no-show-raw-insn", *options, str(obj)],
             capture_output=True,
             text=True,
             check=True,
         ).stdout
+        # (address, text) of every instruction, None at each function's start.
+        listing: list[Optional[tuple[int, str]]] = []
         for line in out.splitlines():
-            m = re.match(r"\s+[0-9a-f]+:\s+(\S.*)$", line)
-            if not m:
+            if _DISASM_SYMBOL.match(line):
+                listing.append(None)
                 continue
-            text = m.group(1).split("#")[0].strip()
-            name = x86_canonical(text)
-            name = spellings.get(name, name)
+            m = re.match(r"\s+([0-9a-f]+):\s+(\S.*)$", line)
+            if m:
+                listing.append((int(m.group(1), 16), m.group(2).split(comment)[0].strip()))
+        targets = {
+            int(target, 16)
+            for entry in listing
+            if entry is not None
+            for target in _A64_BRANCH_TARGET.findall(entry[1])
+        }
+        immediate: set[int] = set()  # AArch64: registers holding a move-wide immediate
+        for entry in listing:
+            if entry is None:
+                immediate.clear()
+                continue
+            address, text = entry
+            if isa == "x86_64":
+                name = spellings.get(x86_canonical(text), x86_canonical(text))
+            else:
+                name = aarch64_canonical(text)
             if not name:
                 continue
             counts[name] = counts.get(name, 0) + 1
-            if name in allowed or _X86_CONTROL.fullmatch(name) or name in _X86_PADDING:
+            if isa == "x86_64":
+                if name in allowed or _X86_CONTROL.fullmatch(name) or name in _X86_PADDING:
+                    continue
+                if name == "XCHG" and re.fullmatch(r"xchg\s+ax,\s*ax", text):
+                    continue
+                bad.append((obj.name, name, text))
                 continue
-            if name == "XCHG" and re.fullmatch(r"xchg\s+ax,\s*ax", text):
+            if address in targets:
+                immediate.clear()
+            named = [int(n) for n in _A64_GENERAL_REGISTER.findall(text)]
+            if name in _A64_MOVE_WIDE_START and named:
+                immediate.add(named[0])
+                continue
+            if name == "MOVK":
+                if not named or named[0] not in immediate:
+                    bad.append((obj.name, name, text))
+                continue
+            immediate.difference_update(named)
+            if _A64_CONTROL.fullmatch(name):
+                immediate.clear()
+                continue
+            if name in allowed or name in _A64_PADDING or name in _A64_NO_DATA_OPERAND:
                 continue
             bad.append((obj.name, name, text))
     return counts, bad
 
 
 def static_main(args: argparse.Namespace) -> int:
-    isa = host_isa()
-    if isa != "x86_64":
-        print(
-            "CT-OPERAND STATIC CHECK INCONCLUSIVE — the static listing is x86-64 only.",
-            file=sys.stderr,
-        )
-        return 2
-    allowed, _ = load_allowlist(isa)
     with tempfile.TemporaryDirectory(prefix="ama-ctoperand-static-") as tmp:
         workdir = Path(tmp)
         try:
@@ -1244,10 +1345,25 @@ def static_main(args: argparse.Namespace) -> int:
             return 2
         subprocess.run(["ar", "x", str(args.lib.resolve()), *args.member], cwd=workdir, check=True)
         objects = [workdir / m for m in args.member]
-        spellings = derive_x86_spellings(allowed, workdir)
-        counts, bad = static_listing(objects, allowed, spellings)
+        # The list is the one for the ISA the objects were compiled for, not
+        # for the host reading them: a cross-built archive is listed against
+        # its own architecture or not at all.
+        isas = {object_isa(obj) for obj in objects}
+        isa = next(iter(isas)) if len(isas) == 1 else None
+        objdump = objdump_for(isa) if isa else None
+        if isa is None or objdump is None:
+            print(
+                "CT-OPERAND STATIC CHECK INCONCLUSIVE — the members are not ELF objects of "
+                f"one listed ISA with a disassembler on this host (found {sorted(map(str, isas))}; "
+                "an LTO object holds no machine code, so build the archive without it).",
+                file=sys.stderr,
+            )
+            return 2
+        allowed, _ = load_allowlist(isa)
+        spellings = derive_x86_spellings(allowed, workdir) if isa == "x86_64" else {}
+        counts, bad = static_listing(objects, allowed, spellings, isa, objdump)
     total = sum(counts.values())
-    print(f"static listing of {', '.join(args.member)}: {total:,} instruction(s)")
+    print(f"static listing of {', '.join(args.member)} ({isa}): {total:,} instruction(s)")
     print("  mnemonics: " + ", ".join(f"{k} x{v}" for k, v in sorted(counts.items())))
     if total == 0:
         print(
@@ -1255,18 +1371,20 @@ def static_main(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    rule = (
+        "a control transfer or padding"
+        if isa == "x86_64"
+        else "a control transfer, a hint, or an instruction that reads no register"
+    )
     if bad:
         for obj, name, text in bad[:60]:
             print(f"  - {obj}: {name}: `{text}`")
         print(
             f"\nCT-OPERAND STATIC CHECK FAILED — {len(bad)} instruction(s) are neither on "
-            "the vendor list, nor a control transfer, nor padding."
+            f"the vendor list, nor {rule}."
         )
         return 1
-    print(
-        "\nCT-OPERAND STATIC CHECK PASSED — every instruction is on the vendor list, a "
-        "control transfer or padding."
-    )
+    print(f"\nCT-OPERAND STATIC CHECK PASSED — every instruction is on the vendor list, {rule}.")
     return 0
 
 

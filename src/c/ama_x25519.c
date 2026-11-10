@@ -47,6 +47,7 @@
 #include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_ct_barrier.h"
 #include <string.h>
@@ -774,6 +775,8 @@ AMA_API const char *ama_x25519_field_path(void) {
  * ama_x25519_keypair was executed by no suite. */
 AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
 
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_keypair_body(uint8_t public_key[32], uint8_t secret_key[32]);
+
 /**
  * @brief Generate X25519 keypair.
  *
@@ -785,6 +788,16 @@ AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_x25519_keypair(
+    uint8_t public_key[32],
+    uint8_t secret_key[32]
+) {
+    ama_error_t rc = ama_x25519_keypair_body(public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_keypair_body(
     uint8_t public_key[32],
     uint8_t secret_key[32]
 ) {
@@ -817,6 +830,8 @@ AMA_API ama_error_t ama_x25519_keypair(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_key_exchange_body(uint8_t shared_secret[32], const uint8_t our_secret_key[32], const uint8_t their_public_key[32]);
+
 /**
  * @brief X25519 Diffie-Hellman key exchange.
  *
@@ -829,6 +844,17 @@ AMA_API ama_error_t ama_x25519_keypair(
  * @return AMA_SUCCESS or AMA_ERROR_CRYPTO
  */
 AMA_API ama_error_t ama_x25519_key_exchange(
+    uint8_t shared_secret[32],
+    const uint8_t our_secret_key[32],
+    const uint8_t their_public_key[32]
+) {
+    ama_error_t rc = ama_x25519_key_exchange_body(shared_secret, our_secret_key, their_public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_key_exchange(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_key_exchange_body(
     uint8_t shared_secret[32],
     const uint8_t our_secret_key[32],
     const uint8_t their_public_key[32]
@@ -865,6 +891,8 @@ AMA_API ama_error_t ama_x25519_key_exchange(
     return (ama_error_t)rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_scalarmult_batch_body(uint8_t out[][32], const uint8_t scalars[][32], const uint8_t points[][32], size_t count);
+
 /* ============================================================================
  * Batch scalar multiplication (additive API for SIMD parallelism)
  *
@@ -887,6 +915,18 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * accidental use of a partially-failing batch result.
  * ============================================================================ */
 AMA_API ama_error_t ama_x25519_scalarmult_batch(
+    uint8_t out[][32],
+    const uint8_t scalars[][32],
+    const uint8_t points[][32],
+    size_t count
+) {
+    ama_error_t rc = ama_x25519_scalarmult_batch_body(out, scalars, points, count);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_scalarmult_batch(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_scalarmult_batch_body(
     uint8_t out[][32],
     const uint8_t scalars[][32],
     const uint8_t points[][32],

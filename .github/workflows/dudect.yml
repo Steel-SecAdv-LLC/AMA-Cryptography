@@ -1377,7 +1377,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh build-essential cmake valgrind binutils
+          .github/scripts/apt-install.sh build-essential clang cmake valgrind binutils
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -1389,6 +1389,64 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      # The instrument's own tests, on the architecture two of them are
+      # written for.  ci.yml's security-checks job runs this module under
+      # Valgrind on x86-64, where the guarded-write and store-conditional
+      # probes cannot run: an amd64 guest has neither construct.  Until this
+      # step no lane executed either, and the guarded-write test, written
+      # 2026-11-08, could not have failed if one had (its docstring says
+      # why).  They run before the gate below uses the instrument.
+      # tests/conftest.py imports the package, whose self-test needs the
+      # shared library and the artefact that binds it, so both are made
+      # first, as security-checks makes them.
+      - name: Build the shared library and bind it (pytest imports the package)
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: |
+          python -m pip install "PyYAML==6.0.3" "pytest==9.2.0"
+          cmake --build build -j"$(nproc)" --target ama_cryptography_shared
+          python -m ama_cryptography.integrity --update --sign
+
+      # AMA_CI_REQUIRE_MEMCHECK turns a skip into a failure (INVARIANT-47):
+      # this job installs Valgrind, so a tool test that does not run here is
+      # a broken lane.  The module's x86-64 tests name their instruction set
+      # (requires_host_isa) and stay skipped.
+      - name: The instrument's own tests, on the architecture they are written for
+        env:
+          AMA_CI_REQUIRE_MEMCHECK: "1"
+        run: python -m pytest tests/test_ct_operand_gate.py -m requires_memcheck -q
+
+      # Valgrind executes no SVE, and this runner's CPU has none for the
+      # dispatcher to select, so the gate below never reaches an SVE2 kernel.
+      # They get the static listing the AVX-512 and VAES kernels get on
+      # x86-64: every instruction of the production object, secret or not,
+      # must be on Arm's DIT list, a control transfer or hint, or one that
+      # reads no register (tools/check_ct_operand.py, static_listing).  Every
+      # file of src/c/sve2 is named, the five that hold no kernel yet
+      # included, so one that gains a kernel is listed from that commit.
+      # Until 2026-11-10 nothing held these objects to the list at all.
+      - name: SVE2 kernels list only DIT-listed or operand-free instructions (static)
+        run: |
+          set -euo pipefail
+          failed=""
+          for cc in gcc clang; do
+            cmake -B "build-sve2-${cc}" -DCMAKE_C_COMPILER="${cc}" \
+              -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF \
+              -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_LTO=OFF -DAMA_ENABLE_SVE2=ON
+            cmake --build "build-sve2-${cc}" -j"$(nproc)" --target ama_cryptography_static
+            python tools/check_ct_operand.py --static \
+              --lib "build-sve2-${cc}/lib/libama_cryptography_static.a" \
+              --member ama_sha3_sve2.c.o --member ama_kyber_sve2.c.o \
+              --member ama_dilithium_sve2.c.o --member ama_sphincs_sve2.c.o \
+              --member ama_aes_gcm_sve2.c.o --member ama_ed25519_sve2.c.o \
+              --member ama_chacha20poly1305_sve2.c.o --member ama_argon2_sve2.c.o \
+              || failed="$failed static-${cc}"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
 
       - name: Every secret operand reaches only a DIT-listed instruction
         run: |

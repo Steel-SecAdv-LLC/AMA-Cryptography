@@ -132,11 +132,31 @@ extern const uint64_t ama_keccak_round_constants[24];
  * state -- the SHA3-256 digest -- so the returned frame kept a whole copy of
  * it: measured 2026-11-08, CMAKE_BUILD_TYPE=None (the strict-warnings lane),
  * tests/c/test_register_residue.c "ama_hkdf (dead stack)", one copy, and the
- * same for ama_sha3_256, ama_sha3_final and HMAC-SHA3-256 on their own.  An
- * optimised build keeps the lanes in registers and that row is clean on every
- * Release lane; there the scrub would only cost stores, so it is compiled
- * out.  Volatile stores through each local's address: the frame slots
- * themselves are what is cleared. */
+ * same for ama_sha3_256, ama_sha3_final and HMAC-SHA3-256 on their own.
+ * Volatile stores through each local's address: the frame slots themselves
+ * are what is cleared.
+ *
+ * CORRECTED 2026-11-10 (AGENTS.md section 6.6).  This comment went on to say
+ * that an optimised build keeps the lanes in registers and that the row is
+ * clean on every Release lane, so the scrub is compiled out there.  The row
+ * was clean because it looks for the whole 32-byte digest.  Looked for one
+ * 8-byte lane at a time, the shipped build (gcc 13.3 -O3, LTO, x86-64) had
+ * three of the four lanes of an HKDF-SHA3-256 output and seven of the eight
+ * of a SHA3-512 digest in the dead stack: this permutation spills 8 of its
+ * 25 final lanes, and the AVX2 four-way kernel 69 of 100.  x86-64 has
+ * fifteen general registers for twenty-five lanes.  The spills have no
+ * names, so nothing written here can clear them, and the scrub stays what
+ * it was: a store to each named local in a build that gives each a slot.
+ * What clears an optimised build's spills, and this frame in every build,
+ * is the entry point that called the sponge (internal/ama_stack_wipe.h),
+ * and tests/c/test_stack_scrub.c is what holds it to that.  That makes this
+ * scrub the second of two in an unoptimised build: compiled out of one, it
+ * fails no row of that harness and neither dead-stack row of
+ * test_register_residue.c (measured 2026-11-10, gcc 13.3,
+ * CMAKE_BUILD_TYPE=None).  It is kept: the permutation is also reached
+ * from entry points that clear nothing because what they hash is public
+ * (verification), and what its frame holds afterwards should not depend on
+ * which kind of caller that was. */
 #if !defined(__OPTIMIZE__)
 #define AMA_KECCAK_WIPE_LOCALS_ONE(v) (*(volatile uint64_t *)&(v) = 0)
 #define AMA_KECCAK_WIPE_LOCALS                                                       \

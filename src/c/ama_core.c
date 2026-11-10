@@ -19,6 +19,7 @@
 
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
+#include "internal/ama_stack_wipe.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -201,8 +202,40 @@ static uint8_t *hybrid_wrap(const uint8_t *message, size_t message_len, size_t *
  * key-length, output-size and allocation checks return before anything is
  * written; once signing has started, a failure of either primitive wipes the
  * whole signature buffer so no half-signature escapes.
+ *
+ * Two functions, the shape of a scrubbed entry point
+ * (internal/ama_stack_wipe.h), although neither is exported: the half that
+ * ama_sign() calls holds its caller's pointers and lengths, and the work is
+ * done below a frame that clears the stack afterwards.  The two signers
+ * clear what they use themselves.  What is left for this pair is the frame
+ * of the implementation, which keeps the address of the wrapped message's
+ * allocation, and the frames of the allocator.  That address is no secret,
+ * but it is not the caller's either: measured 2026-11-10 (aarch64 gcc 13.3,
+ * no -O), tests/c/test_stack_scrub.c read four bytes of it below ama_sign()
+ * that differed between two calls.  It differed then because the two calls
+ * happened to see different heaps, and stopped when they no longer did:
+ * for a while this wipe could be removed and no row said so.  The test now
+ * moves the heap between its two passes, and without this wipe the hybrid
+ * row fails in every unoptimised build measured (three bytes on x86-64,
+ * four on AArch64).  An optimised build keeps the address in a register.
  */
+static AMA_SCRUBBED_BODY ama_error_t hybrid_sign_body(const uint8_t *message, size_t message_len, const uint8_t *secret_key, size_t secret_key_len, uint8_t *signature, size_t *signature_len);
+
 static ama_error_t hybrid_sign(
+    const uint8_t* message,
+    size_t message_len,
+    const uint8_t* secret_key,
+    size_t secret_key_len,
+    uint8_t* signature,
+    size_t* signature_len
+) {
+    ama_error_t rc = hybrid_sign_body(message, message_len, secret_key, secret_key_len, signature, signature_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HYBRID_BYTES);
+    return rc;
+}
+
+/* hybrid_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t hybrid_sign_body(
     const uint8_t* message,
     size_t message_len,
     const uint8_t* secret_key,

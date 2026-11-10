@@ -9,10 +9,11 @@
  * matters, so state it plainly rather than as a blanket "SIMD" claim:
  *
  *   VECTOR (scales with VL): coefficient load/store and add/sub, i.e.
- *   svld1_s16 / svst1_s16 / svadd_s16_x / svsub_s16_x over
- *   svwhilelt_b16-predicated ranges stepped by svcnth().  The loops are
- *   VL-agnostic, so a wider core processes more coefficients per iteration
- *   and the same binary runs on any width (256 / 512 / 1024 / 2048-bit).
+ *   svld1_s16 / svst1_s16 / svadd_s16_x / svsub_s16_x, one whole vector at a
+ *   time under a constant predicate (WHOLE VECTORS UNDER A CONSTANT
+ *   PREDICATE, below).  The loops are VL-agnostic, so a wider core processes
+ *   more coefficients per iteration and the same binary runs on any width
+ *   (128 to 2048 bits).
  *
  *   SCALAR (does NOT scale with VL): the Montgomery and Barrett reductions.
  *   Both are done extract-reduce-reload over a stack buffer — see
@@ -155,14 +156,54 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
  * an inline function's local cannot be scrubbed by the caller that ends up
  * owning its stack slot.  Hoisting it to the caller makes exactly one scrub
  * per public entry point erase every staged coefficient. */
-static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a,
+static inline svint16_t barrett_reduce_sve2(svbool_t pg, uint64_t lanes, svint16_t a,
                                             int16_t scratch[128]) {
     svst1_s16(pg, scratch, a);
-    uint64_t active = svcntp_b16(pg, pg);
-    for (uint64_t e = 0; e < active; e++) {
+    for (uint64_t e = 0; e < lanes; e++) {
         scratch[e] = barrett_reduce_scalar(scratch[e]);
     }
     return svld1_s16(pg, scratch);
+}
+
+/* ============================================================================
+ * WHOLE VECTORS UNDER A CONSTANT PREDICATE
+ *
+ * Every loop below steps by one full vector under svptrue, and its bounds
+ * are plain integers.  The loops were written the usual VL-agnostic way
+ * until 2026-11-10: svwhilelt_b16 for the governing predicate and
+ * svcntp_b16 for the number of active lanes.  WHILELT and CNTP take
+ * register operands and neither is on Arm's DIT list (PSTATE.DIT, the list
+ * tools/ct_operand/allowlists.json transcribes), and Valgrind cannot
+ * execute SVE, so the secret-operand gate could neither run this file nor
+ * admit it by reading it: the only check available for it is that every
+ * instruction is listed, a control transfer, or one that takes no register
+ * data at all (tools/check_ct_operand.py --static).  The operands of those
+ * WHILELTs were loop counters, not coefficients, but a listing cannot know
+ * that, so the instructions are gone and the file is compiled without the
+ * auto-vectoriser (CMakeLists.txt), which reintroduces them.
+ *
+ * A constant predicate covers a range only if whole vectors tile it.  The
+ * ranges here are 256 coefficients and the powers of two under it, so they
+ * are tiled exactly when the lane count is a power of two.  The
+ * architecture allows vector lengths that are not (384 bits is 24 lanes);
+ * for such a length this function returns 0 and every entry point takes the
+ * scalar reference path throughout, which tests/c/test_kyber_ntt_equiv.c
+ * and test_kyber_poly_equiv.c run under QEMU at 384 bits as well as at the
+ * powers of two.
+ * ============================================================================ */
+static inline uint64_t kyber_sve2_lanes(void) {
+    const uint64_t lanes = svcnth();
+    return (lanes & (lanes - 1u)) == 0u ? lanes : 0u;
+}
+
+/* log2 of a lane count kyber_sve2_lanes() returned.  The vector loops count
+ * whole vectors up to `range >> shift` and form the offset as `v << shift`:
+ * stepping an offset by a lane count the compiler cannot see is a power of
+ * two made clang 18.1 compute the trip count with UDIV (measured
+ * 2026-11-10, one in each forward NTT), and no division is on the DIT list
+ * whatever its operands are. */
+static inline unsigned kyber_sve2_shift(uint64_t lanes) {
+    return lanes != 0u ? 63u - (unsigned)__builtin_clzll(lanes) : 0u;
 }
 
 /* ============================================================================
@@ -171,13 +212,20 @@ static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a,
 void ama_kyber_poly_add_sve2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
-    size_t i = 0;
-    while (i < KYBER_N) {
-        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+    const uint64_t lanes = kyber_sve2_lanes();
+    const unsigned shift = kyber_sve2_shift(lanes);
+    if (lanes == 0u) {
+        for (size_t i = 0; i < KYBER_N; i++) {
+            r[i] = (int16_t)(a[i] + b[i]);
+        }
+        return;
+    }
+    const svbool_t pg = svptrue_b16();
+    for (size_t v = 0; v < ((size_t)KYBER_N >> shift); v++) {
+        const size_t i = v << shift;
         svint16_t va = svld1_s16(pg, a + i);
         svint16_t vb = svld1_s16(pg, b + i);
         svst1_s16(pg, r + i, svadd_s16_x(pg, va, vb));
-        i += svcnth();
     }
 }
 
@@ -187,13 +235,20 @@ void ama_kyber_poly_add_sve2(int16_t r[KYBER_N],
 void ama_kyber_poly_sub_sve2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
-    size_t i = 0;
-    while (i < KYBER_N) {
-        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+    const uint64_t lanes = kyber_sve2_lanes();
+    const unsigned shift = kyber_sve2_shift(lanes);
+    if (lanes == 0u) {
+        for (size_t i = 0; i < KYBER_N; i++) {
+            r[i] = (int16_t)(a[i] - b[i]);
+        }
+        return;
+    }
+    const svbool_t pg = svptrue_b16();
+    for (size_t v = 0; v < ((size_t)KYBER_N >> shift); v++) {
+        const size_t i = v << shift;
         svint16_t va = svld1_s16(pg, a + i);
         svint16_t vb = svld1_s16(pg, b + i);
         svst1_s16(pg, r + i, svsub_s16_x(pg, va, vb));
-        i += svcnth();
     }
 }
 
@@ -230,33 +285,39 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
  * ============================================================================ */
 void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
                          const int16_t zetas[128]) {
-    unsigned int len, start, j, k;
+    unsigned int log_len, block, len, start, j, k;
     int16_t zeta, t;
-    const uint64_t vl_h = svcnth();  /* Number of int16_t lanes */
+    const uint64_t lanes = kyber_sve2_lanes();  /* int16_t lanes, or 0: scalar */
+    const unsigned shift = kyber_sve2_shift(lanes);
+    const svbool_t pg = svptrue_b16();
     /* Function-scope so one scrub at the bottom covers every iteration.  Max
      * VL = 2048 bits -> 128 int16_t lanes. */
     int16_t hi_buf[128], t_buf[128], scratch[128];
 
     k = 1;
-    for (len = 128; len >= 2; len >>= 1) {
-        for (start = 0; start < KYBER_N; start += 2 * len) {
+    /* Layers by the log of their stride and blocks by their count, so every
+     * bound is a shift.  Written as `len >>= 1` and `start += 2 * len`, the
+     * number of blocks was a quotient the compiler could not see to be a
+     * power of two, and clang 18.1 formed it with UDIV (measured 2026-11-10
+     * in both forward transforms); no division is on the DIT list. */
+    for (log_len = 7; log_len >= 1; log_len--) {
+        len = 1u << log_len;
+        for (block = 0; block < ((unsigned)KYBER_N >> (log_len + 1u)); block++) {
+            start = block << (log_len + 1u);
             zeta = zetas[k++];
 
-            if (len >= vl_h) {
+            if (lanes != 0u && len >= lanes) {
                 /* Vectorized Cooley-Tukey butterfly with scalar Montgomery.
                  * SVE2 vectorizes the loads, add/sub, and stores.
                  * Montgomery reduction is done element-wise via buffer. */
-                size_t i = 0;
-                while (i < len) {
-                    svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)len);
-                    uint64_t active = svcntp_b16(pg, pg);
-
+                for (size_t v = 0; v < ((size_t)len >> shift); v++) {
+                    const size_t i = v << shift;
                     svint16_t lo = svld1_s16(pg, poly + start + i);
                     svint16_t hi = svld1_s16(pg, poly + start + len + i);
 
-                    /* Montgomery reduce zeta * hi[e] for each active lane */
+                    /* Montgomery reduce zeta * hi[e] for each lane */
                     svst1_s16(pg, hi_buf, hi);
-                    for (uint64_t e = 0; e < active; e++) {
+                    for (uint64_t e = 0; e < lanes; e++) {
                         t_buf[e] = montgomery_reduce_scalar(
                             (int32_t)zeta * hi_buf[e]);
                     }
@@ -267,8 +328,6 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
                               svadd_s16_x(pg, lo, vt));
                     svst1_s16(pg, poly + start + len + i,
                               svsub_s16_x(pg, lo, vt));
-
-                    i += svcnth();
                 }
             } else {
                 /* Scalar path for narrow layers */
@@ -304,13 +363,15 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
      * tests/c/test_kyber_ntt_equiv.c reports as a lane mismatch — it was never
      * caught because AMA_ENABLE_SVE2 was off in every CI configuration, so
      * this kernel had never been executed by the test that pins it. */
-    {
-        size_t i = 0;
-        while (i < KYBER_N) {
-            svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
-            svint16_t v = svld1_s16(pg, poly + i);
-            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, v, scratch));
-            i += svcnth();
+    if (lanes != 0u) {
+        for (size_t v = 0; v < ((size_t)KYBER_N >> shift); v++) {
+            const size_t i = v << shift;
+            svint16_t coeffs = svld1_s16(pg, poly + i);
+            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, lanes, coeffs, scratch));
+        }
+    } else {
+        for (size_t i = 0; i < KYBER_N; i++) {
+            poly[i] = barrett_reduce_scalar(poly[i]);
         }
     }
 
@@ -329,25 +390,27 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
  * ============================================================================ */
 void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
                             const int16_t zetas[128]) {
-    unsigned int len, start, j, k;
+    unsigned int log_len, block, len, start, j, k;
     int16_t t_scalar, zeta;
     const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
-    const uint64_t vl_h = svcnth();
+    const uint64_t lanes = kyber_sve2_lanes();  /* int16_t lanes, or 0: scalar */
+    const unsigned shift = kyber_sve2_shift(lanes);
+    const svbool_t pg = svptrue_b16();
     /* Function-scope for the same reason as the forward NTT above. */
     int16_t diff_buf[128], hi_out_buf[128], scratch[128], buf[128];
 
     k = 127;
-    for (len = 2; len <= 128; len <<= 1) {
-        for (start = 0; start < KYBER_N; start += 2 * len) {
+    /* Layers and blocks by shifts, as in the forward transform. */
+    for (log_len = 1; log_len <= 7; log_len++) {
+        len = 1u << log_len;
+        for (block = 0; block < ((unsigned)KYBER_N >> (log_len + 1u)); block++) {
+            start = block << (log_len + 1u);
             zeta = zetas[k--];
 
-            if (len >= vl_h) {
+            if (lanes != 0u && len >= lanes) {
                 /* Vectorized Gentleman-Sande butterfly */
-                size_t i = 0;
-                while (i < len) {
-                    svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)len);
-                    uint64_t active = svcntp_b16(pg, pg);
-
+                for (size_t v = 0; v < ((size_t)len >> shift); v++) {
+                    const size_t i = v << shift;
                     svint16_t lo = svld1_s16(pg, poly + start + i);
                     svint16_t hi = svld1_s16(pg, poly + start + len + i);
 
@@ -357,11 +420,11 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
                     svint16_t diff = svsub_s16_x(pg, hi, lo);
 
                     /* Barrett reduction of sum */
-                    svint16_t lo_out = barrett_reduce_sve2(pg, sum, scratch);
+                    svint16_t lo_out = barrett_reduce_sve2(pg, lanes, sum, scratch);
 
                     /* Montgomery reduction of zeta * diff */
                     svst1_s16(pg, diff_buf, diff);
-                    for (uint64_t e = 0; e < active; e++) {
+                    for (uint64_t e = 0; e < lanes; e++) {
                         hi_out_buf[e] = montgomery_reduce_scalar(
                             (int32_t)zeta * diff_buf[e]);
                     }
@@ -369,8 +432,6 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
 
                     svst1_s16(pg, poly + start + i,       lo_out);
                     svst1_s16(pg, poly + start + len + i, hi_out);
-
-                    i += svcnth();
                 }
             } else {
                 /* Scalar path for narrow layers */
@@ -386,16 +447,13 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
     }
 
     /* Multiply all coefficients by f = 128^{-1} mod q (Montgomery form) */
-    {
-        size_t i = 0;
-        while (i < KYBER_N) {
-            svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
-            uint64_t active = svcntp_b16(pg, pg);
-
+    if (lanes != 0u) {
+        for (size_t v = 0; v < ((size_t)KYBER_N >> shift); v++) {
+            const size_t i = v << shift;
             svint16_t va = svld1_s16(pg, poly + i);
             svst1_s16(pg, buf, va);
 
-            for (uint64_t e = 0; e < active; e++) {
+            for (uint64_t e = 0; e < lanes; e++) {
                 /* montgomery_mul by f, then the canonicalising Barrett the
                  * AVX2 and NEON inverse kernels also emit here — see the note
                  * on the forward NTT's sweep for why the post-condition has to
@@ -405,7 +463,11 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
             }
 
             svst1_s16(pg, poly + i, svld1_s16(pg, buf));
-            i += svcnth();
+        }
+    } else {
+        for (size_t i = 0; i < KYBER_N; i++) {
+            poly[i] = barrett_reduce_scalar(
+                montgomery_reduce_scalar((int32_t)f * poly[i]));
         }
     }
 
@@ -420,13 +482,20 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
  * dispatch_table.kyber_poly_reduce.
  * ============================================================================ */
 void ama_kyber_poly_reduce_sve2(int16_t poly[KYBER_N]) {
-    size_t i = 0;
+    const uint64_t lanes = kyber_sve2_lanes();
+    const unsigned shift = kyber_sve2_shift(lanes);
     int16_t scratch[128];
-    while (i < KYBER_N) {
-        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+    if (lanes == 0u) {
+        for (size_t i = 0; i < KYBER_N; i++) {
+            poly[i] = barrett_reduce_scalar(poly[i]);
+        }
+        return;
+    }
+    const svbool_t pg = svptrue_b16();
+    for (size_t v = 0; v < ((size_t)KYBER_N >> shift); v++) {
+        const size_t i = v << shift;
         svint16_t va = svld1_s16(pg, poly + i);
-        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va, scratch));
-        i += svcnth();
+        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, lanes, va, scratch));
     }
     AMA_KYBER_SVE2_SCRUB(scratch);
 }

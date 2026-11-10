@@ -37,6 +37,8 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ct_declassify.h"
 #include <stdlib.h>
 #include <string.h>
@@ -92,8 +94,10 @@ _Static_assert(
  * ama_aes_bitsliced.c. This eliminates cache-timing side channels. */
 #ifdef AMA_AES_CONSTTIME
 /* Constant-time S-box provided by ama_aes_bitsliced.c (tower field GF((2^4)^2)) */
-#define aes256_key_expansion(key, rk) ama_aes256_key_expansion_consttime(key, rk)
-#define aes256_encrypt_block(rk, in, out) ama_aes256_encrypt_block_consttime(rk, in, out)
+/* The inner functions (internal/ama_scrubbed_inner.h): the AES-GCM entry
+ * points clear the stack once, not once for every block. */
+#define aes256_key_expansion(key, rk) ama_aes256_key_expansion_consttime_inner(key, rk)
+#define aes256_encrypt_block(rk, in, out) ama_aes256_encrypt_block_consttime_inner(rk, in, out)
 #else
 /* SECURITY FIX (audit finding C5): Emit a compile-time warning when the
  * table-based AES S-box is selected.  AMA_AES_CONSTTIME=ON is the default
@@ -499,6 +503,8 @@ static void gcm_inc32(uint8_t counter[16]) {
     counter[15] = (uint8_t)(c);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_aes256_gcm_encrypt_body(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *plaintext, size_t pt_len, const uint8_t *aad, size_t aad_len, uint8_t *ciphertext, uint8_t tag[16]);
+
 /**
  * @brief AES-256-GCM authenticated encryption
  *
@@ -516,6 +522,22 @@ static void gcm_inc32(uint8_t counter[16]) {
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_aes256_gcm_encrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *plaintext,
+    size_t pt_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[16]
+) {
+    ama_error_t rc = ama_aes256_gcm_encrypt_body(key, nonce, plaintext, pt_len, aad, aad_len, ciphertext, tag);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
+    return rc;
+}
+
+/* ama_aes256_gcm_encrypt(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_aes256_gcm_encrypt_body(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t *plaintext,
@@ -570,9 +592,9 @@ ama_error_t ama_aes256_gcm_encrypt(
     /* The hardware kernels expand the key into their own frame and scrub it,
      * but the compiler's hoisted copies of the round keys are unnamed and
      * unreachable from source — a residue probe found all fifteen, `rk[0]`
-     * and `rk[1]` (the raw AES-256 key) among them.  Wipe the frame they
-     * used.  See ama_secure_stack_wipe(). */
-        ama_secure_stack_wipe();
+     * and `rk[1]` (the raw AES-256 key) among them.  The entry point clears
+     * the stack this body and those kernels used
+     * (internal/ama_stack_wipe.h). */
         return AMA_SUCCESS;
     }
 
@@ -627,11 +649,12 @@ ama_error_t ama_aes256_gcm_encrypt(
     ama_secure_memzero(keystream, sizeof(keystream));
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
 
-    /* Same backstop on the scalar path: aes256_key_expansion and the block
-     * function are separate frames below this one. */
-    ama_secure_stack_wipe();
+    /* The scalar path's frames (aes256_key_expansion, the block function)
+     * are cleared by the entry point too. */
     return AMA_SUCCESS;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_aes256_gcm_decrypt_body(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ciphertext, size_t ct_len, const uint8_t *aad, size_t aad_len, const uint8_t tag[16], uint8_t *plaintext);
 
 /**
  * @brief AES-256-GCM authenticated decryption
@@ -651,6 +674,22 @@ ama_error_t ama_aes256_gcm_encrypt(
  * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
  */
 ama_error_t ama_aes256_gcm_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *ciphertext,
+    size_t ct_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    const uint8_t tag[16],
+    uint8_t *plaintext
+) {
+    ama_error_t rc = ama_aes256_gcm_decrypt_body(key, nonce, ciphertext, ct_len, aad, aad_len, tag, plaintext);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
+    return rc;
+}
+
+/* ama_aes256_gcm_decrypt(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_aes256_gcm_decrypt_body(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t *ciphertext,
@@ -695,12 +734,8 @@ ama_error_t ama_aes256_gcm_decrypt(
     if (dt->aes_gcm_decrypt) {
         ama_error_t rc = dt->aes_gcm_decrypt(ciphertext, ct_len, aad, aad_len,
                                              key, nonce, tag, plaintext);
-    /* The hardware kernels expand the key into their own frame and scrub it,
-     * but the compiler's hoisted copies of the round keys are unnamed and
-     * unreachable from source — a residue probe found all fifteen, `rk[0]`
-     * and `rk[1]` (the raw AES-256 key) among them.  Wipe the frame they
-     * used.  See ama_secure_stack_wipe(). */
-        ama_secure_stack_wipe();
+    /* As for encryption: the entry point clears the stack the hardware
+     * kernel used, the compiler's hoisted round keys included. */
         return rc;
     }
 
@@ -793,9 +828,9 @@ ama_error_t ama_aes256_gcm_decrypt(
     {
         ama_error_t rc = (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED &
                                        (int)(int32_t)(uint32_t)~(uint64_t)bound_mask);
-        /* Unconditional and identical on both classes, so the aead-verify
-         * instruction-invariance gate stays satisfied. */
-        ama_secure_stack_wipe();
+        /* The entry point clears the stack after this returns, on both
+         * classes alike, so the aead-verify instruction-invariance gate
+         * stays satisfied. */
         return rc;
     }
 }
