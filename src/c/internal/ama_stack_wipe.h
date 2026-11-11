@@ -147,14 +147,15 @@
  * writes into the caller's buffer.  tests/test_stack_scrub_surface.py puts
  * every export in one of these places and fails on one that is in none.
  *
- * WHERE THIS IS MEASURED.  Linux on x86-64 and AArch64, and Windows x64 built
- * with a GNU compiler, which CI runs under Wine (ci-build-test.yml).  The
- * depths were measured on the first two; the Windows build is held to them by
- * the same two tests.  MSVC, which builds the Windows wheels, takes the same
- * code and is measured by nothing: the stack tests need GNU C inline
- * assembly, which MSVC does not have on x64.  What is known of that build is
- * what its convention shares with MinGW's and is handled the same way
- * (src/c/ama_consttime.c, ama_stack_wipe_cap); what it does with it is not.
+ * WHERE THIS IS MEASURED.  Linux on x86-64 and AArch64, macOS on arm64, and
+ * Windows x64 built with a GNU compiler, which CI runs under Wine
+ * (ci-build-test.yml).  The depths were measured on the first two; the macOS
+ * and Windows builds are held to them by the same two tests.  MSVC, which
+ * builds the Windows wheels, takes the same code and is measured by nothing:
+ * the stack tests need GNU C inline assembly, which MSVC does not have on
+ * x64.  What is known of that build is what its convention shares with
+ * MinGW's and is handled the same way (src/c/ama_consttime.c,
+ * ama_stack_wipe_cap); what it does with it is not.
  */
 #ifndef AMA_STACK_WIPE_H
 #define AMA_STACK_WIPE_H

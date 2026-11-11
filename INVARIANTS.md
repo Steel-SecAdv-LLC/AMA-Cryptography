@@ -348,10 +348,10 @@ entry points need (`include/ama_cryptography.h`, `ama_secure_stack_wipe`).
 Where the library itself calls such a primitive it calls the inner function,
 which clears nothing, so that one public call clears the stack once
 (`src/c/internal/ama_scrubbed_inner.h`; the same test fails on a call that
-does not).  All of this is measured on Linux, x86-64 and AArch64, and on the
-Windows x64 build a GNU compiler makes, which CI runs under Wine.  A library
-built by MSVC takes the same code and is measured by nothing: the tests need
-inline assembly that compiler does not have on x64.
+does not).  All of this is measured on Linux, x86-64 and AArch64, on macOS
+arm64, and on the Windows x64 build a GNU compiler makes, which CI runs under
+Wine.  A library built by MSVC takes the same code and is measured by
+nothing: the tests need inline assembly that compiler does not have on x64.
 One limit is stated where it is measured: in an unoptimised build the six
 leaf helpers (`ama_consttime_*`, `ama_secure_memzero`,
 `ama_aes_sbox_consttime`) keep their arguments in their own frames like any

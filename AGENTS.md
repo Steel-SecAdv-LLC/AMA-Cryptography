@@ -486,9 +486,11 @@ and unassigned. The first needs a compiler and a lane that pass did not
 have; the second is a gap in what a gate measures.
 
 The stack clearing of INVARIANT-6 is measured on Linux, x86-64 and AArch64,
-and on the Windows x64 build a GNU compiler makes, which the gated MinGW job
-runs under Wine. A library built by MSVC, which is what the Windows wheels
-are, is measured by nothing: `tests/c/test_stack_scrub.c` and
+on macOS arm64 (corrected per section 6.6 on 2026-11-10: this sentence left
+macOS out, and the `C Library (macos-latest, ...)` jobs had been running both
+stack tests since the commit that added them), and on the Windows x64 build
+a GNU compiler makes, which the gated MinGW job runs under Wine. A library
+built by MSVC, which is what the Windows wheels are, is measured by nothing: `tests/c/test_stack_scrub.c` and
 `tests/c/test_stack_wipe_coverage.c` need GNU C inline assembly, which MSVC
 does not have on x64, and no lane builds or runs the C tests with it. What
 clears this is a port of those two tests off inline assembly and a Windows

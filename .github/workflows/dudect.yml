@@ -1390,13 +1390,16 @@ jobs:
             -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
-      # The instrument's own tests, on the architecture two of them are
-      # written for.  ci.yml's security-checks job runs this module under
-      # Valgrind on x86-64, where the guarded-write and store-conditional
-      # probes cannot run: an amd64 guest has neither construct.  Until this
-      # step no lane executed either, and the guarded-write test, written
-      # 2026-11-08, could not have failed if one had (its docstring says
-      # why).  They run before the gate below uses the instrument.
+      # The instrument's own tests, on this architecture.  ci.yml's
+      # security-checks job runs this module under Valgrind on x86-64, where
+      # the store-conditional probe cannot run: an amd64 guest has no
+      # exclusive pair.  Until this step no lane executed it here, nor the
+      # guarded-write test, which was written 2026-11-08 for this
+      # architecture alone, could not have failed if a lane had run it, and
+      # on its first run here (6cc2d14) found that its probe was not the
+      # shape VEX guards (its docstring says why, and why it now runs on
+      # x86-64 as well).  They run before the gate below uses the
+      # instrument.
       # tests/conftest.py imports the package, whose self-test needs the
       # shared library and the artefact that binds it, so both are made
       # first, as security-checks makes them.

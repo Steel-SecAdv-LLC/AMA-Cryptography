@@ -1246,12 +1246,12 @@ def test_the_instrument_tests_run_where_valgrind_is_provisioned() -> None:
     architecture, and each runs ``-m requires_memcheck`` on this module with
     AMA_CI_REQUIRE_MEMCHECK set, which turns a skip into a failure
     (INVARIANT-47): ci.yml's security-checks on x86-64, and dudect.yml's
-    secret-operand-check-arm64 on AArch64, where the guarded-write and
-    store-conditional probes are the only place those two paths of the tool
-    are executed at all.  A tool test must carry the marker, or it pins
-    nothing in CI; and one written for a single architecture must name it
-    with ``requires_host_isa``, or the other architecture's job fails on its
-    skip."""
+    secret-operand-check-arm64 on AArch64, where the store-conditional probe
+    is the only place that path of the tool is executed at all.  A tool test
+    must carry the marker, or it pins nothing in CI; and one written for a
+    single architecture must name it with ``requires_host_isa``, or the other
+    architecture's job fails on its skip.  One written for both, as the
+    guarded-write probe is, names neither and must run in both."""
     ci = yaml.safe_load(
         (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
@@ -1302,23 +1302,58 @@ def test_the_gate_scripts_are_in_both_path_filters() -> None:
 _GUARDED_PROBE = r"""
 #include <stdint.h>
 #include <valgrind/memcheck.h>
-/* x5 holds the secret; a public test branches around `mrs x5, dczid_el0`,
- * which writes a constant and reads no data operand. */
-__attribute__((noinline)) uint64_t guarded(uint64_t s, uint64_t p) {
+/* One register holds the secret.  Between two conditional branches to one
+ * label, an instruction writes a public value to that register and reads
+ * nothing.  Three plain instructions stand at the label, so the block VEX
+ * reads there ends by running out and not at the return. */
+__attribute__((noinline)) uint64_t guarded(uint64_t s, uint64_t p, uint64_t q) {
     uint64_t r;
-    __asm__ volatile("mov x5, %1\n\tcbz %2, 1f\n\tmrs x5, dczid_el0\n1:\n\tmov %0, x5"
-                     : "=r"(r) : "r"(s), "r"(p) : "x5");
+#if defined(__x86_64__)
+    __asm__ volatile("mov %1, %%rcx\n\t"
+                     "test %2, %2\n\t"
+                     "jz 1f\n\t"
+                     "mov $16, %%ecx\n\t"
+                     "test %3, %3\n\t"
+                     "jz 1f\n\t"
+                     "nop\n"
+                     "1:\n\t"
+                     "mov %%rcx, %0\n\t"
+                     "nop\n\tnop\n\tnop"
+                     : "=&r"(r) : "r"(s), "r"(p), "r"(q) : "rcx", "cc");
+#else
+    __asm__ volatile("mov x5, %1\n\t"
+                     "cbz %2, 1f\n\t"
+                     "mrs x5, dczid_el0\n\t"
+                     "cbz %3, 1f\n\t"
+                     "nop\n"
+                     "1:\n\t"
+                     "mov %0, x5\n\t"
+                     "nop\n\tnop\n\tnop"
+                     : "=&r"(r) : "r"(s), "r"(p), "r"(q) : "x5");
+#endif
     return r;
 }
+/* Entered through a pointer.  A call to a known address is a transfer VEX
+ * follows, and a block that has followed one is not extended a second
+ * time: called by name, the first branch ended a block that had already
+ * been extended, and nothing after it was lifted under a guard. */
+static uint64_t (*volatile entry)(uint64_t, uint64_t, uint64_t) = guarded;
 int main(void) {
     volatile uint64_t seed = 12345, one = 1;
     uint64_t secret = seed;
     VALGRIND_MAKE_MEM_UNDEFINED(&secret, sizeof secret);
-    volatile uint64_t r = guarded(secret, one);
+    volatile uint64_t r = entry(secret, one, one);
     (void)r;
     return 0;
 }
 """
+
+#: The instruction each front end's probe writes the public value with, as
+#: objdump prints it.
+_GUARDED_WRITE = {
+    "x86_64": ("mov", "$0x10,%ecx"),
+    "aarch64": ("mrs", "dczid_el0"),
+}
 
 
 def _tool_present() -> bool:
@@ -1365,34 +1400,53 @@ def _divides(gate: ModuleType, report: Any) -> set[str]:
 
 
 @pytest.mark.requires_memcheck
-@pytest.mark.requires_host_isa("aarch64")
-@pytest.mark.skipif(
-    platform.machine().lower() not in ("aarch64", "arm64"),
-    reason="VEX chases conditional branches into guarded writes on its arm64 front end only",
-)
 def test_a_guarded_write_does_not_charge_the_register_it_left_unchanged(
     gate: ModuleType, tmp_path: Path
 ) -> None:
-    """VEX lifts an instruction reached by speculatively chasing a conditional
-    branch as ``PUT(r) = ITE(guard, new, GET(r))``.  The unchanged arm is not an
-    operand of the instruction: charging it reported glibc memset's
-    ``mrs x5, dczid_el0`` -- a constant -- because x5 still held a secret
-    (CI, fbefa4c).  The probe recreates that, and first requires the IR to
-    show the guarded write, so a VEX that stopped chasing skips rather than
-    passing vacuously.
+    """When two conditional branches go to one destination, VEX joins them
+    into one exit and lifts what lies between them under the first branch's
+    guard: a register write there becomes ``PUT(r) = ITE(guard, new,
+    GET(r))``.  The unchanged arm is not an operand of the instruction:
+    charging it reported glibc memset's ``mrs x5, dczid_el0`` -- a constant
+    -- because x5 still held a secret (CI, fbefa4c).  The probe is that
+    shape.  The IR must show the guarded write, or the test skips (and a lane
+    that promises Valgrind fails on the skip); the tool must not charge the
+    write; and the tool with the rule taken out must, or the probe could not
+    tell the two apart and holds nothing.
 
-    Corrected 2026-11-10 (AGENTS.md section 6.6).  As first written this test
-    could not fail, and no lane ran it to show that: it matched sites by a
-    symbol only :func:`classify` assigns, which it never called, so every
-    site's symbol was ``?``; and it compared, and dumped the IR at, the
-    address objdump prints, where a site carries the address the instruction
-    was loaded at.  Sites are now resolved, matched on their static address,
-    and the dump is asked for at the loaded one; and the probe function must
-    show a site of its own, so an empty report is a failure and not a pass.
+    Corrected 2026-11-10 (AGENTS.md section 6.6), three times.
+
+    As first written this test could not fail, and no lane ran it to show
+    that: it matched sites by a symbol only :func:`classify` assigns, which
+    it never called, so every site's symbol was ``?``; and it compared, and
+    dumped the IR at, the address objdump prints, where a site carries the
+    address the instruction was loaded at.
+
+    With that corrected, its first run (CI, 6cc2d14) found no guarded write
+    to judge.  The probe was one branch around the ``mrs``, called by name.
+    A branch around an instruction is not what VEX guards: it reads at most
+    three instructions down each arm of a block's final conditional branch,
+    and joins them only if one arm ends in a second conditional branch that
+    shares a destination with the first
+    (``VEX/priv/guest_generic_bb_to_IR.c``, the ``&&`` idiom).  And it does
+    that for a block it has not already extended, which a block that
+    followed the call into the probe had been.
+
+    That file is not specific to a guest, and the claim this test carried in
+    its skip condition, that only the arm64 front end produces a guarded
+    write, was never measured.  Valgrind 3.22 on x86-64 lifts the probe's
+    ``mov $16, %ecx`` as ``t25 = ITE(t11,t15,t24)`` under the earlier
+    branch's guard, the tool leaves it uncharged, and the mutant charges it.
+    So the test runs on both, and the x86-64 lane holds the rule as well.
     """
+    isa = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(
+        platform.machine().lower()
+    )
+    if isa is None:
+        pytest.skip("the probe is written for x86-64 and AArch64")
     if not _tool_present():
         pytest.skip("valgrind or its tool headers are not installed")
-    stage = gate.build_tool("aarch64", tmp_path / "cache")
+    stage = gate.build_tool(isa, tmp_path / "cache")
     src = tmp_path / "probe.c"
     exe = tmp_path / "probe"
     src.write_text(_GUARDED_PROBE, encoding="utf-8")
@@ -1403,21 +1457,32 @@ def test_a_guarded_write_does_not_charge_the_register_it_left_unchanged(
         text=True,
         check=True,
     ).stdout
-    mrs = [
+    write = [
         int(line.split(":")[0], 16)
         for line in dump.splitlines()
-        if "mrs" in line and "dczid_el0" in line and ":" in line
+        if ":" in line and all(part in line for part in _GUARDED_WRITE[isa])
     ]
-    assert len(mrs) == 1, mrs
-    report = _run_probe(gate, "aarch64", stage, exe, tmp_path / "run")
+    assert len(write) == 1, write
+    report = _run_probe(gate, isa, stage, exe, tmp_path / "run")
     own = [s for s in report.sites if s.symbol.startswith("guarded+")]
     assert own, "the secret was consumed nowhere in the probe function"
-    loaded_at = mrs[0] + (own[0].ip - own[0].svma)
+    loaded_at = write[0] + (own[0].ip - own[0].svma)
     ir = gate.explain_sites(stage, exe, {"PATH": "/usr/bin:/bin"}, tmp_path, [loaded_at])
     if not any("ITE(" in line for line in ir):
-        pytest.skip("this VEX did not chase the branch; there is no guarded write to judge")
-    charged = [s for s in report.sites if s.svma == mrs[0]]
-    assert not charged, "the mrs was charged for the register value it left unchanged"
+        pytest.skip("this VEX did not lift the write under a guard; there is nothing to judge")
+    charged = [s for s in report.sites if s.svma == write[0]]
+    assert not charged, "the write was charged for the register value it left unchanged"
+    mutant = _mutant_tool(
+        gate,
+        isa,
+        tmp_path / "mutant",
+        "use = guarded_write_use(&e, dst, data, use);",
+        "(void)guarded_write_use;",
+    )
+    blamed = _run_probe(gate, isa, mutant, exe, tmp_path / "mutant-run")
+    assert [
+        s for s in blamed.sites if s.svma == write[0]
+    ], "the tool without the rule does not charge the write either: the probe holds nothing"
 
 
 _EXCHANGE_MAIN = r"""

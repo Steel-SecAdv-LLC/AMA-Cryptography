@@ -195,6 +195,23 @@ RESIDUE_NOINLINE static void poison_stack(void) {
     RESIDUE_KEEP_LIVE(pad);
 }
 
+/* The mark the window ends at: the address of a local in a leaf BELOW the
+ * scanner.  Everything the scanner's own frame holds -- its saved registers
+ * above all, which on AArch64 carry whatever needle the caller had live --
+ * lies above this address and outside the window (defect (a) above).  The
+ * leaf touches no needle, so nothing it spills can be one.
+ *
+ * How far under the scanner's stack pointer the local sits is the compiler's
+ * choice (one byte to twenty-eight, residue_frame.h), and a needle search
+ * does not depend on it: the probed call ran a whole GAP below, and COVERAGE
+ * fails a window that has come apart from the poison.  A harness that has
+ * to read from the caller's stack pointer exactly takes
+ * RESIDUE_STACK_POINTER (residue_frame.h) and not this. */
+RESIDUE_NOINLINE static void residue_stack_mark(uintptr_t *out) {
+    volatile uint8_t mark = 0;
+    *out = (uintptr_t)(const void *)&mark;
+}
+
 /* Occurrences of `needle` in the poisoned bytes below the scanner.
  *
  * The window is [max(poison_lo, mark - SCAN_BYTES), min(poison_hi, mark)):

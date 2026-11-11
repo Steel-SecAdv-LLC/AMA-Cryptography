@@ -430,10 +430,16 @@ reports `symbol+offset`, the object, the execution count and the call chain.
   select the instruction performs. For it, the arm that passes the register
   through unchanged is not an operand, and the guard is the branch's. A CMOV or
   CSEL computes its condition under its own IMark and keeps the ordinary rule,
-  under which every arm is an operand. amd64 VEX does not chase conditional
-  branches, so the rule acts on AArch64 only. CI's AArch64 lane is its pin, and
-  `test_a_guarded_write_does_not_charge_the_register_it_left_unchanged` probes
-  it on an arm64 host.
+  under which every arm is an operand. VEX does this in its guest-independent
+  block builder, where it joins two conditional branches that share a
+  destination into one exit and lifts what lies between them under the first
+  one's guard, so the rule acts on both architectures.
+  `test_a_guarded_write_does_not_charge_the_register_it_left_unchanged` is its
+  pin on each: a probe of that shape, the tool, and the tool with the rule
+  taken out, which must charge the write. (Corrected 2026-11-10, section 6.6.
+  This paragraph said amd64 VEX does not chase conditional branches and that
+  the rule acts on AArch64 only. Neither had been measured. Valgrind 3.22 on
+  x86-64 lifts the probe's `mov $16, %ecx` as `ITE(t11,t15,t24)`.)
 * **`--static`** is the same rule, taken over every instruction of named
   archive members, for kernels Valgrind cannot execute (AVX-512, VAES): each
   must be on the list, a control transfer, or padding. Without taint it

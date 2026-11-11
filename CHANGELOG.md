@@ -131,7 +131,8 @@ hybrid signing calls two entry points, each of which clears its own depth,
 and its pair clears only what it wrote outside them (2 KiB, where an inner
 call of ML-DSA signing would make it 172).
 
-*Windows x64.* The two stack tests ran on Linux only. Built for Windows with
+*Windows x64.* The two stack tests ran on Linux only (so this said; they ran
+on macOS too, corrected below). Built for Windows with
 MinGW (gcc 13.2) and run under Wine 9.0, `test_stack_scrub` failed 29 of 132
 verdicts with up to eight input-dependent bytes, and
 `ama_secure_stack_wipe()` left 32 bytes of its own frame unwritten. The
@@ -221,7 +222,8 @@ to show, and the row fails as above. On Windows the first run of this batch
 missed one mutation for a reason of the harness's own: the leaf that marks
 where a read ends had a frame there, seventeen bytes under the caller where
 System V puts it nine, and the word directly under a return address was never
-read. The mark is taken without a frame on Windows.
+read. The mark is taken without a frame on Windows (and, since the
+correction below, is the calling frame's stack pointer on every platform).
 
 Three older guards are redundant for the residue property, and their comments
 and the tests that cited them say so: the Keccak local scrub, the SLH-DSA
@@ -257,7 +259,7 @@ x86-64 with AVX2 and BMI2, difference method at N=10):
 
 | Operation | Before | After | Change | Of which |
 |---|---:|---:|---:|---|
-| `aes_256_gcm_encrypt` | 5,091 | 4,617 | -474 | the 4 KiB wipe was a 196,608-byte frame probed page by page (1,041); it is 564 |
+| `aes_256_gcm_encrypt` | 5,091 | 4,617 | -474 | the 4 KiB wipe was an 8,192-byte frame whose upper half one `rep stosl` cleared in 1,024 counted steps (1,041); it is one `rep stosq` of 512 and a cap (564) |
 | `chacha20poly1305_encrypt` | 11,507 | 11,033 | -474 | the same |
 | `sha512`, `x25519_scalarmult` | | | +564 | one 4,096-byte wipe |
 | `sha3_256`, `sha3_512` | | | +311 | one 2,048-byte wipe |
@@ -281,9 +283,8 @@ never had the specialisation: `rep stos %al` in that function at `5536e51`
 and at this commit. The acknowledgement file's entries for the six
 operations that leave the 2% band carry values predicted from the runner's
 own count of `5536e51` and these local changes, and say so under
-`pending_runner_measurement`; the runner's table for this commit replaces
-them. The two AEAD entries are retired, since those operations are back
-within tolerance of the merge-base.
+`pending_runner_measurement`. The two AEAD entries are retired, since those
+operations are back within tolerance of the merge-base.
 
 *What an unoptimised build cannot have.* The six leaf helpers
 (`ama_consttime_memcmp`, `_copy`, `_swap`, `_lookup`, `ama_secure_memzero`,
@@ -402,8 +403,102 @@ library: `aead-bulk` passes all three lanes as dispatched and pinned to
 taint lanes exit 2 naming `ama_chacha20_block_x8_avx2`, where both passed
 before.
 
-**Not measured here.** The AArch64 Valgrind probes above, whose first run is
-CI's. The instruction counts on the runner's compiler, as said. And a library
+**Corrected after the first CI run (`6cc2d14`, section 6.6).** Two jobs
+failed. Neither was a defect in the library, whose shared object is
+byte-identical before and after what follows; each was a statement of this
+entry that had not been measured.
+
+*The stack tests on macOS.* This entry said the two stack tests ran on Linux
+only before the Windows lane. They run on macOS arm64 as well, and had since
+the commit that added them: `C Library (macos-latest, ...)` runs `ctest` with
+AppleClang and with GCC. With GCC 12.5 both passed there, all 130 entry
+points (job 130182175017). With AppleClang 21 `test_stack_scrub` stopped at
+its own second control, "a word of the input left in a frame is not seen"
+(job 130182175215), and judged nothing.
+
+The harness read down from the address of a local in a leaf it called and
+took that for the calling frame's stack pointer. Where that local sits is the
+compiler's choice. `add_ama_residue_probe` gives every probe `-O2
+-fno-stack-protector`, "because the probe's frame arithmetic assumes a plain
+prologue", and named `Clang` but not `AppleClang`, which CMake identifies
+separately; so that lane compiled the probes at `-O3` under
+`-fstack-protector-strong`, the leaf got a canary and a frame record, and
+its local sat below the eight bytes in which the control keeps its word.
+Reproduced before anything was changed: clang 18.1 for AArch64 with that
+lane's flags, under QEMU, gives that lane's verdict. Measured in the builds
+of this tree the local sat 1, 4, 9, 17 or 28 bytes under the caller's stack
+pointer (25 for the macOS target), so on every platform a part of each entry
+point's own frame went unread, and the frameless mark this entry gave
+Windows above was the same defect, corrected for one platform.
+
+Both causes are removed. The mark is the stack pointer of the frame that
+makes the call, read by one instruction in that frame
+(`RESIDUE_STACK_POINTER`, `tests/c/residue_frame.h`): it has no frame to be
+laid out, and the Windows special case is gone with the leaf, which only the
+needle probes still use and do not depend on. The macro names AppleClang.
+And with an exact origin the two allowances the tests made for an inexact
+one are gone: `test_stack_wipe_coverage` holds COVERED and EXACT to the depth
+itself, where it held them to the depth less 64, and `test_stack_scrub`
+requires a wipe to reach the depth its row names, where it allowed 96 short.
+
+Measured after, on the thirty configurations listed above: both tests pass
+in all of them, 3,778 rows judged; an entry point's own frame reaches at
+most 256 bytes below its caller (`ama_kem_encapsulate`, clang 18.1 with no
+`-O`; the bound is 512); a wipe ends at least 32 bytes below the depth it
+names; and with the probe flags withheld from clang, as AppleClang had them,
+the AArch64 build passes as well. Mutation, on five builds (x86-64 and
+AArch64, optimised and not, and Windows x64):
+
+| Mutation | `test_stack_scrub` | `test_stack_wipe_coverage` | |
+|---|---|---|---|
+| the mark 32 bytes under the stack pointer | fails in all five, at the control the macOS lane failed | fails on AArch64 (11 rows), passes on x86-64 and Windows | PIN |
+| every frame function 64 bytes short | fails in four (146, 238, 4 and 4 verdicts); passes on unoptimised x86-64 | fails in all five (11 or 12 rows) | PIN |
+| the same, and the two tests with the slack they had | passes in all five | passes in all five | what the slack hid |
+
+*The guarded-write probe.* `secret-operand-check-arm64` ran the instrument's
+own tests for the first time, as this entry arranged, and the guarded-write
+test skipped, which that lane counts as a failure: "this VEX did not chase
+the branch; there is no guarded write to judge" (job 130182627270; the
+store-conditional probe and its mutant passed in the same run). The probe was
+a single branch around an `mrs`, called by name, and that is not what VEX
+guards. `VEX/priv/guest_generic_bb_to_IR.c` reads at most three instructions
+down each arm of a block's final conditional branch and joins the two only
+when one arm ends in a second conditional branch to the first one's
+destination, the `&&` idiom; and it extends a block once, so one that has
+already followed a call is not extended again. The probe is now two branches
+to one label with the write between them, entered through a pointer.
+
+That file is not specific to a guest. The test's skip condition, this
+changelog (2026-11-08) and `docs/constant-time-testing.md` all said that
+only the arm64 front end produces a guarded write and that the rule "cannot
+act on amd64". That was never measured, and it is wrong: Valgrind 3.22 on
+x86-64 lifts the probe's `mov $16, %ecx` as `t25 = ITE(t11,t15,t24)`, the
+tool leaves it uncharged, and the tool with the rule removed charges it.
+Each half of the old shape was measured to defeat it on its own (called by
+name with two branches, and through the pointer with one: no `ITE`). The
+test therefore runs on both architectures, names neither, and builds the
+mutant itself, so the x86-64 lane pins the rule too and neither lane can
+pass a probe that cannot tell the tool from its mutant. The AArch64 run is
+CI's: Valgrind for that architecture is not available here.
+
+*What that run did not reach.* The AArch64 job stops at its first failing
+step, so the SVE2 static listing and the operand loop this entry describes
+did not run on `6cc2d14`; the x86-64 operand job did, and passed, with gcc
+and with clang. And `Instruction Count Regression (A/B)` needs the C Library
+jobs, so it was skipped: the runner has not measured this tree, and the
+acknowledgement file no longer says its next push will carry the runner's
+table. Its predicted values stand as predictions, each held by the gate to
+within tolerance of what the runner measures. One of this entry's own
+descriptions is corrected while here: the 4 KiB wipe that `5536e51` ran was
+an 8,192-byte frame whose upper half one `rep stosl` cleared in 1,024
+counted steps, not "a 196,608-byte frame probed page by page", which was a
+state of the working tree during the pass. The 1,041 instructions were
+measured and stand.
+
+**Not measured here.** The AArch64 guarded-write probe, whose first run in
+its new shape is CI's. The instruction counts on the runner's compiler, as
+said. The stack tests as AppleClang builds them, which only the macOS lane
+can run. And a library
 built by MSVC, which is what the Windows wheels are: the two stack tests need
 GNU C inline assembly, which that compiler does not have on x64, and no lane
 runs C tests on Windows with it. What its convention shares with MinGW's (the
@@ -813,7 +908,11 @@ CI on `fbefa4c` found three lanes the local run did not cover, each cured:
   earlier instruction is now charged only its own value. CMOV and CSEL, which
   compute their condition under their own IMark, keep the rule that every arm
   is an operand. The rule cannot act on amd64, where VEX does not chase
-  conditional branches; CI's AArch64 lane is its pin.
+  conditional branches; CI's AArch64 lane is its pin. (Corrected 2026-11-10,
+  section 6.6: that sentence was not measured and is wrong. The guarded write
+  comes from VEX's guest-independent block builder, Valgrind 3.22 on x86-64
+  produces it for a probe of the right shape, and the test now runs and pins
+  the rule on both architectures. See the 2026-11-10 entry.)
 * **Copilot:**
   * `test_register_residue` linked X25519, Argon2id and ChaCha20 in the
     no-PQC configuration; fixed by the gating above.

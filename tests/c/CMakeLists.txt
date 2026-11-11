@@ -26,6 +26,13 @@ endmacro()
 # AMA_TESTING_MODE hooks must link the test archive, and it must still be
 # built under exactly these flags -- residue_probe.h records how a second
 # hand-copied set of them drifted from the first.
+# AppleClang is named beside Clang because CMake gives Apple's compiler an
+# identifier of its own, and until 2026-11-10 it was not named: the macOS
+# lane compiled every probe with the directory's flags (-O3 and
+# -fstack-protector-strong), the opposite of both, and the comments that say
+# a probe is always -O2 were untrue there.  The first probe that could tell
+# was test_stack_scrub.c (tests/c/residue_frame.h, THE CALLING FRAME'S STACK
+# POINTER).
 macro(add_ama_residue_probe test_name test_source)
     add_executable(${test_name} ${test_source})
     if(${ARGC} GREATER 2)
@@ -38,7 +45,7 @@ macro(add_ama_residue_probe test_name test_source)
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES SKIP_RETURN_CODE 77)
     target_compile_options(${test_name} PRIVATE
-        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-O2 -fno-stack-protector>)
 endmacro()
 
 # Core tests

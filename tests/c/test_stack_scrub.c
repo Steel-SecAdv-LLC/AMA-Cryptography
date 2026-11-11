@@ -80,15 +80,20 @@
  * that returns with the address of a block it allocated and freed (both
  * INPUT-INDEPENDENT).
  *
- * WHERE IT RUNS.  x86-64 and AArch64 with GNU C inline assembly: Linux, and
- * Windows x64 built with MinGW, which CI runs under Wine.  That build has a
- * convention of its own (a home area above every return address, a stack
- * probe that pushes a call-clobbered register), and the first run of this
- * file on it failed 29 verdicts (2026-11-10; src/c/ama_consttime.c,
- * ama_stack_wipe_cap, says what each was).  MSVC has no inline assembly on
- * x64 and cannot compile this file, so nothing here says anything about a
- * library MSVC built.  Elsewhere, and under a sanitizer that moves locals
- * off the real frame, it skips (77), as the other residue probes do.
+ * WHERE IT RUNS.  x86-64 and AArch64 with GNU C inline assembly.  CI builds
+ * and runs it on Linux (x86-64, and AArch64 under QEMU), on macOS arm64 with
+ * AppleClang and with GCC, and on the Windows x64 build MinGW makes, under
+ * Wine.  That last build has a convention of its own (a home area above
+ * every return address, a stack probe that pushes a call-clobbered
+ * register), and the first run of this file on it failed 29 verdicts
+ * (2026-11-10; src/c/ama_consttime.c, ama_stack_wipe_cap, says what each
+ * was).  The first run on macOS failed too, and there it was this file that
+ * was wrong: it read down from an address that was not the calling frame's
+ * stack pointer (residue_frame.h, THE CALLING FRAME'S STACK POINTER).  MSVC
+ * has no inline assembly on x64 and cannot compile this file, so nothing
+ * here says anything about a library MSVC built.  Elsewhere, and under a
+ * sanitizer that moves locals off the real frame, it skips (77), as the
+ * other residue probes do.
  */
 #include "ama_cryptography.h"
 
@@ -162,14 +167,12 @@ int main(void) {
 #define SCRUB_GAP_BYTES 2048u
 /* The bytes nearest the caller, which CLEARED leaves to INPUT-INDEPENDENT:
  * the entry point's own frame, and the wipe routine's return address and
- * canary.  The largest measured is 182 (the generic entry points, aarch64
- * gcc 13.3 with no -O).  A fixed bound, not the end of a run: such bytes are
- * not contiguous (ama_consttime_lookup under gcc 13.3 -fsanitize=undefined
- * kept one 103 down and nothing between it and the 30 nearest). */
+ * canary.  The largest measured is 256 (ama_kem_encapsulate, x86-64 clang
+ * 18.1 with no -O; 2026-11-10, thirty builds, from the calling frame's stack
+ * pointer).  A fixed bound, not the end of a run: such bytes are not
+ * contiguous (ama_consttime_lookup under gcc 13.3 -fsanitize=undefined kept
+ * one 103 down and nothing between it and the 30 nearest). */
 #define SCRUB_TOP_BYTES 512u
-/* The mark sits a few bytes under the calling frame's stack pointer, and the
- * wipe's own frame begins a few bytes under that. */
-#define SCRUB_DEPTH_SLACK 96u
 #define SCRUB_MAX_ROWS 192u
 
 static uintptr_t g_lo, g_mark;
@@ -185,13 +188,15 @@ static uint8_t g_top_now[SCRUB_TOP_BYTES];
  * to the next request of its size, so a call that allocates and frees gets
  * the same address every time it is made, and an address it left in a dead
  * frame would compare equal across the two passes.  Before the second pass
- * this takes, and keeps, one block of every size from sixteen bytes to a
- * megabyte: the blocks the first pass freed go to these, and what the second
- * pass allocates is somewhere else.  Measured 2026-11-10 without it: with
- * hybrid signing's own stack wipe removed, and then with its implementation
- * half merged back into ama_sign()'s helper as well, every row passed on
- * five builds (x86-64, AArch64 and Windows x64, optimised and not), although
- * the helper's frame keeps the address of the wrapped message. */
+ * this takes, and keeps, one block of every multiple of sixteen bytes up to
+ * a kilobyte and of every power of two from there to sixty-four megabytes,
+ * 128 MiB in all: the blocks the first pass freed go to these, and what the
+ * second pass allocates is somewhere else.  Measured 2026-11-10 without it:
+ * with hybrid signing's own stack wipe removed, and then with its
+ * implementation half merged back into ama_sign()'s helper as well, every
+ * row passed on five builds (x86-64, AArch64 and Windows x64, optimised and
+ * not), although the helper's frame keeps the address of the wrapped
+ * message. */
 #define SCRUB_HEAP_HOLDS 80u
 static void *g_heap_hold[SCRUB_HEAP_HOLDS];
 
@@ -283,13 +288,16 @@ static void scrub_verdict(const char *name, size_t depth) {
         }
         return;
     }
-    /* The wipe must have reached the depth the row names.  It may reach
-     * further: an implementation that calls another scrubbed entry point
-     * leaves that one's (deeper, cleared) wipe below its own. */
+    /* The wipe must have reached the depth the row names, counted from the
+     * calling frame's stack pointer: the entry point's own frame lies
+     * between the two, so a wipe of that depth always ends lower (by 32
+     * bytes at the least, measured 2026-11-10 over thirty builds).  It may
+     * reach further still: an implementation that calls another scrubbed
+     * entry point leaves that one's (deeper, cleared) wipe below its own. */
     if (depth == 0) {
         reached = s.used <= (long)SCRUB_TOP_BYTES;
     } else {
-        reached = s.used + (long)SCRUB_DEPTH_SLACK >= (long)depth;
+        reached = s.used >= (long)depth;
     }
     if (g_phase == 0) {
         memcpy(g_top[row], g_top_now, sizeof g_top_now);
@@ -338,7 +346,7 @@ static void pattern(uint8_t *p, size_t n, unsigned seed) {
         volatile uint8_t gap[SCRUB_GAP_BYTES];                   \
         gap[0] = 0;                                              \
         RESIDUE_KEEP_LIVE(gap);                                  \
-        residue_stack_mark(&g_mark);                             \
+        RESIDUE_STACK_POINTER(g_mark);                           \
         SCRUB_NORMALISE_REGISTERS();                             \
         statement;                                               \
         RESIDUE_KEEP_LIVE(gap);                                  \

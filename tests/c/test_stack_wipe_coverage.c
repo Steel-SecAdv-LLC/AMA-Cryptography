@@ -51,12 +51,24 @@
  *     address, inside its own frame, unwritten (COVERED, and THE HOME AREA
  *     below).
  *
+ * WHERE IT READS FROM.  The calling frame's stack pointer, taken in that
+ * frame (residue_frame.h).  Until 2026-11-10 it was the address of a local
+ * in a leaf the frame called, one to twenty-eight bytes lower depending on
+ * the build; COVERED was not asked of the bytes in between, and both it and
+ * EXACT were held to the depth less sixty-four.  On the Windows build that
+ * hid the word ama_secure_stack_wipe() leaves unwritten when it does not
+ * take its frame address, and on the macOS lane, where the local sat lowest,
+ * the bytes directly under the stack pointer had never been read.  Both are
+ * now held to the depth itself: every byte of it, from the stack pointer
+ * down.
+ *
  * It links the static test archive: the parts of the wipe are not exported
  * from the shared library (cmake/ama_exports.map).  The call sites are
  * AMA_STACK_WIPE_BELOW() itself, a macro, so what is measured is what every
  * scrubbed entry point expands to.  x86-64 and AArch64 with GNU C,
- * uninstrumented: Linux, and Windows x64 built with MinGW.  Elsewhere it
- * skips (77); MSVC cannot be asked (no inline assembly on x64).
+ * uninstrumented: CI runs it on Linux, on macOS arm64, and on the Windows
+ * x64 build MinGW makes.  Elsewhere it skips (77); MSVC cannot be asked (no
+ * inline assembly on x64).
  */
 #include "ama_cryptography.h"
 
@@ -78,9 +90,6 @@ int main(void) {
 
 /* Deeper than the deepest wipe by a wide margin. */
 #define WIPE_SPAN_BYTES (640u * 1024u)
-/* The mark sits a few bytes below the calling frame's stack pointer, so a
- * depth measured from it ends a little short of what the frame covers. */
-#define WIPE_MARK_SLACK 64u
 /* What a wipe frame holds besides its array: its return address, frame
  * record, canary and alignment, all above the array.  It is the most a wipe
  * may write past its depth, and the only place it may leave a byte that is
@@ -110,7 +119,7 @@ RESIDUE_NOINLINE static void wipe_fill(uint8_t value) {
         volatile uint8_t gap[GAP_BYTES];            \
         gap[0] = 0;                                 \
         RESIDUE_KEEP_LIVE(gap);                     \
-        residue_stack_mark(&g_mark);                \
+        RESIDUE_STACK_POINTER(g_mark);              \
         statement;                                  \
         RESIDUE_KEEP_LIVE(gap);                     \
     }
@@ -220,7 +229,7 @@ static int wipe_check(const char *name, size_t depth, size_t header, void (*site
     wipe_scan_t a, b;
     const uint8_t *top;
     long unwritten = 0, first_at = 0, last_at = 0, kept;
-    long held = (long)(depth - WIPE_MARK_SLACK);
+    long held = (long)depth;
     int ok;
 
     wipe_fill((uint8_t)WIPE_FILL_A);

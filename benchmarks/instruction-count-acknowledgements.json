@@ -40,7 +40,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "to_before_the_stack_clearing": {
         "to": 855561,
         "runner_head_5536e51": 855643
@@ -82,7 +82,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "to_before_the_stack_clearing": {
         "to": 5571698,
         "runner_head_5536e51": 5571903
@@ -216,7 +216,7 @@
       "commits": [
         "fbefa4c"
       ],
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "supersedes": {
         "from": 36974,
         "to": 37745,
@@ -292,7 +292,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "to_before_the_stack_clearing": {
         "to": 737814,
         "runner_head_5536e51": 737893
@@ -333,7 +333,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "to_before_the_stack_clearing": {
         "to": 570310,
         "runner_head_5536e51": 570346
@@ -374,7 +374,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
       "to_before_the_stack_clearing": {
         "to": 500294,
         "runner_head_5536e51": 500371
@@ -433,7 +433,7 @@
     "_comment": "Entries the gate no longer reads: their operation is back within tolerance of the merge-base, where an entry whose 'from' the reference still measures is stale and fails. Kept for what they record.",
     "aes_256_gcm_encrypt": {
       "retired": "2026-11-10",
-      "why": "The exported AEAD wipe was a 196,608-byte frame probed page by page with a 4 KiB memset at its top (1,041 Ir, gcc 14.2); it is a 4,096-byte frame zeroed by one `rep stosq`, and a cap (564 Ir). Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 4,567 Ir on the runner against 4,500 at the merge-base (+1.49%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 4,567 Ir on the runner against 4,500 at the merge-base (+1.49%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
       "entry": {
         "from": 4500,
         "to": 5041,
@@ -476,7 +476,7 @@
     },
     "chacha20poly1305_encrypt": {
       "retired": "2026-11-10",
-      "why": "The exported AEAD wipe was a 196,608-byte frame probed page by page with a 4 KiB memset at its top (1,041 Ir, gcc 14.2); it is a 4,096-byte frame zeroed by one `rep stosq`, and a cap (564 Ir). Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 11,290 Ir on the runner against 11,080 at the merge-base (+1.90%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 11,290 Ir on the runner against 11,080 at the merge-base (+1.90%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
       "entry": {
         "from": 11080,
         "to": 11916,
@@ -508,7 +508,7 @@
       "kyber_encapsulate",
       "kyber_keygen"
     ],
-    "what": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The runner's A/B table for this commit replaces it in the next push.",
+    "what": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
     "local_measurement": "gcc 14.2.0-4ubuntu2~24.04, valgrind 3.22.0, Release static library with LTO, driver -O2, AMA_DISPATCH_NO_AUTOTUNE=1, difference method at N=10, x86-64 host with AVX2/BMI2/ADX; A/B of 5536e51 against the working tree",
     "local_delta_ir": {
       "aes_256_gcm_encrypt": -474,
