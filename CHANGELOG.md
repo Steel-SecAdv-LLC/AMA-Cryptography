@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-11-10 |
+| Last Updated | 2026-11-11 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -281,10 +281,10 @@ sizes; with the implementation half out of line it no longer does, and an
 was `rep stosl`, which callgrind counts four times over. The shared library
 never had the specialisation: `rep stos %al` in that function at `5536e51`
 and at this commit. The acknowledgement file's entries for the six
-operations that leave the 2% band carry values predicted from the runner's
-own count of `5536e51` and these local changes, and say so under
-`pending_runner_measurement`. The two AEAD entries are retired, since those
-operations are back within tolerance of the merge-base.
+operations that leave the 2% band were recorded as predictions, from the
+runner's own count of `5536e51` and these local changes, and carry the
+runner's own measurement since 2026-11-11 (below). The two AEAD entries are
+retired, since those operations are back within tolerance of the merge-base.
 
 *What an unoptimised build cannot have.* The six leaf helpers
 (`ama_consttime_memcmp`, `_copy`, `_swap`, `_lookup`, `ama_secure_memzero`,
@@ -485,20 +485,63 @@ CI's: Valgrind for that architecture is not available here.
 step, so the SVE2 static listing and the operand loop this entry describes
 did not run on `6cc2d14`; the x86-64 operand job did, and passed, with gcc
 and with clang. And `Instruction Count Regression (A/B)` needs the C Library
-jobs, so it was skipped: the runner has not measured this tree, and the
-acknowledgement file no longer says its next push will carry the runner's
-table. Its predicted values stand as predictions, each held by the gate to
-within tolerance of what the runner measures. One of this entry's own
+jobs, so it was skipped, and the acknowledgement file's six predicted values
+stayed predictions for one more commit, without the promise that its next
+push would carry the runner's table. One of this entry's own
 descriptions is corrected while here: the 4 KiB wipe that `5536e51` ran was
 an 8,192-byte frame whose upper half one `rep stosl` cleared in 1,024
 counted steps, not "a 196,608-byte frame probed page by page", which was a
 state of the working tree during the pass. The 1,041 instructions were
 measured and stand.
 
-**Not measured here.** The AArch64 guarded-write probe, whose first run in
-its new shape is CI's. The instruction counts on the runner's compiler, as
-said. The stack tests as AppleClang builds them, which only the macOS lane
-can run. And a library
+*What CI on `df9974c` then measured (2026-11-11).* All eleven workflows of
+that commit passed, with no job failed, and three of the jobs were first runs
+of something this entry could only describe.
+
+- **macOS arm64, AppleClang 21** (job 130226129940): `ctest` 162 of 162.
+  `test_stack_scrub` saw all three controls and judged every row, "130 entry
+  point(s): cleared, and input-independent", the first verdict on the library
+  as that compiler builds it; `test_stack_wipe_coverage` read each wipe from
+  the stack pointer down and found no unwritten byte (1,064 written for a
+  depth of 1,024, the forty-byte header clang 18.1 lays out for that target);
+  and the five needle probes passed under the flags they now get there.
+- **AArch64 under Valgrind 3.22** (job 130226190727): the instrument's own
+  tests, 3 passed and 7 skipped for x86-64, the guarded-write probe and its
+  mutant among the three; the SVE2 static listing, 3,376 instructions under
+  gcc 13.3 and 1,455 under clang 18.1, which are the figures measured here on
+  cross-built archives; and all 23 operand targets.
+- **Instruction counts on the runner's compiler** (A/B job 130227909326, gcc
+  15.2, merge-base `c0f2254`): 18 operations within the band, seven by
+  acknowledgement. The six predicted head values are replaced by the
+  runner's, and `benchmarks/instruction-baseline.json` is that table, all
+  eighteen rows. Recording what the tree measures showed one more stale
+  record: the landed entry for `hmac_sha3_256` gives a head value of 48,768,
+  and the tree measures 49,782, 2.08% above it and 1.65% above the merge-base.
+  `test_the_recorded_baseline_agrees_with_every_acknowledged_head_value` had
+  not said so because the recorded file still carried the merge-base's figure
+  for that row; with the measured one it failed. The entry is retired with
+  its record, not edited.
+
+| Operation | Predicted | Runner | Error |
+|---|---:|---:|---:|
+| `aes_256_gcm_encrypt` | 4,567 | 4,565 (+1.44% of the merge-base) | +2 |
+| `chacha20poly1305_encrypt` | 11,290 | 11,288 (+1.88%) | +2 |
+| `hkdf_derive` | 38,347 | 38,345 | +2 |
+| `sha3_256`, `sha512`, `hmac_sha3_256`, `x25519_scalarmult`, `dilithium_sign` | | as predicted | 0 |
+| `dilithium_verify` | 911,858 | 911,859 | -1 |
+| `kyber_keygen` | 513,322 | 513,354 | -32 |
+| `kyber_decapsulate` | 751,100 | 751,156 | -56 |
+| `kyber_encapsulate` | 582,266 | 582,362 | -96 |
+| `dilithium_keygen` | 871,444 | 870,689 | +755 |
+
+A change measured under gcc 14.2 carried to gcc 15.2 to within two
+instructions wherever it was the stack wipe alone, which is assembly and the
+same under any compiler, and to within 0.09% where part of it was the
+benchmark's own link. The two AEAD operations stay inside the band, so their
+entries stay retired.
+
+**Not measured here.** The three things above were CI's to measure and are
+measured. What remains is a library
 built by MSVC, which is what the Windows wheels are: the two stack tests need
 GNU C inline assembly, which that compiler does not have on x64, and no lane
 runs C tests on Windows with it. What its convention shares with MinGW's (the

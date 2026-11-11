@@ -6,8 +6,8 @@
   "acknowledgements": {
     "dilithium_keygen": {
       "from": 1457465,
-      "to": 871444,
-      "delta_percent": -40.21,
+      "to": 870689,
+      "delta_percent": -40.26,
       "reason": "The Keccak x4 AVX2 kernel was restructured on this branch so no compiler can pick FP-domain encodings for the lane state; it also retires far fewer instructions (callgrind, local gcc 13.3: ama_keccak_f1600_x4_avx2 10.73M Ir per 10 keygens before, kx4_round 2.71M plus 0.34M after). ML-DSA expands its matrix through SHAKE128 x4, so keygen, sign and verify all fall. The inverse NTT's explicit staging copy and arithmetic sign extension (dil_sext32) move it a little further (ama_dilithium_invntt_avx2 4.29M to 3.70M). Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-DSA key generation clears 77,824 bytes: 9,819 Ir of the +15,801 measured locally; the remaining 6 thousand are in the two eta samplers, the same whole-program specialisation the kyber_keygen entry describes, lost in this benchmark's link and never present in the shared library.",
       "commits": [
         "dba6bf4",
@@ -40,7 +40,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 871,444 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was 755 Ir high (predicted_then_measured, below).",
       "to_before_the_stack_clearing": {
         "to": 855561,
         "runner_head_5536e51": 855643
@@ -82,7 +82,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 5,592,075 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was exactly (predicted_then_measured, below).",
       "to_before_the_stack_clearing": {
         "to": 5571698,
         "runner_head_5536e51": 5571903
@@ -210,13 +210,13 @@
     },
     "hkdf_derive": {
       "from": 36974,
-      "to": 38347,
+      "to": 38345,
       "delta_percent": 3.71,
       "reason": "Two costs since the merge-base. AMA_API's zero_call_used_regs(\"all\") epilogue (+771 Ir, the entry under supersedes, measured by the runner on fbefa4c), and the stack clearing of INVARIANT-6: ama_hkdf() clears the 8,192 bytes its family is measured to need, 1,042 Ir. While the library's own HMAC and SHA-3 calls still went through the public entry points this was thirteen wipes and +4,222 Ir (measured 2026-11-10); they reach inner functions now and the derivation clears its stack once (src/c/internal/ama_scrubbed_inner.h).",
       "commits": [
         "fbefa4c"
       ],
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 38,347 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was 2 Ir high (predicted_then_measured, below).",
       "supersedes": {
         "from": 36974,
         "to": 37745,
@@ -242,25 +242,10 @@
         }
       }
     },
-    "hmac_sha3_256": {
-      "from": 152428,
-      "to": 48768,
-      "delta_percent": -68.01,
-      "reason": "HMAC over the faster Keccak permutation. Two permutations per call, same -66%. Re-measured 2026-11-06 on the 26.04 toolchain (gcc 15.2): 2dcef5c6 152,428 Ir to 2db626de 48,768 Ir, -68.01%; the percentage above is the gcc 13.3 figure (156,124 to 53,028 Ir).",
-      "commits": [
-        "b40e60f"
-      ],
-      "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
-      "measured_on_gcc_13_3": {
-        "from": 156124,
-        "to": 53028,
-        "delta_percent": -66.03
-      }
-    },
     "kyber_decapsulate": {
       "from": 957064,
-      "to": 751100,
-      "delta_percent": -21.52,
+      "to": 751156,
+      "delta_percent": -21.51,
       "reason": "ML-KEM expands its matrix through SHAKE128 x4, so it inherits the Keccak x4 AVX2 restructure (see dilithium_keygen); decapsulation re-encrypts, so it falls with encapsulation. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +13,207 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
         "dba6bf4"
@@ -292,7 +277,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 751,100 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was 56 Ir low (predicted_then_measured, below).",
       "to_before_the_stack_clearing": {
         "to": 737814,
         "runner_head_5536e51": 737893
@@ -300,8 +285,8 @@
     },
     "kyber_encapsulate": {
       "from": 804033,
-      "to": 582266,
-      "delta_percent": -27.58,
+      "to": 582362,
+      "delta_percent": -27.57,
       "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +11,920 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
         "dba6bf4"
@@ -333,7 +318,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 582,266 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was 96 Ir low (predicted_then_measured, below).",
       "to_before_the_stack_clearing": {
         "to": 570310,
         "runner_head_5536e51": 570346
@@ -341,7 +326,7 @@
     },
     "kyber_keygen": {
       "from": 745903,
-      "to": 513322,
+      "to": 513354,
       "delta_percent": -31.18,
       "reason": "Same Keccak x4 AVX2 restructure as kyber_decapsulate. Measured by the runner's own A/B job on fbefa4c (job 128690957185), merge-base c0f2254, gcc 15.2 on ubuntu-latest; values are the runner's. SINCE (2026-11-10): Every secret-handling entry point now clears the stack it used before it returns (src/c/internal/ama_stack_wipe.h, INVARIANT-6): one `rep stosq` over the family's depth, which callgrind counts one instruction per eight bytes. ML-KEM clears 45,056 bytes: 5,691 Ir of the +12,951 measured locally. The rest is this benchmark's own link and not the shipped library: the driver is linked whole-program from the static archive, and with the implementation half out of line that link no longer specialises the ML-KEM-1024 path for constant sizes (an 8 KiB zero fill is emitted as `rep stosb` where it was `rep stosl`, which callgrind counts four times over). The shared library had the generic code before and has it now: `rep stos %al` in kyber_keygen_internal at 5536e51 and at this commit. ",
       "commits": [
@@ -374,7 +359,7 @@
           }
         }
       },
-      "to_basis": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+      "to_basis": "Measured by the runner's own A/B job on df9974c (job 130227909326), merge-base c0f2254, gcc 15.2 on ubuntu-26.04; the value is the runner's. It was recorded first, on 2026-11-10, as a prediction of 513,322 Ir: the runner's head count of 5536e51 (A/B job 128838420676) plus the change measured locally from 5536e51 with gcc 14.2.0, because the A/B job needs the C Library jobs and was skipped on 6cc2d14. The prediction was 32 Ir low (predicted_then_measured, below).",
       "to_before_the_stack_clearing": {
         "to": 500294,
         "runner_head_5536e51": 500371
@@ -430,10 +415,10 @@
     }
   },
   "retired": {
-    "_comment": "Entries the gate no longer reads: their operation is back within tolerance of the merge-base, where an entry whose 'from' the reference still measures is stale and fails. Kept for what they record.",
+    "_comment": "Entries the gate no longer reads, of two kinds. An operation back within tolerance of the merge-base, where an entry whose 'from' the reference still measures is stale and fails (the two AEAD entries). And a landed entry, one whose change the merge-base already contains, whose 'to' the tree has since moved more than the tolerance away from (hmac_sha3_256). Kept for what they record.",
     "aes_256_gcm_encrypt": {
       "retired": "2026-11-10",
-      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 4,567 Ir on the runner against 4,500 at the merge-base (+1.49%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree with gcc 14.2.0: -474 Ir, a predicted 4,567 Ir on the runner. The runner then measured it on df9974c (A/B job 130227909326): 4,565 Ir against 4,500 at the merge-base, +1.44%, inside the tolerance, so the operation needs no entry.",
       "entry": {
         "from": 4500,
         "to": 5041,
@@ -476,7 +461,7 @@
     },
     "chacha20poly1305_encrypt": {
       "retired": "2026-11-10",
-      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree: -474 Ir, which puts the operation at a predicted 11,290 Ir on the runner against 11,080 at the merge-base (+1.90%). If the runner measures it outside tolerance, the entry returns with the runner's own numbers.",
+      "why": "The exported AEAD wipe was an 8,192-byte frame whose upper 4 KiB one `rep stosl` cleared in 1,024 steps, each of which callgrind counts (1,041 Ir, gcc 14.2); it is a 4,096-byte frame cleared by one `rep stosq` in 512, and a cap (564 Ir). (Corrected 2026-11-10, AGENTS.md section 6.6: this said a 196,608-byte frame probed page by page, which was a state of the working tree during the pass and never 5536e51; the figure was measured and stands.) Measured locally from 5536e51 to this tree with gcc 14.2.0: -474 Ir, a predicted 11,290 Ir on the runner. The runner then measured it on df9974c (A/B job 130227909326): 11,288 Ir against 11,080 at the merge-base, +1.88%, inside the tolerance, so the operation needs no entry.",
       "entry": {
         "from": 11080,
         "to": 11916,
@@ -496,34 +481,124 @@
           ]
         }
       }
+    },
+    "hmac_sha3_256": {
+      "retired": "2026-11-11",
+      "why": "Landed long since: the change it records (2dcef5c6 to 2db626de) is in the merge-base, which the runner measures at 48,976 Ir. The operation has moved since, inside the band each time and so with no entry owed: 49,458 Ir on 5536e51 (A/B job 128838420676; AMA_API's register clearing) and 49,782 Ir on df9974c (A/B job 130227909326; one 4,096-byte stack wipe, less what the inner calls save), +1.65% of the merge-base in all. That is 2.08% above this entry's 'to', which tests/test_instruction_count_gate.py::test_the_recorded_baseline_agrees_with_every_acknowledged_head_value reported the moment benchmarks/instruction-baseline.json recorded what the tree measures: until then that file had kept the merge-base's 48,976 for this row and the test compared two stale numbers. An entry is a head value the tree is held to. One the tree no longer measures is retired, not edited.",
+      "entry": {
+        "from": 152428,
+        "to": 48768,
+        "delta_percent": -68.01,
+        "reason": "HMAC over the faster Keccak permutation. Two permutations per call, same -66%. Re-measured 2026-11-06 on the 26.04 toolchain (gcc 15.2): 2dcef5c6 152,428 Ir to 2db626de 48,768 Ir, -68.01%; the percentage above is the gcc 13.3 figure (156,124 to 53,028 Ir).",
+        "commits": [
+          "b40e60f"
+        ],
+        "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
+        "measured_on_gcc_13_3": {
+          "from": 156124,
+          "to": 53028,
+          "delta_percent": -66.03
+        }
+      }
     }
   },
-  "pending_runner_measurement": {
-    "since": "2026-11-10",
-    "operations": [
-      "dilithium_keygen",
-      "dilithium_sign",
-      "hkdf_derive",
-      "kyber_decapsulate",
-      "kyber_encapsulate",
-      "kyber_keygen"
-    ],
-    "what": "PREDICTED, not measured: the runner's own head count for 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured from 5536e51 to this tree with gcc 14.2.0 by the same method. The A/B job has not measured this tree: it needs the C Library jobs, and on 6cc2d14 one of them failed on a test harness (CHANGELOG, 2026-11-10), so it was skipped. It holds this value to within its tolerance of what it measures on every run that reaches it.",
+  "predicted_then_measured": {
+    "recorded": "2026-11-10",
+    "measured": "2026-11-11",
+    "what": "On 2026-11-10 the head values of dilithium_keygen, dilithium_sign, hkdf_derive, kyber_decapsulate, kyber_encapsulate and kyber_keygen, and the decision to retire the two AEAD entries, were predictions: the runner's head count of 5536e51 (A/B job 128838420676, gcc 15.2) plus the change measured locally from 5536e51 with gcc 14.2.0 by the same method. The A/B job needs the C Library jobs and was skipped on 6cc2d14, where one of them failed on a test harness (CHANGELOG, 2026-11-10). It ran on df9974c, whose library is byte-identical to 6cc2d14's (A/B job 130227909326; artifact instruction-counts, sha256 b309af9248528486abccd628d742d98e9cc9f66824c148cd3b6b9da5caf122de), and the six entries carry its values now. Kept because it says how far a change measured under one compiler can be carried to another: every operation whose change is the stack wipe alone was predicted to within 2 Ir, and the largest error, dilithium_keygen, is 755 Ir (0.09%), in the part of that change which is the benchmark's own link.",
     "local_measurement": "gcc 14.2.0-4ubuntu2~24.04, valgrind 3.22.0, Release static library with LTO, driver -O2, AMA_DISPATCH_NO_AUTOTUNE=1, difference method at N=10, x86-64 host with AVX2/BMI2/ADX; A/B of 5536e51 against the working tree",
-    "local_delta_ir": {
-      "aes_256_gcm_encrypt": -474,
-      "chacha20poly1305_encrypt": -474,
-      "dilithium_keygen": 15801,
-      "dilithium_sign": 20172,
-      "dilithium_verify": -1061,
-      "hkdf_derive": 602,
-      "hmac_sha3_256": 324,
-      "kyber_decapsulate": 13207,
-      "kyber_encapsulate": 11920,
-      "kyber_keygen": 12951,
-      "sha3_256": 311,
-      "sha512": 564,
-      "x25519_scalarmult": 564
+    "operations": {
+      "aes_256_gcm_encrypt": {
+        "runner_5536e51": 5041,
+        "local_delta_ir": -474,
+        "predicted": 4567,
+        "measured_df9974c": 4565,
+        "error_ir": 2
+      },
+      "chacha20poly1305_encrypt": {
+        "runner_5536e51": 11764,
+        "local_delta_ir": -474,
+        "predicted": 11290,
+        "measured_df9974c": 11288,
+        "error_ir": 2
+      },
+      "dilithium_keygen": {
+        "runner_5536e51": 855643,
+        "local_delta_ir": 15801,
+        "predicted": 871444,
+        "measured_df9974c": 870689,
+        "error_ir": 755
+      },
+      "dilithium_sign": {
+        "runner_5536e51": 5571903,
+        "local_delta_ir": 20172,
+        "predicted": 5592075,
+        "measured_df9974c": 5592075,
+        "error_ir": 0
+      },
+      "dilithium_verify": {
+        "runner_5536e51": 912919,
+        "local_delta_ir": -1061,
+        "predicted": 911858,
+        "measured_df9974c": 911859,
+        "error_ir": -1
+      },
+      "hkdf_derive": {
+        "runner_5536e51": 37745,
+        "local_delta_ir": 602,
+        "predicted": 38347,
+        "measured_df9974c": 38345,
+        "error_ir": 2
+      },
+      "hmac_sha3_256": {
+        "runner_5536e51": 49458,
+        "local_delta_ir": 324,
+        "predicted": 49782,
+        "measured_df9974c": 49782,
+        "error_ir": 0
+      },
+      "kyber_decapsulate": {
+        "runner_5536e51": 737893,
+        "local_delta_ir": 13207,
+        "predicted": 751100,
+        "measured_df9974c": 751156,
+        "error_ir": -56
+      },
+      "kyber_encapsulate": {
+        "runner_5536e51": 570346,
+        "local_delta_ir": 11920,
+        "predicted": 582266,
+        "measured_df9974c": 582362,
+        "error_ir": -96
+      },
+      "kyber_keygen": {
+        "runner_5536e51": 500371,
+        "local_delta_ir": 12951,
+        "predicted": 513322,
+        "measured_df9974c": 513354,
+        "error_ir": -32
+      },
+      "sha3_256": {
+        "runner_5536e51": 35176,
+        "local_delta_ir": 311,
+        "predicted": 35487,
+        "measured_df9974c": 35487,
+        "error_ir": 0
+      },
+      "sha512": {
+        "runner_5536e51": 37050,
+        "local_delta_ir": 564,
+        "predicted": 37614,
+        "measured_df9974c": 37614,
+        "error_ir": 0
+      },
+      "x25519_scalarmult": {
+        "runner_5536e51": 708410,
+        "local_delta_ir": 564,
+        "predicted": 708974,
+        "measured_df9974c": 708974,
+        "error_ir": 0
+      }
     }
   }
 }
