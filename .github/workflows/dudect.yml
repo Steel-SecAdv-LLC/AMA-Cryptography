@@ -57,6 +57,8 @@ on:
       # re-run dudect, or the change ships unexercised (audit Low).
       - 'tools/check_ghash_constant_time.py'
       - 'tools/check_secret_division.py'
+      - 'tools/check_ct_operand.py'
+      - 'tools/ct_operand/**'
       - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
@@ -95,7 +97,7 @@ jobs:
   # failed detection is a failure, never "not relevant".
   changes:
     name: Relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.match.outputs.relevant }}
@@ -119,6 +121,8 @@ jobs:
             CMakeLists.txt
             tools/check_ghash_constant_time.py
             tools/check_secret_division.py
+            tools/check_ct_operand.py
+            tools/ct_operand/**
             tools/check_avx_scoping.py
             tools/constant_time/**
             .github/workflows/dudect.yml
@@ -143,7 +147,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
     # margin above the schedule the verdict rule can demand.
@@ -216,7 +220,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The weekly schedule run does a high-N reading (see the run step) and needs
     # more wall-clock than a PR run; 40 min covers build + the 30-min test cap.
     timeout-minutes: ${{ (github.event_name == 'schedule' && 40) || 20 }}
@@ -271,7 +275,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -330,7 +334,7 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
     # margin above the schedule the verdict rule can demand.
@@ -390,7 +394,7 @@ jobs:
   #
   # Matrix:
   #
-  #   os = ubuntu-latest     (x86-64 host)
+  #   os = ubuntu-26.04      (x86-64 host)
   #        ubuntu-24.04-arm  (AArch64 / NEON / [SVE2 if available] host)
   #
   #   slot — the full dispatch-table-routable SIMD inventory.  The
@@ -426,7 +430,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-26.04, ubuntu-24.04-arm]
         slot:
           - sha3-avx512x4
           # The AVX2 4-way Keccak and the two x86 AES-GCM hardware kernels had
@@ -462,28 +466,28 @@ jobs:
           - dilithium-ntt-sve2
           - x25519-avx2
         exclude:
-          # x86-64 hosts (ubuntu-latest): exclude NEON + SVE2 slots.
+          # x86-64 hosts (ubuntu-26.04): exclude NEON + SVE2 slots.
           # The kernels are AArch64-only; the dispatcher will report
           # the slot unsupported and CTest will treat the cell as a
           # silent pass — wasting compute and producing a confusing
           # green run.  Skip them at the matrix level instead.
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: aes-gcm-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: chacha20-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: sha3-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: kyber-ntt-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: dilithium-ntt-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: argon2-g-neon
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: kyber-sve2
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: sha3-sve2
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             slot: dilithium-ntt-sve2
           # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
           # the AVX2 X25519 lane.  Same rationale as above, with
@@ -663,7 +667,7 @@ jobs:
     name: Scalar AES-GCM instruction-count invariance
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20 covered the callgrind targets alone; the secret-taint lane (seventeen
     # Memcheck runs, `slhdsa-sign` the longest at roughly a minute of CPU for
     # its two parameter sets) and the shipped-shared-object lane (an LTO build
@@ -960,18 +964,30 @@ jobs:
         # instructions over four signatures, branching on the Montgomery
         # extra-reduction predicate. P-256, P-384 and P-521 share that
         # arithmetic, so this covers the family's scalar core.
+        # Twice: as dispatched under Valgrind (the portable path), and with
+        # --assume-adx, the MULX+ADX kernel production selects on every
+        # ADX-capable CPU and Valgrind's CPUID hides.
         run: |
+          set -euo pipefail
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa --assume-adx
 
       - name: X25519 instruction count must not depend on the scalar
         # The Montgomery ladder's conditional swap is predicated on one bit of
         # the secret scalar per step. The dudect lane for X25519 is wall-clock
         # on a shared runner; this is its deterministic counterpart, the same
         # pairing `ecdsa` has with the `secp256k1 ECDSA sign` lane.
+        # Twice: as dispatched under Valgrind (the portable path), and with
+        # --assume-adx, the MULX+ADX kernel production selects on every
+        # ADX-capable CPU and Valgrind's CPUID hides.
         run: |
+          set -euo pipefail
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target x25519
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519 --assume-adx
 
       - name: Batched X25519 instruction count must not depend on the scalars
         # `ama_x25519_scalarmult_batch` is a separate entry point from
@@ -1028,6 +1044,29 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target secp256k1-seckey
 
+      - name: HKDF must not depend on the input keying material
+        # ama_hkdf (SHA3-256) and HKDF over HMAC-SHA-256/-384/-512, through
+        # which the hybrid combiner, the agent binding and every key schedule
+        # derive keys, and each HMAC called directly with a 300-byte key, so
+        # HMAC's key-hash path runs under the class variable too (in HKDF the
+        # IKM is HMAC's message, never its key).
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target hkdf
+
+      - name: Hardware AEAD tiers must not depend on the key
+        # AES-256-GCM and ChaCha20-Poly1305 over 768 bytes (the ChaCha20 x8
+        # kernel runs only from 512 bytes) on the tier the
+        # dispatcher selects -- AES-NI + PCLMULQDQ GCM and the AVX2 ChaCha20 x8
+        # kernel here -- then pinned to aes-gcm-aesni, which the dispatcher
+        # must confirm.  ghash and aead-verify force the scalar AES.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk \
+            --dispatch-only aes-gcm-aesni
+
       # ---- Secret-taint lane ---------------------------------------------
       # Instruction, data-reference and cache-miss counts cannot see a
       # secret-indexed load that stays cache-resident, a conditional move on
@@ -1061,9 +1100,19 @@ jobs:
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
-                        aead-verify base64 secp256k1-seckey slhdsa-sign; do
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
+          done
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk --taint \
+            --dispatch-only aes-gcm-aesni
+          # The MULX+ADX kernels Valgrind's CPUID hides (--assume-adx).
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ghash_constant_time.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target" --taint \
+              --assume-adx
           done
 
       # ---- Shipped machine code ------------------------------------------
@@ -1165,6 +1214,261 @@ jobs:
           python tools/check_avx_scoping.py \
             --lib build-shared/lib/libama_cryptography.so
 
+  secret-operand-check:
+    name: Secret-operand instruction gate (Intel DOIT / Arm DIT lists)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake valgrind binutils clang
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      # Blocking, no exemptions: every instruction that consumes a secret must
+      # be on the vendor list.  A site whose only tainted use is a conditional
+      # exit (class (a)) is settled in the same run by bit-exact Memcheck on
+      # the same driver.  argon2id is an operand-only target: its addressing
+      # is data-dependent by RFC 9106, but how the index is computed is not.
+      - name: Every secret operand reaches only a vendor-listed instruction (gcc)
+        run: |
+          set -euo pipefail
+          failed=""
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+            python tools/check_ct_operand.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
+          done
+          python tools/check_ct_operand.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-bulk \
+            --dispatch-only aes-gcm-aesni \
+            || failed="$failed aead-bulk(aes-gcm-aesni)"
+          # The MULX+ADX kernels production selects on ADX-capable CPUs,
+          # which Valgrind's CPUID hides; --assume-adx selects them and the
+          # run is INCONCLUSIVE unless a MULX consumed the secret.
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ct_operand.py --assume-adx \
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target(assume-adx)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
+      # clang builds the macOS wheels; its execution-domain pass chooses FP
+      # encodings (VMOVAPS, VXORPS, SHUFPS ...) for integer data that gcc
+      # does not, so it is held to the same rule on its own build.
+      - name: Build the AMA_TESTING_MODE static library (clang)
+        run: |
+          cmake -B build-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build-clang -j"$(nproc)" --target ama_cryptography_test
+
+      - name: Every secret operand reaches only a vendor-listed instruction (clang)
+        run: |
+          set -euo pipefail
+          failed=""
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+            python tools/check_ct_operand.py --cc clang \
+              --lib build-clang/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
+          done
+          for target in x25519 nistp-ecdsa; do
+            python tools/check_ct_operand.py --cc clang --assume-adx \
+              --lib build-clang/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target(assume-adx)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
+      # Valgrind executes neither AVX-512 nor VAES, so those kernels get the
+      # static listing: every instruction of the production object, secret or
+      # not, must be on Intel's list, a control transfer or padding.
+      - name: AVX-512 and VAES kernels list only vendor-listed instructions (static)
+        run: |
+          set -euo pipefail
+          failed=""
+          for cc in gcc clang; do
+            cmake -B "build-avx512-${cc}" -DCMAKE_C_COMPILER="${cc}" \
+              -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF \
+              -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_LTO=OFF -DAMA_ENABLE_AVX512=ON
+            cmake --build "build-avx512-${cc}" -j"$(nproc)" --target ama_cryptography_static
+            python tools/check_ct_operand.py --static \
+              --lib "build-avx512-${cc}/lib/libama_cryptography_static.a" \
+              --member ama_sha3_x4_avx512.c.o --member ama_aes_gcm_vaes_avx2.c.o \
+              || failed="$failed static-${cc}"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
+      - name: Build the shipped shared library (LTO on, as the wheel ships it)
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      # Targets whose branch-only sites the library declassifies at a
+      # published value need AMA_TESTING_MODE (AMA_CT_DECLASSIFY is a no-op in
+      # the shipped object), so they run on the archive above only.
+      - name: Secret-operand gate on the shipped shared object
+        run: |
+          set -euo pipefail
+          failed=""
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
+                        secp256k1-scalarmult \
+                        kyber-decaps consttime ascon-encrypt agent-binding \
+                        argon2id-verify hkdf argon2id; do
+            python tools/check_ct_operand.py \
+              --lib build-shared/lib/libama_cryptography.so \
+              --optimized-witness build-shared/CMakeCache.txt \
+              --target "$target" \
+              || failed="$failed $target"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
+  # The same gate on AArch64, against Arm's DIT list.  Native, not emulated:
+  # Valgrind runs on the ubuntu-24.04-arm runners (aead-verify-invariance
+  # below uses it).  The x86-only steps (clang domain, static AVX-512) have no
+  # AArch64 counterpart; the NEON and Crypto Extensions tiers are what the
+  # dispatcher selects here.
+  secret-operand-check-arm64:
+    name: Secret-operand instruction gate (AArch64, Arm DIT list)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential clang cmake valgrind binutils
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      # The instrument's own tests, on this architecture.  ci.yml's
+      # security-checks job runs this module under Valgrind on x86-64, where
+      # the store-conditional probe cannot run: an amd64 guest has no
+      # exclusive pair.  Until this step no lane executed it here, nor the
+      # guarded-write test, which was written 2026-11-08 for this
+      # architecture alone, could not have failed if a lane had run it, and
+      # on its first run here (6cc2d14) found that its probe was not the
+      # shape VEX guards (its docstring says why, and why it now runs on
+      # x86-64 as well).  They run before the gate below uses the
+      # instrument.
+      # tests/conftest.py imports the package, whose self-test needs the
+      # shared library and the artefact that binds it, so both are made
+      # first, as security-checks makes them.
+      - name: Build the shared library and bind it (pytest imports the package)
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: |
+          python -m pip install "PyYAML==6.0.3" "pytest==9.2.0"
+          cmake --build build -j"$(nproc)" --target ama_cryptography_shared
+          python -m ama_cryptography.integrity --update --sign
+
+      # AMA_CI_REQUIRE_MEMCHECK turns a skip into a failure (INVARIANT-47):
+      # this job installs Valgrind, so a tool test that does not run here is
+      # a broken lane.  The module's x86-64 tests name their instruction set
+      # (requires_host_isa) and stay skipped.
+      - name: The instrument's own tests, on the architecture they are written for
+        env:
+          AMA_CI_REQUIRE_MEMCHECK: "1"
+        run: python -m pytest tests/test_ct_operand_gate.py -m requires_memcheck -q
+
+      # Valgrind executes no SVE, and this runner's CPU has none for the
+      # dispatcher to select, so the gate below never reaches an SVE2 kernel.
+      # They get the static listing the AVX-512 and VAES kernels get on
+      # x86-64: every instruction of the production object, secret or not,
+      # must be on Arm's DIT list, a control transfer or hint, or one that
+      # reads no register (tools/check_ct_operand.py, static_listing).  Every
+      # file of src/c/sve2 is named, the five that hold no kernel yet
+      # included, so one that gains a kernel is listed from that commit.
+      # Until 2026-11-10 nothing held these objects to the list at all.
+      - name: SVE2 kernels list only DIT-listed or operand-free instructions (static)
+        run: |
+          set -euo pipefail
+          failed=""
+          for cc in gcc clang; do
+            cmake -B "build-sve2-${cc}" -DCMAKE_C_COMPILER="${cc}" \
+              -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF \
+              -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_LTO=OFF -DAMA_ENABLE_SVE2=ON
+            cmake --build "build-sve2-${cc}" -j"$(nproc)" --target ama_cryptography_static
+            python tools/check_ct_operand.py --static \
+              --lib "build-sve2-${cc}/lib/libama_cryptography_static.a" \
+              --member ama_sha3_sve2.c.o --member ama_kyber_sve2.c.o \
+              --member ama_dilithium_sve2.c.o --member ama_sphincs_sve2.c.o \
+              --member ama_aes_gcm_sve2.c.o --member ama_ed25519_sve2.c.o \
+              --member ama_chacha20poly1305_sve2.c.o --member ama_argon2_sve2.c.o \
+              || failed="$failed static-${cc}"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
+      - name: Every secret operand reaches only a DIT-listed instruction
+        run: |
+          set -euo pipefail
+          failed=""
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding argon2id-verify \
+                        aead-verify base64 secp256k1-seckey slhdsa-sign \
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+            python tools/check_ct_operand.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target" \
+              || failed="$failed $target"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::secret-operand gate failed for:$failed"
+            exit 1
+          fi
+
   aead-verify-invariance:
     # The AEAD accept/reject pair at ct_len == 0, pinned by retired
     # instruction counts.  Runs on the ARM runner deliberately: the
@@ -1238,8 +1542,10 @@ jobs:
       - dudect-x25519-avx2-batch
       - dudect-simd-sweep
       - ghash-scalar-invariance
+      - secret-operand-check
+      - secret-operand-check-arm64
       - aead-verify-invariance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
     - name: Fail unless every job reached the state this trigger requires
@@ -1274,6 +1580,8 @@ jobs:
         R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
         R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
+        R_CTOPND:  ${{ needs['secret-operand-check'].result }}
+        R_CTOPNDA: ${{ needs['secret-operand-check-arm64'].result }}
         R_AEADVER: ${{ needs['aead-verify-invariance'].result }}
       run: |
         set -euo pipefail
@@ -1336,6 +1644,8 @@ jobs:
         # No trigger condition of their own: success whenever the change is
         # relevant, skipped when it is not.
         check ghash-scalar-invariance   "${R_GHASH}"   "${always_expected}"
+        check secret-operand-check      "${R_CTOPND}"  "${always_expected}"
+        check secret-operand-check-arm64 "${R_CTOPNDA}" "${always_expected}"
         check aead-verify-invariance    "${R_AEADVER}" "${always_expected}"
 
         if [ "${rc}" -ne 0 ]; then

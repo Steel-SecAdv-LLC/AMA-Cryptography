@@ -35,6 +35,9 @@
  * value.  All key-derived intermediates are scrubbed on every exit path.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t */
 #include "ama_sha256.h"                   /* SHA-256 streaming context */
 #include "internal/ama_sha2.h"            /* SHA-512 streaming context */
@@ -47,6 +50,8 @@ extern void ama_secure_memzero(void *ptr, size_t len);
 
 /* SP 800-132: derived-key length is bounded by (2^32 - 1) * hLen. */
 #define PBKDF2_MAX_BLOCKS 0xFFFFFFFFu
+
+static AMA_SCRUBBED_BODY ama_error_t ama_pbkdf2_hmac_sha256_body(const uint8_t *password, size_t password_len, const uint8_t *salt, size_t salt_len, uint32_t iterations, uint8_t *out, size_t out_len);
 
 /**
  * @brief PBKDF2-HMAC-SHA256 (NIST SP 800-132 / RFC 8018 Section 5.2).
@@ -65,6 +70,18 @@ extern void ama_secure_memzero(void *ptr, size_t len);
  * @return              AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM
  */
 AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+) {
+    ama_error_t rc = ama_pbkdf2_hmac_sha256_body(password, password_len, salt, salt_len, iterations, out, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_pbkdf2_hmac_sha256(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_pbkdf2_hmac_sha256_body(
     const uint8_t *password, size_t password_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t iterations,
@@ -97,7 +114,7 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
      * (ama_hmac_sha384.c convention). */
     ama_secure_memzero(k_prime, sizeof(k_prime));
     if (password_len > AMA_SHA256_BLOCK_SIZE) {
-        ama_sha256(k_prime, password, password_len);  /* OUTPUT-FIRST: writes 32; [32..63] stay zero */
+        ama_sha256_inner(k_prime, password, password_len);  /* OUTPUT-FIRST: writes 32; [32..63] stay zero */
     } else if (password_len > 0) {
         memcpy(k_prime, password, password_len);
     }
@@ -123,23 +140,23 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
         index_be[3] = (uint8_t)(block_index);
 
         /* U_1 = HMAC(P, S || INT(l)) */
-        ctx = ictx_base;
+        memcpy(&ctx, &ictx_base, sizeof(ctx));
         if (salt_len > 0) {
             ama_sha256_update(&ctx, salt, salt_len);
         }
         ama_sha256_update(&ctx, index_be, sizeof(index_be));
         ama_sha256_final(&ctx, u_block);
-        ctx = octx_base;
+        memcpy(&ctx, &octx_base, sizeof(ctx));
         ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
         ama_sha256_final(&ctx, u_block);
         memcpy(t_accum, u_block, AMA_SHA256_DIGEST_SIZE);
 
         /* U_j = HMAC(P, U_{j-1}); T ^= U_j */
         for (j = 1; j < iterations; j++) {
-            ctx = ictx_base;
+            memcpy(&ctx, &ictx_base, sizeof(ctx));
             ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
             ama_sha256_final(&ctx, u_block);
-            ctx = octx_base;
+            memcpy(&ctx, &octx_base, sizeof(ctx));
             ama_sha256_update(&ctx, u_block, AMA_SHA256_DIGEST_SIZE);
             ama_sha256_final(&ctx, u_block);
             for (i = 0; i < AMA_SHA256_DIGEST_SIZE; i++) {
@@ -166,6 +183,8 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_pbkdf2_hmac_sha512_body(const uint8_t *password, size_t password_len, const uint8_t *salt, size_t salt_len, uint32_t iterations, uint8_t *out, size_t out_len);
+
 /**
  * @brief PBKDF2-HMAC-SHA512 (NIST SP 800-132 / RFC 8018 Section 5.2).
  *
@@ -184,6 +203,18 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
  * @return              AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM
  */
 AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+) {
+    ama_error_t rc = ama_pbkdf2_hmac_sha512_body(password, password_len, salt, salt_len, iterations, out, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_pbkdf2_hmac_sha512(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_pbkdf2_hmac_sha512_body(
     const uint8_t *password, size_t password_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t iterations,
@@ -236,22 +267,22 @@ AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
         index_be[2] = (uint8_t)(block_index >> 8);
         index_be[3] = (uint8_t)(block_index);
 
-        ctx = ictx_base;
+        memcpy(&ctx, &ictx_base, sizeof(ctx));
         if (salt_len > 0) {
             ama_sha512_ctx_update(&ctx, salt, salt_len);
         }
         ama_sha512_ctx_update(&ctx, index_be, sizeof(index_be));
         ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
-        ctx = octx_base;
+        memcpy(&ctx, &octx_base, sizeof(ctx));
         ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
         ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
         memcpy(t_accum, u_block, AMA_SHA512_DIGEST_SIZE);
 
         for (j = 1; j < iterations; j++) {
-            ctx = ictx_base;
+            memcpy(&ctx, &ictx_base, sizeof(ctx));
             ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
-            ctx = octx_base;
+            memcpy(&ctx, &octx_base, sizeof(ctx));
             ama_sha512_ctx_update(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             ama_sha512_ctx_final(&ctx, u_block, AMA_SHA512_DIGEST_SIZE);
             for (i = 0; i < AMA_SHA512_DIGEST_SIZE; i++) {

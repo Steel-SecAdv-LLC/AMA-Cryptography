@@ -34,8 +34,11 @@
  * across secret classes, and a Memcheck taint run over a secret input.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
+#include "internal/ama_ct_barrier.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,7 +48,11 @@
  * bit when both hold, and negation widens it to a mask with no branch and no
  * signed shift. */
 static uint32_t in_range(uint32_t c, uint32_t lo, uint32_t hi) {
-    uint32_t t = ((lo - 1u - c) & (c - hi - 1u)) >> 31;
+    /* Each mask in a general-purpose register: clang 18 SLP-vectorised the
+     * four range tests of enc6 and gathered their sign bits with MOVMSKPS,
+     * which is not on Intel's Data Operand Independent Timing list
+     * (tools/check_ct_operand.py --target base64). */
+    uint32_t t = ama_ct_value_barrier_u32((lo - 1u - c) & (c - hi - 1u)) >> 31;
     return 0u - t;
 }
 
@@ -69,6 +76,12 @@ static uint32_t char63(ama_base64_variant_t variant) {
 
 static char enc6(uint32_t v, uint32_t c62, uint32_t c63) {
     uint32_t out = 0;
+    /* One sextet in a general-purpose register.  clang 18 vectorised the four
+     * enc6 calls of a group with SHUFPS/ANDPS, neither of which is on Intel's
+     * Data Operand Independent Timing list; v is secret when the input is a
+     * private key (tools/check_ct_operand.py --target base64).  in_range keeps
+     * each of the masks below scalar in the same way. */
+    v = ama_ct_value_barrier_u32(v);
     out |= in_range(v, 0u, 25u) & (v + (uint32_t)'A');
     out |= in_range(v, 26u, 51u) & (v - 26u + (uint32_t)'a');
     out |= in_range(v, 52u, 61u) & (v - 52u + (uint32_t)'0');
@@ -130,7 +143,19 @@ AMA_API size_t ama_base64_encoded_len(size_t bin_len, ama_base64_variant_t varia
     return full * 4u + tail;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_encode_body(char *out, size_t out_cap, const uint8_t *in, size_t in_len, ama_base64_variant_t variant, size_t *out_len);
+
 AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,
+                                      const uint8_t *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len) {
+    ama_error_t rc = ama_base64_encode_body(out, out_cap, in, in_len, variant, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_BASE64_BYTES);
+    return rc;
+}
+
+/* ama_base64_encode(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_encode_body(char *out, size_t out_cap,
                                       const uint8_t *in, size_t in_len,
                                       ama_base64_variant_t variant,
                                       size_t *out_len) {
@@ -179,7 +204,19 @@ AMA_API ama_error_t ama_base64_encode(char *out, size_t out_cap,
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_decode_body(uint8_t *out, size_t out_cap, const char *in, size_t in_len, ama_base64_variant_t variant, size_t *out_len);
+
 AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
+                                      const char *in, size_t in_len,
+                                      ama_base64_variant_t variant,
+                                      size_t *out_len) {
+    ama_error_t rc = ama_base64_decode_body(out, out_cap, in, in_len, variant, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_BASE64_BYTES);
+    return rc;
+}
+
+/* ama_base64_decode(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_base64_decode_body(uint8_t *out, size_t out_cap,
                                       const char *in, size_t in_len,
                                       ama_base64_variant_t variant,
                                       size_t *out_len) {

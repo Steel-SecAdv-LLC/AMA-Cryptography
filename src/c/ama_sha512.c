@@ -27,8 +27,12 @@
  * exports were introduced), so the public names are free for this TU.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_stack_wipe.h"
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t */
 #include "internal/ama_sha2.h"            /* shared SHA-512/384 streaming core */
+
+static AMA_SCRUBBED_BODY ama_error_t ama_sha512_body(const uint8_t* input, size_t input_len, uint8_t* output);
 
 /**
  * @brief One-shot SHA-512 (FIPS 180-4 Section 6.4).
@@ -42,6 +46,17 @@
  *                  NULL input with input_len > 0
  */
 AMA_API ama_error_t ama_sha512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    ama_error_t rc = ama_sha512_body(input, input_len, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA512_BYTES);
+    return rc;
+}
+
+/* ama_sha512(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha512_body(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -68,6 +83,8 @@ AMA_API ama_error_t ama_sha512(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sha384_body(const uint8_t* input, size_t input_len, uint8_t* output);
+
 /**
  * @brief One-shot SHA-384 (FIPS 180-4 Section 6.5).
  *
@@ -82,6 +99,17 @@ AMA_API ama_error_t ama_sha512(
  *                  NULL input with input_len > 0
  */
 AMA_API ama_error_t ama_sha384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    ama_error_t rc = ama_sha384_body(input, input_len, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA512_BYTES);
+    return rc;
+}
+
+/* ama_sha384(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha384_body(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output

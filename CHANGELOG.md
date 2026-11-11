@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-11-07 |
+| Last Updated | 2026-11-11 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -28,6 +28,1170 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > them to 5.0.0 was a claim that does not resolve against the published
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
+
+### Dead stack cleared at every secret-handling entry point, once per call, on three platforms; the review notes left open on #434 — 2026-11-10
+
+Copilot's overview of `ab184a2` ended with two findings it did not publish as
+threads, "overstated SHA-3 guard effectiveness" and "SVE2 security coverage",
+and three of its threads had asked for a probe and been answered with a fix
+and a unit test: a packed-conversion probe, a failed-exclusive-store probe,
+and an assertion that a named kernel executed in the count and taint lanes.
+This entry is those five. Each was taken to the instrument it was about, and
+the first turned out to be a Critical (section 7): secret material in dead
+stack, in the shipped build, under rows that read clean.
+
+**The SHA-3 guard (INVARIANT-6).** `src/c/internal/ama_keccak_round.h` said
+an optimised build keeps the Keccak lanes in registers, and cited the
+dead-stack row of `tests/c/test_register_residue.c` as clean on every Release
+lane. The row is clean because it looks for the whole 32-byte value. Looked
+for one 8-byte word at a time, the shipped build (gcc 13.3 -O3, LTO, x86-64)
+had in its dead stack after the call: three of the four words of an
+HKDF-SHA3-256 output, three of four of a SHA3-256 digest and one of its
+message, seven of eight of a SHA3-512 digest, three of four of a SHAKE256
+output, two words of ML-KEM's implicit-rejection seed `z`, and sixteen bytes
+of a SHA-256 digest. The scalar permutation spills 8 of its 25 final lanes
+and the AVX2 four-way kernel 69 of 100; x86-64 has fifteen general registers
+for twenty-five lanes. The comment is corrected (section 6.6). The cause was
+not SHA-3's: a compiler's spills have no names, `ama_secure_memzero` scrubs
+names, and every primitive has spills.
+
+*Cure.* Every secret-handling export is two functions
+(`src/c/internal/ama_stack_wipe.h`): an implementation that is never inlined,
+and an exported half that holds its caller's pointers and lengths and nothing
+else, calls it, and zeroes the stack below itself. A function cannot do this
+to its own frame, which is live, nor reliably to its callees': it may hold a
+word of the secret in a callee-saved register, and the next function it
+calls, the wipe included, pushes that register into the region being cleared
+(measured: a SHAKE256 message word eight bytes under a return address). 91
+exports have the shape, the two Ascon-AEAD128 entry points that already had
+it among them, and hybrid signing has it inside `ama_sign`. Eleven more are
+one call of such an entry point and nothing else (the `ama_kyber_*` and
+`ama_dilithium_*` names, three ECDSA conveniences); they cleared their stack
+too until the instruction counts showed each call zeroing its depth twice.
+Each entry point clears a depth measured for its family, 22 families from
+1,024 to 176,128 bytes, taken as the largest stack any entry point of the
+family wrote over seventeen optimised builds (gcc 13.3, gcc 14.2 and clang
+18.1 on x86-64; gcc 13.3 and clang 18.1 on AArch64 under QEMU; -O1 to -O3,
+-Og, -Os; with and without LTO, AVX-512, SVE2 and UBSan) and five unoptimised
+ones, which have a column of their own because an unoptimised build is a
+different program (the X25519 batch entry point writes 109 KiB there and
+under 5 KiB optimised). The figures were measured again on the shape this entry ends with; no row
+moved by more than 249 bytes.
+
+The wipe is `AMA_STACK_WIPE_BELOW(depth)`: one frame of exactly the depth,
+zeroed by `rep stosq` on x86-64 and by `stp xzr, xzr` on AArch64, and then a
+cap of scalar stores over the top of that frame, where its padding and its
+stack-protector canary are. It is a macro, the zeroing is inline assembly and
+the order is what it is for measured reasons, each of which the tests below
+failed on the shape before it:
+
+- one frame, not a chain of 8 KiB frames: every link began with sixteen
+  bytes its own function never wrote, the padding beside its return address
+  and canary, deep inside the region being cleared;
+- two calls made by the clearing frame itself, not by an inline function: in
+  an unoptimised build the function was a real one, and four key-dependent
+  bytes of the AES-256 key expansion stayed in its alignment word after
+  `ama_aes256_key_expansion_consttime` returned (gcc 13.3, no -O);
+- no helper and no parameter: the helper that held `memset` left its own
+  return address, frame pointer and arguments below the array it zeroed in an
+  unoptimised build (36 bytes, gcc 13.3 -O0; 60, clang 18.1 -O0), which a
+  reader of that stack cannot tell from a primitive's residue;
+- `ama_secure_stack_wipe()` keeps no local and takes its own frame address,
+  which makes the compiler keep a frame pointer there: without it the
+  function's own frame had eight unwritten bytes, where the first words of
+  the caller's last callee had been, in an unoptimised x86-64 build and, on
+  AArch64, in the Release build itself (`-fomit-frame-pointer` saves the link
+  register alone in a sixteen-byte slot; gcc 13.3 and clang 18.1 at every
+  level). The header had said AArch64 has no such word;
+- the cap last, not first: see Windows, below. On the other two platforms
+  the order was not a defect, and last is still better: the canary the frame
+  function leaves is overwritten too, and nothing of the wipe's own remains
+  under the caller but one return address.
+
+*One wipe per call.* The entry points were first called by the library
+itself, because that is what the code already did: HMAC called `ama_sha3_256`,
+ML-KEM and ML-DSA called `ama_shake256` and the incremental SHAKE functions,
+FROST called the Ed25519 scalar functions, AES-GCM's portable path called the
+constant-time block function for every block. Each of those calls cleared a
+depth under a caller that was about to clear it again, or under verification,
+which holds nothing to clear. Attributing the instruction-count A/B function
+by function found it: thirteen wipes in one HKDF-SHA3-256 derivation, and,
+measured under callgrind (gcc 14.2 -O3, LTO; `5536e51`, then the library
+calling the public names, then this commit), SLH-DSA-SHAKE-128s key
+generation at 1,671,969,251, 2,077,690,027 and 1,637,443,236 instructions and
+its verification at 12,296,127, 15,256,243 and 12,044,167. A quarter more,
+for an operation that handles no secret, and no gate would have said so:
+nothing in CI counts instructions for SLH-DSA. Twenty-five entry points now
+have a third function, `ama_x_inner`, which is the work and clears nothing
+(`src/c/internal/ama_scrubbed_inner.h`); the implementation half is one call
+of it, and 93 places in the library name it. An inner function may be
+inlined into its caller, as these calls were before, which is why the two
+SLH-DSA figures end below where they started. The exception is deliberate:
+hybrid signing calls two entry points, each of which clears its own depth,
+and its pair clears only what it wrote outside them (2 KiB, where an inner
+call of ML-DSA signing would make it 172).
+
+*Windows x64.* The two stack tests ran on Linux only (so this said; they ran
+on macOS too, corrected below). Built for Windows with
+MinGW (gcc 13.2) and run under Wine 9.0, `test_stack_scrub` failed 29 of 132
+verdicts with up to eight input-dependent bytes, and
+`ama_secure_stack_wipe()` left 32 bytes of its own frame unwritten. The
+convention does two things System V and AAPCS64 do not. A caller reserves a
+32-byte home area above every return address, which is the callee's to write;
+a primitive may leave anything there, it is inside the frame that then clears
+its stack, and nothing laid below that frame reaches it. And a frame of a
+page or more is probed by `___chkstk_ms` before it is allocated, which pushes
+`%rcx`, a call-clobbered register that holds whatever the primitive last
+computed in it; the push landed in the frame function's padding after the
+cap had zeroed it. On Windows x64 the cap is therefore a function of its
+own: it runs second, and writes the home area and the fifteen words under
+its return address. With a GNU compiler it is assembly, so that its layout is
+no compiler's choice. For MSVC, which has no inline assembly on x64, it is
+the same stores in C through `_AddressOfReturnAddress()`. Two things stood
+in the way of measuring any of this and are fixed where they were: a consumer
+of the static test archive was given `__declspec(dllimport)`, so every C test
+linked on Windows only where `-flto` happened to resolve it; and the test
+archive called a path helper that does not exist on Windows, an implicit
+declaration (an error from GCC 14 on). Both tests now build and pass there in
+five configurations (Release, `CMAKE_BUILD_TYPE=None`, Debug, MinSizeRel, LTO
+off), `test_stack_wipe_coverage` reads the home area back, and the gated
+MinGW job of `ci-build-test.yml` runs both under Wine on every pull request,
+where a skip is a failure (INVARIANT-47).
+
+*What holds it.* Three tests, none of which names a secret.
+
+- `tests/c/test_stack_scrub.c`, 130 rows, one per entry point, against the
+  shared library. The stack is filled with a pattern; after the call every
+  byte under the entry point's own frame must be zero or still the pattern,
+  the lowest byte written must be as deep as the family's depth, and the
+  bytes of the frame itself must be identical after a second call on
+  different keys, messages and seeds. Two controls must fail their own check
+  or the run is void.
+- `tests/c/test_stack_wipe_coverage.c`, 12 rows, the wipe alone: filled with
+  one value and wiped, then with another and wiped again, no byte within the
+  depth may hold both fills (it was written by neither wipe); the lowest
+  byte written is no more than 128 past the depth; and nothing but zero lies
+  under the wipe frame's own header. On Windows a thirteenth writes the home
+  area as a callee would and reads it back after a wipe.
+- `tests/test_stack_scrub_surface.py`, 8 tests, on every host: each of the
+  199 exports is a scrubbed entry point (92, with `ama_secure_stack_wipe`),
+  or has a row of its own (six leaf helpers, four generic forwarders, the
+  eleven one-call forwarders), or is on an inventory of 86 functions that
+  are given no secret, grouped by what they are given; an exported half is
+  exactly call, wipe, return; its row names the family it clears; both depth
+  columns give every family a depth, the unoptimised never the shallower;
+  every depth has one frame function, declared, defined, kept out of the
+  export table and measured; no code under `src/c` names a scrubbed entry
+  point but the forwarders and hybrid signing; and every inner function is
+  declared, localised in the version script, free to be inlined, and reached
+  from its entry point by a half that is one call of it.
+
+Mutation (section 6.2), on the settled tree: x86-64 gcc 13.3, Release with
+LTO and `CMAKE_BUILD_TYPE=None`; AArch64 gcc 13.3 Release under QEMU; Windows
+x64 MinGW gcc 13.2 Release under Wine. Every mutant rebuilt from a touched
+source.
+
+| Mutation | Result | Label |
+|---|---|---|
+| the wipe removed from `ama_sha3_256`'s exit | `test_stack_scrub` fails that row on x86-64, both builds, and on Windows (233 bytes kept at 767 down, 8 input-dependent, x86-64 Release) | PIN |
+| the cap removed | `test_stack_wipe_coverage` fails all 12 rows on x86-64, both builds, and on AArch64 (15, 8 and 7 unwritten bytes); on Windows 4 of its rows and 28 verdicts of `test_stack_scrub` | PIN |
+| the cap first, the frame second | nothing on x86-64 or AArch64, where both orders hold; 28 verdicts of `test_stack_scrub` on Windows | PIN on Windows |
+| implementations may be inlined | 18 verdicts of `test_stack_scrub`, 4 rows of the coverage test, 3 of `test_aead_stack_residue` | PIN |
+| Ed25519's depth 16,384 to 4,096 | 4 verdicts of `test_stack_scrub` (533 bytes kept at 6,391 down); `test_ed25519_stack_residue`, which looks for named values, passes | PIN |
+| the 1,024-byte frame function lays 2,048 | the coverage test's EXACT check, that row | PIN |
+| the frame function zeroes half of its array | 222, 219 and 227 verdicts of `test_stack_scrub` on x86-64, AArch64 and Windows, all 12 coverage rows on each, 3 AEAD and 4 Ed25519 residue rows | PIN |
+| no frame address taken in `ama_secure_stack_wipe` | the coverage test, 7 unwritten bytes, on x86-64 Release, AArch64 Release and Windows; nothing in the unoptimised x86-64 build, where the compiler keeps a frame pointer anyway | PIN |
+| hybrid signing's wipe removed | `ama_sign_hybrid` fails in both unoptimised builds (3 input-dependent bytes on x86-64, 4 on AArch64); nothing optimised, where the address stays in a register | PIN, unoptimised |
+| the heap not moved before the second pass, with that wipe removed | nothing: the row passes again (x86-64 Release, AArch64 unoptimised) | what pins the row above |
+| Windows: the cap does not write the home area | the coverage test: `ama_secure_stack_wipe()` (31 unwritten bytes) and the home-area row (4 of 4 words) | PIN |
+| Windows: the cap writes thirteen words, or three, in place of fifteen | nothing: three reach all the frame function leaves on this build | margin, not a pin |
+| Windows: the harness leaves `%xmm6` to `%xmm15` as they are | the `ama_aes_sbox_consttime` row (16 bytes) | PIN, of the harness |
+| `AMA_KECCAK_WIPE_LOCALS` compiled out of the unoptimised build | nothing | SMOKE: second of two |
+| SLH-DSA's two error-exit wipes removed | nothing, either build | SMOKE: first of two |
+| the value barrier removed from `fe64_store64_le` | nothing | SMOKE for the residue rows |
+| ten edits of what the two new surface tests read (a call, a macro and a function pointer naming an entry point; an inner function undeclared, exported, never-inlined, or for no entry point; a half that does more than call; the exception list) | one test each | PIN |
+| eight edits of what the other six read | one test each | PIN |
+
+The hybrid row was not a pin until the harness moved the heap. Both passes of
+`test_stack_scrub` used to see the same heap, so the address hybrid signing
+keeps of its wrapped message compared equal, and with that wipe removed, and
+then with the pair merged back into one function as well, every row passed on
+five builds. The test now takes and keeps a block of every size before its
+second pass, a third control requires an allocation's address left in a frame
+to show, and the row fails as above. On Windows the first run of this batch
+missed one mutation for a reason of the harness's own: the leaf that marks
+where a read ends had a frame there, seventeen bytes under the caller where
+System V puts it nine, and the word directly under a return address was never
+read. The mark is taken without a frame on Windows (and, since the
+correction below, is the calling frame's stack pointer on every platform).
+
+Three older guards are redundant for the residue property, and their comments
+and the tests that cited them say so: the Keccak local scrub, the SLH-DSA
+error-exit wipes, and the X25519 value barrier (which has another purpose,
+stated where it is defined). The hybrid pair exists for what an unoptimised
+build keeps in the helper's frame, the address of the wrapped message's
+allocation. That is no secret, but it is not the caller's pointer either,
+which is the shape's own rule.
+
+*Corrections to the harnesses themselves* (section 6.6), each found by a
+configuration and not by reading: the uncleared-frame control put its copy
+above its gap under clang with a frame pointer and saw nothing, so it is two
+functions now; a leaf helper's frame under UBSan had a clean gap longer than
+the run heuristic allowed, so the rule is a fixed 512 bytes and not a run;
+under LTO the exported wipe was inlined into the test's call site, so the
+frame being measured did not exist and the row passed against a function with
+an unwritten alignment word (it is called out of line, which is what let the
+AArch64 Release build fail it); and on Windows the harness left `%xmm6` to
+`%xmm15`, which that convention keeps across a call, as it found them, so a
+leaf helper that saves them showed sixteen bytes of the harness's own state.
+
+*What it costs, and what it asks.* A depth is stack the entry point touches
+whether or not a call used it, so the depths are also each family's stack
+requirement, and `include/ama_cryptography.h` says so beside
+`ama_secure_stack_wipe`. `tests/c/test_pq_parser_stack.c` already budgets
+the stack of the entry points a key file or a signature can reach, and the
+first depths, set at half as much again as measured, failed it (63,688 bytes
+against 49,152; 96,456 against 81,920; 194,760 against 180,224). The budgets
+were right and stand; the four post-quantum families clear 1.14 to 1.46
+times what was measured instead of 1.5, which their fixed-size frames allow.
+Instruction counts, `5536e51` against this commit (callgrind, gcc 14.2,
+x86-64 with AVX2 and BMI2, difference method at N=10):
+
+| Operation | Before | After | Change | Of which |
+|---|---:|---:|---:|---|
+| `aes_256_gcm_encrypt` | 5,091 | 4,617 | -474 | the 4 KiB wipe was an 8,192-byte frame whose upper half one `rep stosl` cleared in 1,024 counted steps (1,041); it is one `rep stosq` of 512 and a cap (564) |
+| `chacha20poly1305_encrypt` | 11,507 | 11,033 | -474 | the same |
+| `sha512`, `x25519_scalarmult` | | | +564 | one 4,096-byte wipe |
+| `sha3_256`, `sha3_512` | | | +311 | one 2,048-byte wipe |
+| `hmac_sha3_256` | 53,535 | 53,859 | +324 | one 4,096-byte wipe, less what the inner calls save |
+| `hkdf_derive` | 40,678 | 41,280 | +602 | one 8,192-byte wipe (1,042), less the same |
+| `kyber_keygen` | 508,667 | 521,618 | +12,951 | 45,056-byte wipe 5,691; the rest is the benchmark's link |
+| `kyber_encapsulate` | 580,523 | 592,443 | +11,920 | the same |
+| `kyber_decapsulate` | 750,274 | 763,481 | +13,207 | the same |
+| `dilithium_keygen` | 910,247 | 926,048 | +15,801 | 77,824-byte wipe 9,819; the rest as for ML-KEM |
+| `dilithium_sign` | 6,351,422 | 6,371,594 | +20,172 | 176,128-byte wipe 22,203 |
+| `dilithium_verify` | 989,483 | 988,422 | -1,061 | no wipe: verification holds no secret |
+
+"The benchmark's link" is a property of the instrument and not of the
+library, and it is recorded because the gate cannot tell the two apart. The
+instruction-count driver is linked whole-program from the static archive, and
+that link used to specialise the ML-KEM-1024 and ML-DSA-65 paths for constant
+sizes; with the implementation half out of line it no longer does, and an
+8 KiB zero fill in `kyber_keygen_internal` is emitted as `rep stosb` where it
+was `rep stosl`, which callgrind counts four times over. The shared library
+never had the specialisation: `rep stos %al` in that function at `5536e51`
+and at this commit. The acknowledgement file's entries for the six
+operations that leave the 2% band were recorded as predictions, from the
+runner's own count of `5536e51` and these local changes, and carry the
+runner's own measurement since 2026-11-11 (below). The two AEAD entries are
+retired, since those operations are back within tolerance of the merge-base.
+
+*What an unoptimised build cannot have.* The six leaf helpers
+(`ama_consttime_memcmp`, `_copy`, `_swap`, `_lookup`, `ama_secure_memzero`,
+`ama_aes_sbox_consttime`) keep no frame when optimised, and their rows hold
+them to that. Unoptimised, a compiler homes every parameter and local in the
+function's own frame, three of the six take their secret by value, and a
+wrapper would home the same argument: one to three input-dependent bytes
+remain (measured). Their rows are judged in optimised libraries only, and in
+an unoptimised one must show the frame that is the reason. The library's
+flags, not the test's, decide which: a residue probe is always compiled -O2,
+and against a `CMAKE_BUILD_TYPE=None` library it had named 2,048 bytes for
+SHA-3 where the library cleared 8,192, so the depths and the answer reach
+the test as data from an object compiled with the library's flags.
+
+*Found by running the lanes here before pushing, and fixed before anything
+was pushed:* a loop counter in `src/c/sve2/ama_kyber_sve2.c` shadowed by the
+vector it loads, which `-Werror=shadow` refuses in the strict AArch64 SVE2
+lane; and a sketch in `ama_stack_wipe.h`'s comment that carried the export
+attribute, which `cmake/generate_pe_def.cmake` read as a declaration and
+stopped the Windows configure on ("declared AMA_API but defined nowhere:
+ama_x").
+
+Sweep: both stack tests pass in 30 configurations of this tree. x86-64: gcc 13.3
+(Release, `CMAKE_BUILD_TYPE=None`, Debug, -O1, -Og, RelWithDebInfo,
+MinSizeRel, LTO off, static only, AVX-512, UBSan, native PQC off), gcc 14.2
+(Release, None) and clang 18.1 (Release, None, -O1, AVX-512, UBSan). AArch64
+under QEMU: gcc 13.3 (Release, None, UBSan, SVE2) and clang 18.1 (Release
+with SVE2, None). Windows x64 under Wine 9.0: MinGW gcc 13.2 (Release, None,
+Debug, MinSizeRel, LTO off). The strict-warnings lanes of
+`static-analysis.yml` were replicated here (gcc 13.3 and clang 18.1 at None,
+Release and native PQC off; AArch64 with NEON and with SVE2): no warning
+outside the allowlist, and ctest 157 of 157 in both None builds. cppcheck
+2.13 and clang-tidy 18.1, invoked as CI invokes them, report nothing on the
+changed sources. The MinGW cross-link lane was replicated: the DLL links
+and its export table is the generated `.def`, 104 names.
+
+**SVE2.** Valgrind executes no SVE and no CI runner has it for the dispatcher
+to select, so the secret-operand gate had never reached the SVE2 kernels, and
+could not have admitted them by reading them: their loops were
+`svwhilelt`-predicated with `svcntp` for the active count, the compilers'
+vectorisers had turned the scalar reductions and the scalar Keccak into
+`WHILELO`, `UQDECD`, `CNTP` and `FMOV` (gcc 13.3) and formed trip counts with
+`UDIV` (clang 18.1), and none of those is on Arm's DIT list. Cured in the
+kernels: every vector loop steps one whole vector under a constant `svptrue`
+predicate and counts vectors with a shift; NTT layers are walked by the log
+of their stride and blocks by their count, so no bound is a quotient; a
+vector length that is not a power of two (the architecture allows 384 bits)
+takes the scalar path throughout; and `src/c/sve2` is compiled without the
+auto-vectoriser. `tools/check_ct_operand.py --static` now lists an archive
+against the ISA its members were compiled for: on AArch64 every instruction
+must be on the DIT list, a control transfer or hint, one of ten named
+instructions that read no register (`MOVZ`, `MOVN`, `ADRP`, `PTRUE`,
+`PFALSE`, `RDVL`, `CNTB/H/W/D`), or a `MOVK` into a register that still holds
+a move-wide immediate, decided from the listing alone (same straight-line
+run, register not named in between). The `secret-operand-check-arm64` job
+builds the production archive with the kernels under gcc and clang and lists
+all eight files of `src/c/sve2`. Measured here on cross-built archives: the
+kernels as they were are refused, 62 instructions under gcc 13.3 (`WHILELO`
+33, `WHILELT` 10, `CNTP` 8, `DUPM` 3, `MVNI` 3, `FMOV`, `INDEX`, `UQDECD`)
+and 23 under clang 18.1 (`WHILELT` 10, `CNTP` 8, `DUPM` 3, `UDIV` 2); as they
+are they pass (3,376 instructions and 1,455). The rewritten kernels match the
+scalar reference in `test_kyber_ntt_equiv`, `test_kyber_poly_equiv`,
+`test_dilithium_ntt_equiv` and `test_keccak_equiv` under QEMU at 128, 256,
+384, 512, 1,024 and 2,048 bits, and `test_kat` passes 49 of 49 at four of
+them. Mutation: removing the register-named kill, the branch-target reset or
+the control-transfer reset of the `MOVK` rule each fails the gate's tests.
+What the listing does not judge, on either architecture, is what a control
+transfer branches on.
+
+**Packed conversions.** `test_op_class` held the name rule; nothing executed
+a packed conversion on a secret. `test_a_packed_conversion_of_a_secret_is_a_
+blocking_fp_site` runs eight (`cvttps2dq`, `cvtps2dq`, `cvtdq2ps`,
+`cvttpd2dq`, `cvtpd2dq`, `cvtdq2pd`, `cvtps2pd`, `cvtpd2ps`) in both
+encodings, each named in the source, and requires the conversion itself, and
+nothing beside it, to block with class FP, and the same instruction on a
+public value to leave no site. Valgrind 3.22 lifts the single-precision
+pairs to the packed `F32toI32Sx4` and `I32StoF32x4`. Mutation: with the
+conversion operations unclassified the new test fails in both encodings and
+the existing class test still passes, because its one conversion shares a
+function with a multiply.
+
+**Store-conditional and compare-and-swap.** The tool's shadow store for
+`Ist_LLSC` is guarded by the statement's own result and the one for `Ist_CAS`
+writes the union of what was loaded and offered; neither had a probe. Two
+now: a secret word must still be a secret after a public store that does not
+happen (`clrex; stxr` on AArch64, a mismatched `lock cmpxchg` on x86-64), a
+secret that is stored makes its word one, and a public exchange on a public
+word makes nothing. Each test also builds the tool with that one line
+changed and requires the mutant to lose the first case, so the probe cannot
+pass on a host where the path under test is not taken. The x86-64 test and
+its mutant were run here. The AArch64 probe was compiled and run under QEMU
+(exit 0: the store-conditional fails, the loop succeeds); Valgrind for
+AArch64 is not available here, so its first run under the tool is CI's.
+
+That lane did not exist. `secret-operand-check-arm64` installed Valgrind and
+ran the gate, and no job ran the instrument's own tests on AArch64, so the
+guarded-write test written on 2026-11-08 had never executed, and could not
+have failed if it had (section 6.6): it matched sites by a symbol that only
+`classify` assigns, which it did not call, and compared the address objdump
+prints with the one the instruction is loaded at. Both are corrected, the
+probe function must show a site of its own, and the job now builds and binds
+the shared library and runs `-m requires_memcheck` on the module under
+`AMA_CI_REQUIRE_MEMCHECK` before it uses the instrument. The x86-64 tests in
+the module name their instruction set (`requires_host_isa`), which is what
+lets that job fail on a skip.
+
+**Kernel execution.** The dispatcher confirming a pin says which function it
+wired, not that the workload reached it. `_REQUIRED_KERNELS`, now in
+`tools/check_ghash_constant_time.py` and keyed by pin, names the kernels a
+target exists to measure; the count lane reads callgrind's own record of
+which functions ran, the taint lane replays its driver under callgrind, and
+the operand gate reads the same table. A target that names kernels and has
+no row for the pin it was given is refused. Measured on the real drivers and
+library: `aead-bulk` passes all three lanes as dispatched and pinned to
+`aes-gcm-aesni`; with the two drivers put back to 256 bytes the count and
+taint lanes exit 2 naming `ama_chacha20_block_x8_avx2`, where both passed
+before.
+
+**Corrected after the first CI run (`6cc2d14`, section 6.6).** Two jobs
+failed. Neither was a defect in the library, whose shared object is
+byte-identical before and after what follows; each was a statement of this
+entry that had not been measured.
+
+*The stack tests on macOS.* This entry said the two stack tests ran on Linux
+only before the Windows lane. They run on macOS arm64 as well, and had since
+the commit that added them: `C Library (macos-latest, ...)` runs `ctest` with
+AppleClang and with GCC. With GCC 12.5 both passed there, all 130 entry
+points (job 130182175017). With AppleClang 21 `test_stack_scrub` stopped at
+its own second control, "a word of the input left in a frame is not seen"
+(job 130182175215), and judged nothing.
+
+The harness read down from the address of a local in a leaf it called and
+took that for the calling frame's stack pointer. Where that local sits is the
+compiler's choice. `add_ama_residue_probe` gives every probe `-O2
+-fno-stack-protector`, "because the probe's frame arithmetic assumes a plain
+prologue", and named `Clang` but not `AppleClang`, which CMake identifies
+separately; so that lane compiled the probes at `-O3` under
+`-fstack-protector-strong`, the leaf got a canary and a frame record, and
+its local sat below the eight bytes in which the control keeps its word.
+Reproduced before anything was changed: clang 18.1 for AArch64 with that
+lane's flags, under QEMU, gives that lane's verdict. Measured in the builds
+of this tree the local sat 1, 4, 9, 17 or 28 bytes under the caller's stack
+pointer (25 for the macOS target), so on every platform a part of each entry
+point's own frame went unread, and the frameless mark this entry gave
+Windows above was the same defect, corrected for one platform.
+
+Both causes are removed. The mark is the stack pointer of the frame that
+makes the call, read by one instruction in that frame
+(`RESIDUE_STACK_POINTER`, `tests/c/residue_frame.h`): it has no frame to be
+laid out, and the Windows special case is gone with the leaf, which only the
+needle probes still use and do not depend on. The macro names AppleClang.
+And with an exact origin the two allowances the tests made for an inexact
+one are gone: `test_stack_wipe_coverage` holds COVERED and EXACT to the depth
+itself, where it held them to the depth less 64, and `test_stack_scrub`
+requires a wipe to reach the depth its row names, where it allowed 96 short.
+
+Measured after, on the thirty configurations listed above: both tests pass
+in all of them, 3,778 rows judged; an entry point's own frame reaches at
+most 256 bytes below its caller (`ama_kem_encapsulate`, clang 18.1 with no
+`-O`; the bound is 512); a wipe ends at least 32 bytes below the depth it
+names; and with the probe flags withheld from clang, as AppleClang had them,
+the AArch64 build passes as well. Mutation, on five builds (x86-64 and
+AArch64, optimised and not, and Windows x64):
+
+| Mutation | `test_stack_scrub` | `test_stack_wipe_coverage` | |
+|---|---|---|---|
+| the mark 32 bytes under the stack pointer | fails in all five, at the control the macOS lane failed | fails on AArch64 (11 rows), passes on x86-64 and Windows | PIN |
+| every frame function 64 bytes short | fails in four (146, 238, 4 and 4 verdicts); passes on unoptimised x86-64 | fails in all five (11 or 12 rows) | PIN |
+| the same, and the two tests with the slack they had | passes in all five | passes in all five | what the slack hid |
+
+*The guarded-write probe.* `secret-operand-check-arm64` ran the instrument's
+own tests for the first time, as this entry arranged, and the guarded-write
+test skipped, which that lane counts as a failure: "this VEX did not chase
+the branch; there is no guarded write to judge" (job 130182627270; the
+store-conditional probe and its mutant passed in the same run). The probe was
+a single branch around an `mrs`, called by name, and that is not what VEX
+guards. `VEX/priv/guest_generic_bb_to_IR.c` reads at most three instructions
+down each arm of a block's final conditional branch and joins the two only
+when one arm ends in a second conditional branch to the first one's
+destination, the `&&` idiom; and it extends a block once, so one that has
+already followed a call is not extended again. The probe is now two branches
+to one label with the write between them, entered through a pointer.
+
+That file is not specific to a guest. The test's skip condition, this
+changelog (2026-11-08) and `docs/constant-time-testing.md` all said that
+only the arm64 front end produces a guarded write and that the rule "cannot
+act on amd64". That was never measured, and it is wrong: Valgrind 3.22 on
+x86-64 lifts the probe's `mov $16, %ecx` as `t25 = ITE(t11,t15,t24)`, the
+tool leaves it uncharged, and the tool with the rule removed charges it.
+Each half of the old shape was measured to defeat it on its own (called by
+name with two branches, and through the pointer with one: no `ITE`). The
+test therefore runs on both architectures, names neither, and builds the
+mutant itself, so the x86-64 lane pins the rule too and neither lane can
+pass a probe that cannot tell the tool from its mutant. The AArch64 run is
+CI's: Valgrind for that architecture is not available here.
+
+*What that run did not reach.* The AArch64 job stops at its first failing
+step, so the SVE2 static listing and the operand loop this entry describes
+did not run on `6cc2d14`; the x86-64 operand job did, and passed, with gcc
+and with clang. And `Instruction Count Regression (A/B)` needs the C Library
+jobs, so it was skipped, and the acknowledgement file's six predicted values
+stayed predictions for one more commit, without the promise that its next
+push would carry the runner's table. One of this entry's own
+descriptions is corrected while here: the 4 KiB wipe that `5536e51` ran was
+an 8,192-byte frame whose upper half one `rep stosl` cleared in 1,024
+counted steps, not "a 196,608-byte frame probed page by page", which was a
+state of the working tree during the pass. The 1,041 instructions were
+measured and stand.
+
+*What CI on `df9974c` then measured (2026-11-11).* All eleven workflows of
+that commit passed, with no job failed, and three of the jobs were first runs
+of something this entry could only describe.
+
+- **macOS arm64, AppleClang 21** (job 130226129940): `ctest` 162 of 162.
+  `test_stack_scrub` saw all three controls and judged every row, "130 entry
+  point(s): cleared, and input-independent", the first verdict on the library
+  as that compiler builds it; `test_stack_wipe_coverage` read each wipe from
+  the stack pointer down and found no unwritten byte (1,064 written for a
+  depth of 1,024, the forty-byte header clang 18.1 lays out for that target);
+  and the five needle probes passed under the flags they now get there.
+- **AArch64 under Valgrind 3.22** (job 130226190727): the instrument's own
+  tests, 3 passed and 7 skipped for x86-64, the guarded-write probe and its
+  mutant among the three; the SVE2 static listing, 3,376 instructions under
+  gcc 13.3 and 1,455 under clang 18.1, which are the figures measured here on
+  cross-built archives; and all 23 operand targets.
+- **Instruction counts on the runner's compiler** (A/B job 130227909326, gcc
+  15.2, merge-base `c0f2254`): 18 operations within the band, seven by
+  acknowledgement. The six predicted head values are replaced by the
+  runner's, and `benchmarks/instruction-baseline.json` is that table, all
+  eighteen rows. Recording what the tree measures showed one more stale
+  record: the landed entry for `hmac_sha3_256` gives a head value of 48,768,
+  and the tree measures 49,782, 2.08% above it and 1.65% above the merge-base.
+  `test_the_recorded_baseline_agrees_with_every_acknowledged_head_value` had
+  not said so because the recorded file still carried the merge-base's figure
+  for that row; with the measured one it failed. The entry is retired with
+  its record, not edited.
+
+| Operation | Predicted | Runner | Error |
+|---|---:|---:|---:|
+| `aes_256_gcm_encrypt` | 4,567 | 4,565 (+1.44% of the merge-base) | +2 |
+| `chacha20poly1305_encrypt` | 11,290 | 11,288 (+1.88%) | +2 |
+| `hkdf_derive` | 38,347 | 38,345 | +2 |
+| `sha3_256`, `sha512`, `hmac_sha3_256`, `x25519_scalarmult`, `dilithium_sign` | | as predicted | 0 |
+| `dilithium_verify` | 911,858 | 911,859 | -1 |
+| `kyber_keygen` | 513,322 | 513,354 | -32 |
+| `kyber_decapsulate` | 751,100 | 751,156 | -56 |
+| `kyber_encapsulate` | 582,266 | 582,362 | -96 |
+| `dilithium_keygen` | 871,444 | 870,689 | +755 |
+
+A change measured under gcc 14.2 carried to gcc 15.2 to within two
+instructions wherever it was the stack wipe alone, which is assembly and the
+same under any compiler, and to within 0.09% where part of it was the
+benchmark's own link. The two AEAD operations stay inside the band, so their
+entries stay retired.
+
+**Not measured here.** The three things above were CI's to measure and are
+measured. What remains is a library
+built by MSVC, which is what the Windows wheels are: the two stack tests need
+GNU C inline assembly, which that compiler does not have on x64, and no lane
+runs C tests on Windows with it. What its convention shares with MinGW's (the
+home area, a stack probe that saves registers) is handled the same way in the
+code; what that build then does is measured by nothing, and what would
+measure it is a port of the two tests off inline assembly and a Windows
+lane that builds and runs the C tests with MSVC.
+
+### Runner images pinned where the ruleset does not bind the job's name; the label table refreshed — 2026-11-08
+
+Every job of pull request #434's runs carried one of two GitHub notices as a
+check-run annotation. On 92 of the 129 check runs of head `a30e848`: "The
+ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026". On
+the seven `macos-latest` jobs: a capacity notice about arm64 queue times.
+Measured by the `Runner Image` group of the job logs (runs 42503992041,
+42503992064 and 42503992236): all eight sampled `ubuntu-latest` jobs — the
+lint, strict-warnings, secret-operand, C Library gcc, two Python test legs,
+the AArch64 QEMU and the x86-64 benchmark lanes — ran on `ubuntu-26.04`
+(image 20261101.186.1: gcc 15.2.0, clang 21.1.8, qemu 10.2.1, valgrind
+3.26.0), while GitHub's runner-images table that day still named Ubuntu 24.04
+(gcc 13.3, clang 18) as the label's target; both sampled `macos-latest` jobs
+ran on `macos-26-arm64`; all three sampled `windows-latest` jobs on
+`windows-2025-vs2026`, the Visual Studio 2026 image. Three floating labels
+had each moved under this tree within weeks, with no commit here, and the
+2026-11-06 entry below records what the first move did to `main`. The order
+of precedence (AGENTS.md §2) puts reproducibility above convenience: a
+toolchain that changes without a commit is a defect, and the notice was its
+symptom.
+
+**Cure.** Every job pins the image it was measured on: 77 `runs-on:
+ubuntu-latest` lines and the `dudect.yml` SIMD-sweep, `release.yml` wheel and
+`ci.yml` benchmark-regression matrices are `ubuntu-26.04`; the release wheel
+matrix's Windows row is `windows-2025-vs2026`, its `wheels-ubuntu-latest`
+artefact reference follows the row, and `tests/test_release_matrix_coverage.py`
+knows the new labels' architectures. No lane's toolchain changes on the day of
+the pin; the next image move is a reviewed commit. The `ubuntu-24.04-arm`,
+`macos-15` and `macos-15-intel` rows were already pinned and are unchanged.
+The macOS capacity notice is a statement about GitHub's arm64 fleet; nothing
+in the tree causes it and nothing in the tree can cure it. Comments that named
+the label were corrected where the files were touched: the ci.yml AVX-512 lane
+now cites both qemu versions (8.2's measured `-cpu max` and 10.2.1's
+`TCG_7_0_EBX_FEATURES`, which lists AVX2 and no AVX-512 bit), and
+`ENHANCED_FEATURES.md` and `tools/check_crypto_construction_docs.py` name
+ClusterFuzzLite's pinned label.
+
+**What stays floating, and why.** The `main` ruleset's 55 required status
+checks are job names, and three matrices — `ci.yml::test`,
+`ci-build-test.yml::c-library` and `ci-build-test.yml::python-package` —
+render `${{ matrix.os }}` into theirs: 24 required contexts carry
+`ubuntu-latest`, `macos-latest` or `windows-latest`. Pinning those renames a
+required context, and a renamed context makes every pull request wait for a
+check that never reports until an administrator edits ruleset 10508467. That
+authority is not in the tree, so those seven (job, label) pairs keep their
+labels here; their C Library lane still installs gcc-13 and clang-18 by name
+(13.4.0 from the 26.04 image's own package lists, measured), so the README's
+compiler claims for it hold. The remedy is one coordinated change: the
+administrator replaces the 24 contexts with the pinned spellings,
+`python tools/check_required_contexts.py --live --write` refreshes the
+snapshot, and the three matrices are pinned in the same pull request — at
+which point the check below fails them until they are.
+
+**Gate (INVARIANT-25, sixth class).** `check_floating_labels` in
+`tools/check_workflow_commands.py` fails any `*-latest` label unless a
+rendered name of its job that contains the label is a required context in
+`.github/required-status-checks.json`, the snapshot
+`check_required_contexts.py --live` keeps equal to the ruleset. The tolerance
+is read from that file and nothing else: there is no exemption list, and a
+name the checker cannot render holds nothing. The tolerated labels are listed
+in the summary ("7 floating, held by the main ruleset"). The curated label
+table was re-verified against the runner-images README the same day:
+`macos-14` — every macOS 14 image retired on 2026-11-02 — moved from
+supported to retired, so a job naming it fails here instead of queueing to
+its timeout with the checker green (the first historical class), and
+`ubuntu-26.04`, `ubuntu-26.04-arm`, `ubuntu-slim`, `windows-2025-vs2026`, the
+`-large`/`-xlarge` macOS labels and the Windows arm64 labels were added;
+preview labels (`xcode-27*`) were left out so that an unknown label still
+fails closed. No retired label's replacement is a floating label.
+
+**Mutation (§6.2):**
+
+| Mutation | Result | Class |
+|---|---|---|
+| Un-pin one job (`security.yml::security-audit`) in a copy of the tree | one finding, that job | PIN |
+| Remove `ci.yml::test`'s name template, so no required name carries its labels | two findings on that job, `ubuntu-latest` and `windows-latest` | PIN |
+| `_is_floating` always false | 10 tests fail | PIN |
+| Hold whenever the label is in the name (ruleset ignored) | 4 tests fail, the tree sweep with an empty ruleset among them | PIN |
+| Hold whenever any required context exists (name ignored) | 1 test fails | PIN |
+
+`tools/check_workflow_commands.py` passes on the tree (97 labels, 7 held),
+`check_required_contexts.py` still finds every required context produced,
+and the 546 tests of the workflow-reading modules pass.
+
+### The tail-call scan reads cold partitions and GOT jumps; three CI alerts cured — 2026-11-08
+
+Copilot's review of `b41913c` kept one note open after every thread was
+resolved: `tests/test_public_exits_clear_registers.py` read an export's hot
+part only, so a tail call GCC places in the export's `.cold` partition was
+missed. Measured: a cold-attributed callee on an unlikely path is reached by
+`jmp` from inside `ama_control_export.cold` (gcc 13.3 and 14.2), and the scan
+returned nothing for it. Fixed, and the sweep that followed, over every built
+image (x86-64 gcc/clang, LTO and `-O0`, AVX-512; AArch64 gcc/clang LTO and
+`-O0`), found two more defects in the scan and one refinement:
+
+* **Attribution is by symbol size, not by label.** objdump labels every byte
+  after a function with its name until the next symbol, and the AArch64
+  linker places erratum-843419 stubs there, under a `$x` mapping symbol
+  only. Read by label, `ama_chacha20poly1305_decrypt` appeared to jump to
+  `nistp_jac_double.constprop.0` and `ama_sha384` to `ama_sha512_rotr64`;
+  both branches were stubs 0x290 and 0x128 bytes into functions of exactly
+  those sizes. The scan now bounds each export, and its `.cold` partition,
+  by its ELF symbol size. Mach-O has no sizes and no such stubs, so the next
+  label bounds a function there.
+* **A jump to another export's entry is not a violation**, because that
+  export carries `AMA_API` and clears at its own return. gcc's
+  identical-code folding makes `ama_shake256_inc_absorb` a two-instruction
+  forwarder to `ama_sha3_update` in the AVX-512 build, which the first scan
+  would have reported. A jump into another export's middle is still one.
+  An erratum veneer (`e843419@...`) branches back into its function; a
+  long-branch veneer (`__name_veneer`) stands for `name`; a PLT entry
+  stands for what it resolves to.
+* **GOT-indirect tail calls are read:** x86-64 `jmp *disp(%rip)` and
+  AArch64 `ldr xN, [xN, #imm]` then `br xN`, both measured from `-fno-plt`
+  builds. Jump tables (`notrack jmp *%rax`; AArch64 branches through a
+  register other than the one it loaded the table entry into) are not
+  reported. A register-indirect tail call of another shape is the one form
+  the scan does not read; the flag removes it with the rest.
+
+Each rule has a control that fails without it, measured by mutation: the
+cold-partition control (owner rule reverted: the scan returns `{}`), the
+`-fno-plt` forwarder (GOT rule removed), the export-to-export forwarder
+(exemption removed: it is reported), and an assembled export followed by an
+orphan jump (size attribution removed: `ama_orphan_export -> orphan_internal`).
+Correction per section 6.6: the figures the first scan recorded (32 / 47 / 41
+exports) counted forwards to other exports as violations. Re-measured on a
+sibling-call build of this tree (x86-64 gcc 13.3, Release with LTO): 30
+exports left by a direct jump, 20 of them to a function without the clearing.
+
+Three alerts the CI check runs carried on every PR, each cured at source:
+
+* **CodeQL (variants):** the job held `contents: read` only, so the Action
+  logged "does not have permission to access the CodeQL Action API
+  endpoints" and fell back to its bundled CLI, while the main CodeQL job,
+  which has `security-events: write`, took the API's default CLI version:
+  two CodeQL jobs, two CLI versions. The variants job now holds
+  `security-events: read`, the least the API needs; nothing it does uploads.
+* **CodeQL (both jobs):** the Action warned on every PR that it will stop
+  computing file coverage on pull requests unless a repository chooses.
+  Nothing here reads file coverage (the gate reads results), so both jobs
+  set `CODEQL_ACTION_SKIP_FILE_COVERAGE_ON_PRS`, the same analysis on a pull
+  request and on `main`, less the coverage pass.
+* **CodeQL (both jobs), after the grant above:** able to reach its API, the
+  Action tried an overlay (incremental) database on every pull request of
+  the variants job and warned that `build-mode` was not `none` before
+  falling back to a full database (job 128793351955). C is a traced language built
+  here by cmake, so an overlay database can never apply. Both jobs state
+  `CODEQL_OVERLAY_DATABASE_MODE: none`, which the Action logs at info level.
+  The main job did not warn only because its Python language has no overlay
+  flag yet, which is server state, not a choice.
+* **ACVP validation:** the evidence artifact asked for 365 days' retention;
+  the repository's maximum is 90, and GitHub clamped every upload with a
+  warning. It asks for 90, and the comment that promised a year is
+  corrected.
+
+### Register clearing on AArch64, and through tail calls — 2026-11-08
+
+Review on PR #434 pointed out that `tests/c/test_register_residue.c` skipped
+outside x86-64, so the AArch64 builds had no check of the register clearing
+`AMA_API` was said to provide there. The harness now runs on AArch64 too: it
+dumps `x0-x18`, `q0-q31` and, under SVE, `z0-z31`, after each public call.
+Measured with gcc 13.3 and clang 18 under qemu-aarch64 8.2 as Cortex-A72,
+Neoverse N1/N2/V1, A64FX and `max`, the clearing did not hold there, and
+one gap it found holds on x86-64 as well:
+
+* **No SIMD register was cleared on AArch64.** The portable sources compile
+  with `-mgeneral-regs-only`, so `zero_call_used_regs("all")` there clears
+  `x0-x18` and nothing else. The header comment that said it cleared
+  "v0-v31's caller-saved state" was false and is corrected.
+  * glibc's `memcpy` copies through `q0-q3` (`z0-z3` in its SVE form). It
+    left the HKDF, HKDF-SHA256 and PBKDF2 outputs there on every model
+    without FEAT_MOPS. Under `max`, glibc selects its MOPS `memcpy`, and
+    every row passed. `src/c/internal/ama_string_ops.h` now has an AArch64
+    branch that copies through `x` registers (LDP/STP, then 8, then 1
+    byte). GCC's loop distribution is off (`-fno-tree-loop-distribute-patterns`);
+    it had turned ten copy loops in six functions back into `memcpy` calls.
+    The library now imports no `memcpy` or `memmove` on AArch64, and
+    `tests/test_no_libc_string_calls.py` checks AArch64 and Mach-O images too.
+  * The NEON AEAD kernels returned with key words in `q21`/`q28-q30` and
+    plaintext in `q4`/`q25`. Every NEON and SVE2 kernel entry point is now
+    declared `AMA_SIMD_CLEAR_REGS` (`src/c/internal/ama_simd_clear_regs.h`,
+    `zero_call_used_regs("all")`). It is a function attribute because a
+    per-file `-fzero-call-used-regs` was tried first and measured to do
+    nothing in the default LTO build, where GCC applies it at link time.
+    `"used"` would save almost nothing: 41 against 43 zeroing instructions
+    for SHA-256, and the same count for Keccak, the ML-KEM NTT and ChaCha20.
+    A compiler without the attribute is refused at configure time
+    (`AMA_HAVE_ZERO_CALL_USED_REGS_ATTR`), not by an `#error` in the header.
+    CodeQL's own front end does not know the attribute, so the `#error` left
+    every kernel declaration unparseable to it, and its AArch64 lane reported
+    `ama_sha256_compress_neon` as implicitly declared (job 128723683357).
+* **A tail call skips the clearing, on every target.** The attribute acts at
+  the function's own return, and a public function that ends in a tail call
+  never executes one. Before this change, 32 of the 199 exports left that
+  way under gcc 13.3 x86-64, 47 under aarch64 gcc with LTO and 41 under
+  clang 18 with LTO. Among them were `ama_ml_kem_decapsulate` and
+  `ama_ml_dsa_keypair`. Under clang, `ama_kyber_encapsulate` returned a word
+  of the shared secret in `x10`. The library builds with
+  `-fno-optimize-sibling-calls`, and
+  `tests/test_public_exits_clear_registers.py` reads every export of the
+  built image for a direct jump to another function; a control object pins
+  that the scan sees one. The stale package-local image built before this
+  change fails it.
+* **New rows:** ML-KEM-1024 keypair (`dk_PKE` and `z`), encapsulation and
+  decapsulation shared secrets, on both architectures.
+* **The harness's own control** left its planted bytes in `v8`, whose low
+  half is callee-saved. Under clang, which inlined the control into `main`,
+  later AEAD plaintext rows read them back. The control now clears the
+  register.
+
+Mutation (each cure removed alone; LTO build, the default):
+
+| Removed | Rows that fail | Class |
+|---|---|---|
+| `AMA_SIMD_CLEAR_REGS` | 4 AEAD rows, on every model | PIN |
+| AArch64 string ops | 5 KDF rows on N2 and A72; none under `max` (MOPS) | PIN |
+| `-fno-tree-loop-distribute-patterns` | none; the import test fails | PIN (import table) |
+| `AMA_CLEAR_REGS` | 7 rows (general registers) | PIN |
+| `-fno-optimize-sibling-calls` | the ML-KEM encapsulation row under clang; the tail-call test on every build | PIN |
+
+The ML-KEM rows are otherwise SMOKE: no other mutation fails them.
+
+Cost:
+* x86-64, `benchmarks/measure_instruction_counts.py` with gcc 13.3 against
+  `2cf3cf6`: every gated operation is within +0.08%.
+* AArch64 was not measured dynamically; QEMU gives no instruction counts. A
+  kernel call now ends with 35-52 zeroing instructions. That is +24% retired
+  instructions for one SHA-256 block on the SHA2-instruction kernel, which
+  is 177 instructions straight-line. It is a small fraction of an NTT or a
+  Keccak permutation.
+
+**gcc 15.2's 36 VSHUFPS in the VAES kernel, corrected per section 6.6.** The
+entry below attributed them to the GCM counter's byte assembly. CI on
+`2cf3cf6` listed the same 36 with the new counter in place, so that
+attribution was wrong. Immediate `0x88` is the auto-vectoriser's 64-to-32-bit
+narrowing, and gcc 14 already SLP-vectorised the GCM length block in this
+file. The VAES and AVX-512 SHA-3 kernels are the objects the secret-operand
+gate checks statically, because Valgrind cannot execute them. They now
+compile without the auto-vectoriser, like the NEON kernels, so their only
+vector code is their own intrinsics. gcc 13/14 and clang listings pass, and
+37/37 AES-GCM and SHA-3 tests pass on a VAES host; gcc 15 is checked by CI.
+The counter change is kept: it is bit-identical, and it is an intrinsic form.
+CI on `fabc7de` confirmed the cure: gcc 15.2's 36 VSHUFPS are gone. Without
+the vectoriser, gcc 15.2 then spilled enough in the AVX-512 SHA-3 kernel to
+realign its frame, and it left through `LEAVE`, which is not on the DOIT list
+(job 128727474601). Both statically checked kernels now build under GCC with
+`-mtune-ctrl=^use_leave`, so the same epilogue is `MOV RSP,RBP` / `POP RBP`,
+both listed. Measured on gcc 13.3 and 14.2 with a realigning probe: `LEAVE` by
+default, `MOV`/`POP` with the flag, and the same through an LTO link. Clang
+already emits `MOV`/`POP`.
+
+The tail-call test's control failed on CI's macOS arm64 Python lanes,
+because Mach-O spells its symbols with a leading underscore. The scan now
+reports C names. The test on the built macOS library itself passed, as did
+the libc-import test.
+
+**Argon2id: no divide left in the per-block loop (Copilot review).** The
+fastmod constant for `lanes` and the per-slice reference-area start are now
+formed once, outside the loop, instead of on every call to
+`argon2_index_alpha`. Before this, the source formed both on every call:
+two divides per block, on public values, unless the compiler hoisted them.
+Where it did was not measured. Copilot's premise that the fastmod form cost
+more than the `%` it replaced was wrong: the source before it divided three
+times per block. The hoist is worth doing anyway, because it makes the loop
+division-free by construction rather than by optimiser choice. `tools/check_secret_division.py` now attributes
+3 divides (gcc 13.3) or 4 (gcc 14.2, which duplicates the per-slice start),
+none in the loop, and its ceiling falls from 5 to 4. The RFC 9106 KATs and
+the `argon2id` / `argon2id-verify` operand gate (gcc 13/14, clang) pass.
+
+CI on `15673d4` then failed the `argon2id` target on the shipped LTO library
+(gcc 15.2, job 128734018389). `ama_argon2_g_avx2`'s row loop exited on a
+`JNE` whose operands derived from the reference block's pointer. The
+reference block's address is password-derived by RFC 9106 section 3.4, so
+taint reached the branch, although its outcome is the same for every
+password. The testing archive declassifies the index, which is why the archive
+targets passed; the shipped library does not. gcc 13.3 also tests a pointer
+there, just not a derived one. The loop offsets in the AVX2 kernel and in the
+NEON kernel's X ^ Y loop now go through `ama_ct_value_barrier_u32`, so each
+loop exits on its counter (`cmp $8` / `cmp #128`, under gcc 13/14 and clang).
+
+Verified:
+- The `argon2id` target on the LTO `.so`, and `argon2id` and
+  `argon2id-verify` on the gcc 13/14 and clang archives: 7/7.
+- The KATs and G-kernel equivalence tests: 50/50 on x86-64, and 50/50
+  under QEMU as Neoverse N2.
+
+gcc 15 is validated in CI only.
+
+### Secrets left in registers at return: cleared at the ABI boundary, pinned — 2026-11-08
+
+CI's `test_secret_residue.py` failed on the Python 3.12 lane with one live
+copy each of the HKDF-SHA3-256 output and the hybrid-KEM shared secret (job
+128658717231). Measured cause: this branch's whole-word `store64_le` in
+`ama_sha3.c` let gcc 13 merge the digest stores into two MOVDQU copies
+through `%xmm8`/`%xmm9`, call-clobbered registers nothing on the return path
+overwrites; the first lazily bound PLT call after the return ran
+`_dl_runtime_resolve_xsavec`, which saved them, adjacent, onto the stack.
+Reproduced under CPython 3.12, gone under `LD_BIND_NOW=1` (no trampoline
+after the call), and never seen under 3.13, whose interpreter overwrites the
+registers first.
+
+The instrument could not pin that, so `tests/c/test_register_residue.c` does:
+it stores `%xmm0-15` / `%ymm0-15` / `%zmm16-31` in the instructions right
+after each public call returns, and fails on any word of the secret. It
+covers HKDF-SHA3-256, HMAC-SHA3-256, SHA3-256 (one-shot and incremental),
+X25519 key exchange and keypair, HKDF-SHA256, PBKDF2-SHA512, Argon2id, and
+the plaintext and key of AES-256-GCM, ChaCha20-Poly1305 and Ascon-AEAD128
+decryption, plus a dead-stack probe (`residue_probe.h`) of the X25519 shared
+secret and the HKDF output. It found more than the CI row. These leaked on
+`main` too: PBKDF2, Argon2id, every AEAD plaintext, and two AES-256 key words
+after GCM decrypt. This branch had added the SHA-3 digest and the X25519
+shared secret, the latter also spilled to `fe64_tobytes`'s own frame.
+
+Fixes:
+* `AMA_API` carries `zero_call_used_regs("all")` while the library is
+  compiled (GCC 11+, clang 15+; consumers and MSVC see the declaration
+  unchanged). Every exported function clears every call-clobbered register
+  on return, whatever its callees, kernels or libc left there.
+* `fe64_store64_le` / `fe51_store64_le` store each word from a general
+  register behind a value barrier, so no frame copy is made. That copy is in
+  memory, which the attribute cannot reach.
+* `store64_le` in `ama_sha3.c` gets the same barrier.
+
+Mutation (gcc 13.3, x86-64 with AVX-512F):
+
+| Mutation | Result |
+|---|---|
+| Attribute removed | PBKDF2, Argon2id and the three AEAD plaintext rows fail (**PIN**) |
+| fe64/fe51 barrier removed | X25519 dead-stack row fails (**PIN**) |
+| SHA-3 barrier removed | Passes: redundant under the attribute (**SMOKE**) |
+| SHA-3 barrier and attribute removed | The five SHA-3-family rows fail |
+
+So the SHA-3 property is held redundantly, and the test pins the property,
+not either guard. Full Python 3.12 inventory after the fix: 17 of 17 rows at
+0 copies.
+
+**`%zmm16-31` under clang.** The attribute cannot reach `%zmm16-31` from a
+baseline x86-64 translation unit, and glibc's EVEX `memcpy`, which it selects
+on every AVX-512 CPU, copies through exactly those registers. Under clang
+18.1, which calls glibc for variable-length copies, HKDF, HKDF-SHA256, PBKDF2
+and Argon2id returned with their output in `%zmm16`/`%zmm17`. Without the
+cures below, the gcc 13.3 library also imported `__memcpy_chk` (39 call sites)
+and `__memset_chk` (8), the fortified form of the same calls.
+
+Cures:
+* `src/c/internal/ama_string_ops.h`, included first by every library source
+  on x86-64 GCC/Clang, expands each `memcpy`/`memmove`/`memset` inline. Under
+  GCC that is the compiler's own pinned expansion; under Clang a short
+  constant copy stays inline and everything else becomes REP MOVSB / REP
+  STOSB. Both are DOIT-listed, use no vector register, and are timed only by
+  the public count. `_FORTIFY_SOURCE`'s object-size check is kept, as a trap.
+* Clang's loop-idiom pass is off for these routines (`-fno-builtin-memcpy`
+  and the like).
+* The 18 struct copies and aggregate initialisers clang still lowered to calls
+  (ML-DSA, the P-curves, PBKDF2's HMAC contexts, the dispatcher) are explicit
+  copies.
+
+`tests/test_no_libc_string_calls.py` requires the built x86-64 library to
+import no libc copy routine, and its control proves the check sees one.
+
+Measured:
+
+| Build | Result |
+|---|---|
+| Clang, header disabled | Fails 5 register rows (**PIN**); imports `memcpy` and `__memcpy_chk` |
+| GCC, header disabled | Passes the register test (**SMOKE**); imports `__memcpy_chk` |
+| Both compilers, cured | ctest 161/161 and the register test pass |
+
+The static analyzer cannot model REP MOVSB, so the header steps aside under
+`__clang_analyzer__`, and a test confines that exception to this one header.
+
+With the loop idiom off, clang copied the ML-DSA AVX2 NTT's 1 KiB staging
+array through VMOVAPS, which is FP-domain and not on the DOIT list: 254 sites
+in the `ml-dsa-sign` operand gate. Its four staging loops are now explicit
+`memcpy` calls, so they become REP MOVSB. The loop form fails the gate under
+clang (**PIN**), and gcc 13/14 and clang pass.
+
+CI on `fbefa4c` found three lanes the local run did not cover, each cured:
+* **MemorySanitizer** cannot see the stores REP MOVSB makes in inline
+  assembly, and aborted `test_kat`. Under any sanitizer the string-ops header
+  now leaves the calls to libc, which every sanitizer intercepts, so the
+  instrumented build checks each copy. No shipped build is sanitized.
+* **AArch64 strict warnings:** `test_register_residue.c` included
+  `residue_probe.h` on targets where it uses none of it
+  (`-Werror=unused-function`); it now includes it only on x86-64.
+* **`AMA_USE_NATIVE_PQC=OFF`:** that configuration does not build X25519,
+  Argon2id or ChaCha20-Poly1305. Those rows now compile only when CMake sets
+  `AMA_REGISTER_RESIDUE_PQC_GROUP`, and the other rows still run (80/80
+  ctest in that configuration).
+* **CI's gcc 15.2** loaded ChaCha20 x8 key-word pairs with VMOVHPS (FP domain,
+  not on the DOIT list; `aead-bulk`). It had SLP-vectorised the byte-assembly
+  loop. Each key word is now a `memcpy` into a general register behind a value
+  barrier. gcc 13/14 and clang pass locally, pinned and unpinned; gcc 15 is
+  validated in CI only.
+* **The AArch64 `mrs dczid_el0` site** is explained by the IR the gate now
+  prints. VEX had chased a conditional branch in glibc's memset and lifted the
+  `mrs` as `ITE(guard, 0x10, GET(x5))`, and the tool charged x5's unchanged
+  value, a secret left there by the caller. An ITE whose guard comes from an
+  earlier instruction is now charged only its own value. CMOV and CSEL, which
+  compute their condition under their own IMark, keep the rule that every arm
+  is an operand. The rule cannot act on amd64, where VEX does not chase
+  conditional branches; CI's AArch64 lane is its pin. (Corrected 2026-11-10,
+  section 6.6: that sentence was not measured and is wrong. The guarded write
+  comes from VEX's guest-independent block builder, Valgrind 3.22 on x86-64
+  produces it for a probe of the right shape, and the test now runs and pins
+  the rule on both architectures. See the 2026-11-10 entry.)
+* **Copilot:**
+  * `test_register_residue` linked X25519, Argon2id and ChaCha20 in the
+    no-PQC configuration; fixed by the gating above.
+  * The ADX capability probe ran ADCX with an uninitialised carry flag, so a
+    stale CF could read `1 + 2` as 4 and skip the known-answer test on a
+    real ADX CPU. It now clears CF in the same asm block (CLC).
+* **Instruction counts:** the nine operations that move against the new
+  merge-base `c0f2254` are acknowledged with the runner's own measurement of
+  `fbefa4c` (A/B job 128690957185). Each new entry keeps the earlier one
+  under `supersedes`, and `instruction-baseline.json` records the same head
+  values. Attribution, measured locally with callgrind on gcc 13.3:
+  * ML-DSA and ML-KEM fall 23-41%: this branch's Keccak x4 AVX2 restructure
+    (10.73M to 3.05M instructions per 10 ML-DSA keygens).
+  * AES-GCM (+12.0%) and ChaCha20-Poly1305 (+7.6%) pay for the operand-gate
+    cures and the boundary register clearing.
+  * hkdf_derive (+2.1%) pays for the register clearing alone.
+  Replaying the runner's numbers through the gate with the new file passes
+  all 18 operations.
+
+CI on `4831936` confirmed the AArch64 rule: every `mrs dczid_el0` site is
+gone. It found four more defects, each cured:
+* **Unoptimised builds left the SHA-3 state in the permutation's frame.** The
+  strict-warnings lane builds with `CMAKE_BUILD_TYPE=None`, and there
+  `test_register_residue` found one whole copy of the HKDF output in its dead
+  stack. Bisected locally: `ama_sha3_256`, `ama_sha3_final` and HMAC-SHA3-256
+  each leave one copy on their own. The cause is the Keccak permutation's 75
+  lane variables, every one a stack slot without optimisation, with
+  `a00..a03` holding the digest. The generic and BMI permutations now
+  volatile-store zero into those slots before returning when `__OPTIMIZE__`
+  is undefined (`AMA_KECCAK_WIPE_LOCALS`). An optimised build keeps the lanes
+  in registers and the row is clean on every Release lane, so there the wipe
+  compiles to nothing. In the unoptimised build all four probes read 0 copies
+  with the wipe and 1 without it (**PIN**).
+* **The AArch64 `aead-bulk` kernel requirement named the wrong symbol.**
+  `ama_chacha20_block_x8_neon` is two calls to the x4 kernel and consumes
+  nothing itself, so the check reported the kernel unreached. It now requires
+  `ama_chacha20_block_x4_neon`, which only the x8 path reaches.
+* **The x86-64 memcheck lane escalated the arm64-only probe's architecture
+  skip.** A `requires_memcheck` test that also declares a `requires_host_isa`
+  this host lacks is now exempt on that lane. The host is re-asked, so on a
+  host with the ISA the skip still fails. Two conftest tests pin both halves.
+* **Windows:** the analyzer-confinement test compared host-separator paths;
+  it now compares POSIX paths.
+* **The static AVX-512/VAES listing under CI's gcc 15.2** found 36 VSHUFPS
+  in `ama_aes_gcm_vaes_avx2.c.o`, attributed here to the GCM counter's scalar
+  byte assembly vectorised by the compiler. *(Corrected per AGENTS.md section
+  6.6: CI on `2cf3cf6` listed the same 36 with the counter below in place, so
+  the attribution was wrong; see "Register clearing on AArch64" above for the
+  cause and the cure.)* The listing checks every instruction in that
+  object, because Valgrind cannot run VAES, so it holds the public counter to
+  the list too. `gcm_inc_counter_xmm` is now PSHUFB, PADDD and PSHUFB. It is
+  bit-identical to the old form over the 2^32 wrap, the other edge values and
+  one million random blocks. gcc 13/14 and clang listings pass and the VAES
+  KAT/equivalence tests pass on a VAES host; gcc 15 is validated in CI only.
+
+### Secret operands: every consuming instruction vendor-listed, every primitive measured — 2026-11-08
+
+The class (c) gate added on 2026-11-07 blocked only on division,
+floating-point and square-root operations and reported every other unlisted
+consuming instruction as an open inventory. Every inventory row is now cured
+at source, the gate blocks on all of them, and it measures every
+secret-handling primitive, both compilers, AArch64, and -- statically -- the
+AVX-512 and VAES kernels Valgrind cannot run.
+
+- **Blocking verdict.** `tools/check_ct_operand.py` fails on any consuming
+  instruction outside the vendor list. A branch-only site (class (a)) is
+  settled in the same run by Memcheck on the same driver; `--inventory` is a
+  measurement mode CI may not use. The decision is `outcome()`, unit-tested;
+  three mutants of it are killed.
+- **Cured at source** (table in `docs/constant-time-testing.md`):
+  `REP MOVSQ`/`REP STOSQ` (GCC string-op strategy pinned in
+  `CMakeLists.txt`); `SHUFPS`/`CWDE` in ML-KEM (Compress_d scalar, normalised
+  coefficients zero-extended, `montgomery_reduce` from the unsigned residue,
+  bit-identical, `tests/c/test_kyber_montgomery.c`); `SHUFPS` in SHAKE output;
+  `LEAVE` in the Ed25519 15-limb select; `MOVHLPS`/`MOVMSKPS` in Ascon and
+  secp256k1; and every clang FP-domain encoding (AVX2 Keccak x4 restructured
+  plane by plane, Argon2 G with fused XORs, value barriers on the scalar
+  secret loops of ML-KEM, ML-DSA, base64 and Ed25519). gcc 13.3.0, gcc
+  14.2.0 and clang 18.1.3 pass all 24 targets on the archive. Under clang
+  the VAES GCM kernel re-reads its round keys per call and assembles partial
+  blocks without `memcpy`, so no plaintext staging buffer remains.
+- **A real secret division, removed.** Argon2id computed the reference lane
+  and index with `%` on password-derived words. Now Lemire-Kaser-Kurz
+  `fastmod_u32` (checked for all 1,095,216,660,480 (n, lane count) pairs) and
+  a masked subtraction; the lane selection by mask. RFC 9106 vectors
+  unchanged. `tools/check_secret_division.py` had allowed these divides
+  as irremovable "without deviating from RFC 9106"; that is withdrawn,
+  and its `ama_argon2id_core` ceiling drops from 10 to the measured 5
+  (gcc 14; gcc 13 emits 3), every one on public geometry.
+- **The MULX+ADX kernels, measured for the first time.** Valgrind 3.22
+  executes ADCX/ADOX but reports CPUID ADX clear, so no Valgrind lane had
+  ever selected the X25519 MULX ladder or the P-curve MULX Montgomery
+  multiply, which production runs on every ADX-capable x86-64 CPU. The
+  AMA_TESTING_MODE archive now honours `AMA_TESTING_ASSUME_ADX=1` when CPUID
+  reports BMI2 (`tests/c/test_cpuid_assume_adx.c`), and `--assume-adx` runs
+  both kernels through the operand, taint and count gates. The first run
+  found gcc's SLP-vectorised `fe64_cswap` moving the ladder's secret limbs
+  with `MOVHLPS` (4 sites, 510 times per scalar multiplication); both
+  cswaps (`fe64.h`, `fe51.h`) now keep each swap word in a general
+  register. The P-curve kernel passed.
+- **AArch64: no secret through a SIMD register by compiler choice.** The
+  first AArch64 run of the gate (after a 1-byte shadow put the arm64 VEX
+  backend could not lower was fixed in the tool) failed on FMOV between
+  general and SIMD registers, which Arm's DIT list does not name. A static
+  census of the cross-built archive found 514 of them in the portable C.
+  Every portable source on AArch64 GCC/Clang now compiles with
+  `-mgeneral-regs-only` (configure fails if refused) and contains no SIMD
+  instruction; the NEON kernels compile without the auto-vectoriser, and
+  the lane moves their intrinsics lowered to FMOV are pinned to UMOV, DUP
+  and INS (`src/c/neon/ama_neon_dit.h`). The 5 FMOVs left move public
+  values. clang's NEON GHASH multiply no longer routes H through general
+  registers. AArch64 ctest under QEMU: 159/159.
+- **CI's complete gcc 15.2 and AArch64 findings, cured.** With every target
+  reported, the blocking lanes named the rest. On x86-64 gcc 15.2, CDQE (not
+  on Intel's list) sign-extended ML-DSA coefficients in the AVX2 NTT's scalar
+  layers; `dil_sext32` now does it arithmetically behind a value barrier
+  (exact for all 2^32 inputs). The same compiler iterated Argon2's G over a
+  pointer derived from the reference block's address, so the loop's exit
+  inherited the address's taint: the reference index is now declassified
+  where it becomes an address, in AMA_TESTING_MODE only. That address is
+  RFC 9106's data-dependent addressing, which no implementation removes; it is
+  the first declassified value that is not published, and the policy says so.
+  On AArch64 every remaining site was one `mrs x5, dczid_el0` in glibc's
+  memset, which VEX lifts to a constant: the gate now prints, for each failing
+  site, the IR under its IMark (`--ct-dump-ir-at`), so the next run shows what
+  was charged.
+- **Copilot: two workloads did not reach what they named.** `aead-bulk` ran
+  256-byte messages, below the 512 at which ChaCha20 enters its x8 kernel, so
+  the AVX2 and NEON kernels it names never ran; it now runs 768 bytes, and the
+  operand gate is inconclusive unless that kernel consumed the secret
+  (mutation: 256 bytes is refused). Running it at last found clang spilling
+  ChaCha20 x8 key-word broadcasts and output with VMOVUPS; the kernel now
+  re-broadcasts the initial rows from general registers at the add-back and
+  stores each transposed half at once (no FP-domain move under clang, gcc 13
+  or gcc 14; the x8 equivalence test and KATs pass). `hkdf` called HMAC's long-key path through
+  a 300-byte IKM, which is HMAC's message, not its key; each HMAC is now also
+  called directly with the 300-byte key. Two more on
+  `tests/c/test_cpuid_assume_adx.c`, both real: it called POSIX `setenv`,
+  which Windows lacks (now `_putenv_s` there), and on a CPU with BMI2 but no
+  ADX (Intel Haswell) the override selected a ladder that raises SIGILL. The
+  known-answer half now runs only where ADCX executes: probed by executing
+  one under a SIGILL handler, because Valgrind's CPUID hides ADX while
+  running it. The override's contract is still checked everywhere, and a
+  `ud2` stand-in for the probe takes the no-ADX path.
+- **CI reports every target.** Each operand loop records failures and
+  fails at the end, rather than stopping at the first: the gcc 15.2 run
+  stopped at `x25519` (a `MOVHLPS` in the scalar copy and clamp, now
+  `x25519_copy_clamp`) and said nothing about the 23 targets after it.
+- **New targets** (count and/or taint drivers in
+  `tools/check_ghash_constant_time.py`): `ml-dsa-sign`, `ml-kem-keygen`,
+  `hkdf`, `frost-sign`, `aead-bulk` (AES-NI GCM and AVX2 ChaCha20 x8, also
+  pinned to `aes-gcm-aesni`), and the operand-only `argon2id`.
+- **What they found, fixed:** ML-DSA MakeHint branched on the secret r0 (now
+  branch-free); ML-DSA wrote every attempt's hint positions at a
+  secret-dependent index (now fixed slots, packed after acceptance); the
+  values FIPS 204 publishes or that decide only a discarded candidate are
+  declassified where computed (rho, c~, the accepted z and hint, each
+  rejection decision per FIPS 204 sec. 3.6.1 note 3, each RejBoundedPoly
+  accept bit); ML-KEM rho; FROST's returned verdicts; and the bulk-AEAD tag
+  verdict that bounds decryption, in all five decrypt kernels.
+- **AVX-512 and VAES:** `--static` holds every instruction of the production
+  objects to the list. Under clang it found `VMOVAPS` stack copies of the
+  YMM round-key schedule and a `VMOVLHPS` pack; the VAES kernel now
+  broadcasts each round key at its use and the AVX-512 Keccak packs in the
+  integer domain. Both pass under gcc and clang; the rewritten kernels pass
+  their KATs and equivalence tests on AVX-512 hardware.
+- **AArch64:** `secret-operand-check-arm64`, native on `ubuntu-24.04-arm`,
+  against Arm's DIT list.
+- **Instrument:** an `OR` with all ones or an `AND` with zero no longer
+  carries taint (gcc 14 builds `UINT64_MAX` as `or rax, -1`); objdump's
+  `PCLMULQDQ` selector aliases are normalised; the gate's driver runs bound
+  at load, as the shipped `.so` is.
+- **Review findings (pull request 434):** the tool cache moved from the shared
+  temporary directory to a per-user one and is refused when another user
+  owns it, it is a symlink, or it is group/world-writable; a failed
+  store-conditional no longer overwrites the shadow of the word it did not
+  write; the SSE probe build is `-mno-avx` and asserts its encoding by name;
+  width-less `FtoI`/`QFtoI` conversion names classify as FP.
+
+### Secret operands at variable-latency instructions: a gate for class (c) — 2026-11-07
+
+The constant-time gates saw secret-dependent branches and addresses
+(Memcheck taint), instruction-sequence differences (callgrind counts) and
+divide instructions in the object (KyberSlash inventory), and said in their
+own documentation that they could not see a secret **operand** of a fixed
+instruction sequence.
+
+- **Allowlists, from the vendors.** `tools/ct_operand/allowlists.json`:
+  Intel's Data Operand Independent Timing list (594 mnemonics) and Arm's DIT
+  list (651, SME omitted), each with URL, retrieval date and the way it was
+  read and cross-checked; no entry written from memory. Neither admits a
+  divide, floating-point arithmetic or a square root; both admit integer
+  multiply, in their timing mode.
+- **Instrument.** `tools/ct_operand/ctoperand.c`, a Valgrind tool on VEX IR
+  that runs the existing taint drivers unchanged (Memcheck's client
+  requests, the same `AMA_CT_DECLASSIFY` points) and records every
+  instruction that consumes a tainted operand, with the IR class of the
+  consuming operation. `tools/check_ct_operand.py` maps each to its mnemonic
+  and location. `check_ghash_constant_time.build_driver` is the shared
+  driver build.
+- **Verdict.** Blocking with no exemption: a secret reaching a DIV, FP or
+  SQRT operation. Inventory, not blocking: consuming mnemonics the vendor
+  list does not name (`rep movsq`, `leave`, `cwde`, `shufps`, `movhlps`, and
+  two branches that are class (a)), reviewed in
+  `docs/constant-time-testing.md`; blocking on them would need a standing
+  exemption list (AGENTS.md section 10).
+- **Measured.** All 18 taint targets on the archive and the 10 shipped-object
+  targets on the LTO `.so` pass the blocking criterion (gcc 13.3.0, x86-64),
+  and all 18 on a clang 18.1.3 archive.
+  A divide, a double multiply and a square root planted in
+  `kyber_compress_d_impl` each fail at the planted instructions; a planted
+  multiply passes and, once multiplies are denied, is reported at its 24
+  inlined copies (44 two-register `imul` sites against 20 unplanted).
+- **Runtime mode.** `ama_ct_hw_mode_status` / `_enable` / `_control`
+  (`include/ama_dispatch.h`): the library did not enable or report Intel
+  DOITM or Arm PSTATE.DIT, and now reports both and sets DIT for the calling
+  thread where FEAT_DIT allows. DOITM needs privilege (user-mode `RDMSR`
+  faults, measured) and is reported UNKNOWN. `tests/c/test_ct_hw_mode.c`,
+  run on x86-64 and under QEMU on AArch64 with and without FEAT_DIT, fails
+  on each of three planted defects.
+- **Not analysed:** AArch64 (no validated Valgrind run in this change),
+  AVX-512, VAES, AES-NI GCM; clang is measured locally, not in CI.
+- **Corrected after the first CI run (section 6.6).** Three defects in this
+  change, each fixed at source and each pinned by a test that fails without
+  the fix: (1) the condition-code spelling probes were paired with
+  disassembled lines by position, so MinGW's COFF section padding (39 lines
+  for 33 probes) failed all ten Windows pytest lanes; each probe is now read
+  back by its own label (ELF, COFF and Mach-O checked). (2) BRANCH was given
+  to the instruction that owned an exit statement, and gcc 15.2.0 on CI
+  produced a `je` whose guard ran under a neighbouring `jbe`, listed
+  unlabelled; BRANCH now follows data flow into exits, and a new OTHER bit
+  keeps an instruction whose result also feeds a register or memory from
+  being labelled a branch. (3) The tests that build and run the tool skipped
+  on every pytest lane; `security-checks` now runs them under
+  `AMA_CI_REQUIRE_MEMCHECK`. Out of scope: power, EM,
+  acoustic, fault, speculative and frequency-scaling channels.
 
 ### Argon2id legacy verify: the verdict was a branch — 2026-11-07
 

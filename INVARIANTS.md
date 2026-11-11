@@ -309,7 +309,54 @@ Enforcement: `tests/test_secret_wipeability.py` (return types across the
 secret-output surface, the last-owner rule both ways, in-place and
 zero-on-failure draws) and `tools/measure_secret_residue.py` with
 `tests/test_secret_residue.py`, which scans process memory for any live copy
-of a secret after its holder has wiped it.
+of a secret after its holder has wiped it.  Below the Python layer,
+`tests/c/test_register_residue.c` holds the native half that scan can only
+see by chance: no public C entry point returns with a word of its secret in a
+call-clobbered register, where the next lazy-binding trampoline or signal
+frame would save it onto unscrubbed stack.  It runs on x86-64 (`%xmm0-15`,
+`%ymm0-15`, `%zmm16-31`) and on AArch64 (`x0-x18`, `q0-q31`, and `z0-z31`
+where SVE is present).  What holds it: `AMA_API` carries
+`zero_call_used_regs("all")` while the library is compiled; the library is
+built with `-fno-optimize-sibling-calls`, because a public function that ends
+in a tail call never runs that clearing (`tests/test_public_exits_clear_registers.py`
+reads every export for one); every AArch64 NEON and SVE2 kernel clears its
+own SIMD registers on return (`AMA_SIMD_CLEAR_REGS`), because the portable
+code there is compiled without SIMD registers and cannot; and no copy goes
+through libc's SIMD `memcpy` (`src/c/internal/ama_string_ops.h`,
+`tests/test_no_libc_string_calls.py`).
+
+Nor does one return with any of its secret on the stack it used.  A compiler
+spills registers and hoists round keys into slots the source never named, so
+`ama_secure_memzero` cannot reach them: measured on the shipped build, three
+of the four words of an HKDF-SHA3-256 output and two of ML-KEM's
+implicit-rejection seed were in the dead stack after the call, in rows that
+searched for the whole value and reported nothing.  Every secret-handling
+entry point is therefore two functions (`src/c/internal/ama_stack_wipe.h`):
+an implementation that is never inlined, and an exported half that holds its
+caller's pointers and lengths and nothing else, calls the implementation, and
+zeroes the stack below itself to a depth measured for its family.
+`tests/c/test_stack_scrub.c` holds each of them to that on every lane that
+runs it, and names no secret to do it: after a call on each of two sets of
+inputs, every byte below the entry point's frame is zero or was never
+written, and the bytes of the frame itself are the same for both.
+`tests/c/test_stack_wipe_coverage.c` holds the wipe (every byte of the depth,
+no more, nothing of its own left below), and
+`tests/test_stack_scrub_surface.py` puts every export in one of three places:
+such an entry point, a helper with a row of its own, or the inventory of
+functions that are given no secret.  The depths are also the stack those
+entry points need (`include/ama_cryptography.h`, `ama_secure_stack_wipe`).
+Where the library itself calls such a primitive it calls the inner function,
+which clears nothing, so that one public call clears the stack once
+(`src/c/internal/ama_scrubbed_inner.h`; the same test fails on a call that
+does not).  All of this is measured on Linux, x86-64 and AArch64, on macOS
+arm64, and on the Windows x64 build a GNU compiler makes, which CI runs under
+Wine.  A library built by MSVC takes the same code and is measured by
+nothing: the tests need inline assembly that compiler does not have on x64.
+One limit is stated where it is measured: in an unoptimised build the six
+leaf helpers (`ama_consttime_*`, `ama_secure_memzero`,
+`ama_aes_sbox_consttime`) keep their arguments in their own frames like any
+other function compiled that way, and their rows are judged in optimised
+builds only.
 
 ## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 
@@ -727,6 +774,38 @@ Skipping any of the four bullets above silently downgrades the
 constant-time gate for the new kernel from "explicitly measured"
 to "assumed to ride the all-default-dispatch lane" — exactly the
 ambiguity the close-out exists to remove.
+
+### INVARIANT-12 Addendum — No Secret Operand Outside the Vendor Timing Lists
+
+A secret-derived value **must not** be an operand of any instruction that
+Intel's Data Operand Independent Timing list (x86-64) or Arm's DIT list
+(AArch64) does not name. No list admits a division, floating-point
+arithmetic or a square root on any supported target. The lists, their
+sources and how they were read are in `tools/ct_operand/allowlists.json`.
+
+**Enforcement:** `tools/check_ct_operand.py`, the `secret-operand-check` and
+`secret-operand-check-arm64` jobs of `dudect.yml`, fail-closed, with no
+exemption mechanism. A Valgrind tool on VEX IR
+(`tools/ct_operand/ctoperand.c`) runs every Memcheck taint driver, honours
+the same `AMA_CT_DECLASSIFY` points, and records each instruction that
+consumes a tainted operand; the run fails on any such instruction the list
+does not name. A site whose only use is a conditional exit is class (a) and
+is settled in the same run by bit-exact Memcheck on the same driver. It runs
+on the `AMA_TESTING_MODE` archive under gcc and clang, on the LTO shared
+object, and natively on AArch64; the AVX-512 and VAES kernels, which
+Valgrind cannot execute, are held to the same rule statically over every
+instruction of their production objects (`--static`). Argon2id is checked
+as an operand-only target, its data-dependent addressing being RFC 9106's.
+`tests/test_ct_operand_gate.py` pins the instrument, the verdict rule and
+the wiring; each class was shown to fail by a planted defect.
+
+**Limit, stated.** The vendor lists hold only in the vendor's timing mode
+(Intel DOITM, Arm PSTATE.DIT). The library reports that mode
+(`ama_ct_hw_mode_status`, `tests/c/test_ct_hw_mode.c`) and can set
+PSTATE.DIT for the calling thread; it cannot set or read DOITM, which needs
+privilege. SVE2 is not analysed (Valgrind implements no SVE), and the gate
+says nothing about power, electromagnetic, acoustic, fault, speculative or
+frequency-scaling channels.
 
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 
@@ -1267,7 +1346,9 @@ passing.
 ## INVARIANT-25 — Workflow Runner Labels and Command Strings Must Be Valid
 
 **Statement.** Every runner label named in `.github/workflows/**` must be a
-GitHub-hosted image that currently exists, every embedded `python -c` payload
+GitHub-hosted image that currently exists, pinned to a versioned image
+wherever the `main` ruleset does not bind the job's name to a floating one,
+every embedded `python -c` payload
 must compile, every command string destined for `cmd.exe` must use quoting
 `cmd.exe` actually honours, and every release-creating step must be safe under
 immutable releases and under a re-run for a tag already published.
@@ -1311,8 +1392,9 @@ tag is pushed:
 
 **Enforcement.** `tools/check_workflow_commands.py` runs in CI on every PR. It
 resolves `runs-on:` through `strategy.matrix` (including `include:` entries),
-compiles every extracted `python -c` payload after applying the shell's own
-double-quote unescaping, rejects POSIX single-quoting in `*_WINDOWS`
+fails a floating `*-latest` label the ruleset snapshot does not hold (the
+sixth class, below), compiles every extracted `python -c` payload after
+applying the shell's own double-quote unescaping, rejects POSIX single-quoting in `*_WINDOWS`
 cibuildwheel variables and `shell: cmd` steps, and checks every step using a
 release-creating action for the three properties above. A `${{ ... }}`
 expression counts as neither true nor false there: a step that drives `draft:`
@@ -1343,6 +1425,40 @@ long a hung `auto-docs.yml` or `wiki-sync.yml` job would have held its
 `contents: write` token. Both are pinned in both directions by
 `tests/test_workflow_command_checks.py`, the first against the pre-fix
 `release.yml` job graph replanted verbatim.
+
+**A sixth class: an image that moves without a commit.** A `*-latest` label
+names whichever image GitHub points it at. Measured on pull request #434's
+runs of 2026-11-08 (42503992041, 42503992064 and 42503992236; head
+`a30e848`), by the `Runner Image` group of the job logs: all eight sampled
+`ubuntu-latest` jobs ran on `ubuntu-26.04` (gcc 15.2.0, clang 21.1.8, qemu
+10.2.1) while GitHub's own table still named 24.04 (gcc 13.3, clang 18) as the
+label's target, both sampled `macos-latest` jobs ran on `macos-26-arm64`, and
+all three sampled `windows-latest` jobs on `windows-2025-vs2026`. `main` at
+the signed v5.0.0 commit had stopped passing its own CI across the first of
+those moves (CHANGELOG, 2026-11-06), and GitHub's migration notice sat as an
+annotation on 92 of the run's 129 check runs. The rule: every job pins the
+image it runs on, and a floating label is tolerated only where the `main`
+ruleset holds it — its required status checks are job names, and the three
+matrices `ci.yml::test`, `ci-build-test.yml::c-library` and
+`ci-build-test.yml::python-package` render `${{ matrix.os }}` into theirs, so
+pinning those renames 24 required contexts, which only an administrator can
+do. Everything else is pinned to the measured image: 77 `runs-on:` lines and
+the `dudect.yml`, `release.yml` and `ci.yml::benchmark-regression` matrices to
+`ubuntu-26.04`, and the release wheel matrix's Windows row to
+`windows-2025-vs2026`. `check_floating_labels` in
+`tools/check_workflow_commands.py` fails any other floating label, reads the
+tolerance from `.github/required-status-checks.json` (the snapshot
+`check_required_contexts.py --live` keeps equal to the ruleset) and lists what
+it tolerates, so the day the administrator replaces those 24 contexts and the
+snapshot is refreshed, the three matrices fail here until they are pinned in
+the same change. A `-latest` label in the curated table is a label that
+exists, not one a job should name. Both directions are pinned by
+`tests/test_workflow_command_checks.py`, including a sweep of the tree with an
+empty ruleset that names exactly the seven (job, label) pairs the ruleset
+holds. The curated label table was re-verified against the runner-images
+README the same day: `macos-14` (every macOS 14 image retired on 2026-11-02)
+moved from supported to retired, and `ubuntu-26.04`, `ubuntu-26.04-arm`,
+`windows-2025-vs2026` and the other current labels were added.
 
 **Stated limitation.** GitHub publishes no API enumerating available hosted
 labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source

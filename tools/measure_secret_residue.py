@@ -44,6 +44,16 @@ What it measures, and what it does not
   and the scan, does see a freed unwiped copy, as a differential against the
   count with the key live.  ``tests/test_private_key_process_residue.py`` pins
   the private-key exports that way (Linux, CPython).
+* **Registers -- only by chance.**  A secret the native call leaves in a
+  call-clobbered vector register is not in memory until something saves the
+  register file; this scan counts it only if the dynamic linker's lazy-binding
+  trampoline did so before the interpreter overwrote the register.  Measured
+  2026-11-08: the HKDF-SHA3-256 output in ``%xmm8``/``%xmm9`` was one copy
+  under CPython 3.12 and none under 3.13 on the same library, and none under
+  3.12 with ``LD_BIND_NOW=1``; raising a signal from Python to force the save
+  came too late to see it.  ``tests/c/test_register_residue.c`` holds that
+  property directly, from C, in the instruction after each public call, on
+  x86-64 and AArch64.
 * Linux only (``/proc/self/mem``).
 
 This is a measurement instrument producing an inventory, not a gate with an

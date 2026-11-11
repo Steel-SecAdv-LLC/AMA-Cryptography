@@ -42,6 +42,7 @@
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -53,6 +54,7 @@
 #if defined(__AVX512F__) && defined(__AVX512VL__)
 
 #include <immintrin.h>
+#include "../internal/ama_ct_barrier.h"
 
 /* ============================================================================
  * Keccak-f[1600] round constants (FIPS 202 §3.2.5)
@@ -112,10 +114,19 @@ void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
      * Keccak states.  set_epi64x is { e3, e2, e1, e0 } little-endian
      * across the YMM, so element 0 ends up at the low quadword — same
      * convention as the AVX2 4-way kernel. */
+    /* Integer domain only, as in the AVX2 kernel (keccak_x4_pack there):
+     * `_mm256_set_epi64x` of memory words was lowered by clang 18 to
+     * VMOVLHPS, an FP-domain shuffle Intel's Data Operand Independent Timing
+     * list does not include (tools/check_ct_operand.py --static).  Each word
+     * goes through a general-purpose register into VMOVQ/VPINSRQ/VINSERTI128. */
     for (int i = 0; i < 25; i++) {
-        S[i] = _mm256_set_epi64x(
-            (int64_t)states[3][i], (int64_t)states[2][i],
-            (int64_t)states[1][i], (int64_t)states[0][i]);
+        const __m128i lo = _mm_insert_epi64(
+            _mm_cvtsi64_si128((long long)ama_ct_value_barrier_u64(states[0][i])),
+            (long long)ama_ct_value_barrier_u64(states[1][i]), 1);
+        const __m128i hi = _mm_insert_epi64(
+            _mm_cvtsi64_si128((long long)ama_ct_value_barrier_u64(states[2][i])),
+            (long long)ama_ct_value_barrier_u64(states[3][i]), 1);
+        S[i] = _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
     }
 
     for (int round = 0; round < 24; round++) {
@@ -135,7 +146,17 @@ void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
         __m256i D3 = _mm256_xor_si256(C2, _mm256_rol_epi64(C4, 1));
         __m256i D4 = _mm256_xor_si256(C3, _mm256_rol_epi64(C0, 1));
 
-        __m256i Darr[5] = { D0, D1, D2, D3, D4 };
+        /* Unrolled under clang so S stays in SSA values: as a loop over the
+         * S array this was a load-xor-store pass, which clang 18 moved as
+         * VMOVAPS/VXORPS (neither on Intel's DOIT list;
+         * tools/check_ct_operand.py --static).  Unrolled, each XOR feeds the
+         * Rho VPROLQ below.  Not under gcc: it keeps this loop in the integer
+         * domain as written, and unrolled it spills enough to realign the
+         * frame and leave through LEAVE (also unlisted). */
+        const __m256i Darr[5] = { D0, D1, D2, D3, D4 };
+#if defined(__clang__)
+#pragma GCC unroll 25
+#endif
         for (int i = 0; i < 25; i++) {
             S[i] = _mm256_xor_si256(S[i], Darr[i % 5]);
         }
@@ -191,12 +212,12 @@ void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
 
     /* Unpack back to per-state arrays. */
     for (int i = 0; i < 25; i++) {
-        _Alignas(32) uint64_t tmp[4];
-        _mm256_store_si256((__m256i *)tmp, S[i]);
-        states[0][i] = tmp[0];
-        states[1][i] = tmp[1];
-        states[2][i] = tmp[2];
-        states[3][i] = tmp[3];
+        const __m128i lo = _mm256_castsi256_si128(S[i]);
+        const __m128i hi = _mm256_extracti128_si256(S[i], 1);
+        states[0][i] = ama_ct_value_barrier_u64((uint64_t)_mm_cvtsi128_si64(lo));
+        states[1][i] = ama_ct_value_barrier_u64((uint64_t)_mm_extract_epi64(lo, 1));
+        states[2][i] = ama_ct_value_barrier_u64((uint64_t)_mm_cvtsi128_si64(hi));
+        states[3][i] = ama_ct_value_barrier_u64((uint64_t)_mm_extract_epi64(hi, 1));
     }
 }
 

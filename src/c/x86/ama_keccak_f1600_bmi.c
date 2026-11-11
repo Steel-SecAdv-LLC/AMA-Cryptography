@@ -57,6 +57,7 @@
  * instructions on every part that reports them.
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) \
     && !defined(_MSC_VER)
 
@@ -80,6 +81,7 @@ void ama_keccak_f1600_bmi(uint64_t state[25]) {
     }
 
     AMA_KECCAK_STORE_A(state);
+    AMA_KECCAK_WIPE_LOCALS;
 }
 
 #else

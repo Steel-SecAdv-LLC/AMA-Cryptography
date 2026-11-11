@@ -178,8 +178,8 @@ jobs:
   # pass rather than merely compile.  Fail-closed: no continue-on-error.
   c-library-no-native-pqc:
     name: C Library (AMA_USE_NATIVE_PQC=OFF configuration guard)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
 
@@ -257,6 +257,62 @@ jobs:
               print("  listed, not exported:", sorted(listed - exported))
               sys.exit(1)
           PY
+
+      - name: Stack-scrub tests on the Windows x64 build (MinGW, run under Wine)
+        # The two stack tests ran on Linux only, and the Windows x64 calling
+        # convention does two things neither System V nor AAPCS64 does: a
+        # caller reserves a 32-byte home area above every return address,
+        # which the callee may write, and a frame of a page or more is probed
+        # by a helper that pushes a call-clobbered register.  Measured on this
+        # build the first time it was run (2026-11-10, gcc 13.2, Wine 9.0): 29
+        # of 132 verdicts of test_stack_scrub failed with up to eight
+        # input-dependent bytes, and ama_secure_stack_wipe() left 32 bytes of
+        # its own frame unwritten (src/c/ama_consttime.c, ama_stack_wipe_cap).
+        # Native PQC on, so that every row runs; the tests link the static
+        # test archive, so no DLL export is needed.  This is the GNU compiler
+        # on Windows.  MSVC, which builds the wheels, has no inline assembly
+        # on x64 and these tests cannot be compiled by it.
+        #
+        # An exit of 77 is the tests' own skip and fails the step: this lane
+        # installs what they need, so a skip here is a defect (INVARIANT-47).
+        shell: bash
+        env:
+          WINEDEBUG: "-all"
+          WINEDLLOVERRIDES: "mscoree,mshtml="
+        run: |
+          set -euo pipefail
+          .github/scripts/apt-install.sh wine64
+          cmake -S . -B build-mingw-tests \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-mingw-tests --target test_stack_wipe_coverage test_stack_scrub -j4
+          wine=""
+          for candidate in wine64 wine /usr/lib/wine/wine64 /usr/lib/wine/wine; do
+            if command -v "$candidate" > /dev/null; then
+              wine=$(command -v "$candidate")
+              break
+            fi
+          done
+          if [ -z "$wine" ]; then
+            echo "::error::no Wine loader found after installing wine64"
+            exit 1
+          fi
+          # The stack protector's runtime, where this toolchain ships it as a DLL.
+          ssp=$(x86_64-w64-mingw32-gcc -print-file-name=libssp-0.dll)
+          if [ -f "$ssp" ]; then
+            WINEPATH=$(dirname "$ssp")
+            export WINEPATH
+          fi
+          export WINEPREFIX="$RUNNER_TEMP/wineprefix"
+          # A Windows program ends its lines CRLF; pipefail keeps Wine's exit status.
+          "$wine" build-mingw-tests/bin/test_stack_wipe_coverage.exe | tr -d '\r' | tee "$RUNNER_TEMP/coverage.txt"
+          "$wine" build-mingw-tests/bin/test_stack_scrub.exe | tr -d '\r' | tee "$RUNNER_TEMP/scrub.txt"
+          grep -q '^ok   the home area: 0 of 4 word(s) not zero after a wipe (4 of 4 written' "$RUNNER_TEMP/coverage.txt"
+          grep -q '^every wipe covers its depth' "$RUNNER_TEMP/coverage.txt"
+          grep -q 'entry point(s): cleared, and input-independent$' "$RUNNER_TEMP/scrub.txt"
 
       - name: Assert the default is still ON
         # A regression that flipped the default would make the job above green
@@ -792,7 +848,7 @@ jobs:
   # Linting and Code Quality
   lint:
     name: Lint and Format Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -843,7 +899,7 @@ jobs:
   # Security Audit
   security:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -914,7 +970,7 @@ jobs:
   # The two checks must remain independently required in branch rulesets.
   benchmark-regression:
     name: Benchmark Regression Detection (Wheel Install)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     needs: [c-library]
     steps:
@@ -1019,7 +1075,7 @@ jobs:
   # exactly the class of regression it exists to catch.
   instruction-count-regression:
     name: Instruction Count Regression (A/B)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     needs: [c-library]
     # Retired instruction count is a property of the binary and its input, not
@@ -1043,7 +1099,8 @@ jobs:
     # acknowledgements file records such a move with its cause; the band is
     # not widened for it.
     #
-    # A/B rather than a stored baseline: ubuntu-latest spans two CPU classes
+    # A/B rather than a stored baseline: GitHub's x86-64 fleet (ubuntu-latest when
+    # this was measured, ubuntu-26.04 now) spans two CPU classes
     # about 1.45x apart, and a recorded baseline would fail closed on whichever
     # class did not record it. Both builds are measured on THIS runner in THIS
     # job, so the machine cancels out entirely.
@@ -1217,7 +1274,7 @@ jobs:
 
   docker:
     name: Docker Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # Job-level env carries only a BOOLEAN, never the secrets themselves.
     # `secrets.*` is not allowed in a step-level `if:`, so the optional-login
@@ -1370,7 +1427,7 @@ jobs:
       - benchmark-regression
       - instruction-count-regression
       - docker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
       - name: Fail unless every required job succeeded

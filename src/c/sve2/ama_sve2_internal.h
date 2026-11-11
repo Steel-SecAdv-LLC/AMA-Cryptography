@@ -29,6 +29,7 @@
 #include <stdint.h>
 
 #include "ama_cryptography.h"
+#include "../internal/ama_simd_clear_regs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,27 +57,27 @@ extern "C" {
 /* ============================================================================
  * SHA-3 / Keccak
  * ============================================================================ */
-void        ama_keccak_f1600_sve2(uint64_t state[25]);
+AMA_SIMD_CLEAR_REGS void        ama_keccak_f1600_sve2(uint64_t state[25]);
 
 /* ============================================================================
  * Kyber (ML-KEM)
  * ============================================================================ */
-void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_poly_add_sve2(int16_t r[256],
+AMA_SIMD_CLEAR_REGS void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+AMA_SIMD_CLEAR_REGS void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+AMA_SIMD_CLEAR_REGS void ama_kyber_poly_add_sve2(int16_t r[256],
                              const int16_t a[256],
                              const int16_t b[256]);
-void ama_kyber_poly_sub_sve2(int16_t r[256],
+AMA_SIMD_CLEAR_REGS void ama_kyber_poly_sub_sve2(int16_t r[256],
                              const int16_t a[256],
                              const int16_t b[256]);
-void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
+AMA_SIMD_CLEAR_REGS void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
 
 /* ============================================================================
  * Dilithium (ML-DSA)
  * ============================================================================ */
-void ama_dilithium_ntt_sve2(int32_t poly[256], const int32_t zetas[256]);
-void ama_dilithium_invntt_sve2(int32_t poly[256], const int32_t zetas[256]);
-void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
+AMA_SIMD_CLEAR_REGS void ama_dilithium_ntt_sve2(int32_t poly[256], const int32_t zetas[256]);
+AMA_SIMD_CLEAR_REGS void ama_dilithium_invntt_sve2(int32_t poly[256], const int32_t zetas[256]);
+AMA_SIMD_CLEAR_REGS void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
                                        const int32_t a[256],
                                        const int32_t b[256]);
 

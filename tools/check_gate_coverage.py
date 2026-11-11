@@ -118,7 +118,7 @@ WORKFLOW_DIR = Path(".github/workflows")
 #: 15 since the five no-op twin workflows were removed (see
 #: check_pr_relevance); each gate they twinned now decides relevance itself.
 MIN_WORKFLOWS = 15
-MIN_JOBS_INSPECTED = 85
+MIN_JOBS_INSPECTED = 87
 
 
 def _load(path: Path) -> dict[Any, Any]:

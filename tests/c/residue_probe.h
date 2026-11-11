@@ -162,42 +162,15 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__has_feature)
-#  if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) \
-      || __has_feature(thread_sanitizer)
-#    define AMA_PROBE_IS_INSTRUMENTED 1
-#  endif
-#endif
-#if !defined(AMA_PROBE_IS_INSTRUMENTED) && (defined(__SANITIZE_ADDRESS__) \
-    || defined(__SANITIZE_MEMORY__) || defined(__SANITIZE_THREAD__))
-#  define AMA_PROBE_IS_INSTRUMENTED 1
-#endif
-#if !defined(AMA_PROBE_IS_INSTRUMENTED)
-#  define AMA_PROBE_IS_INSTRUMENTED 0
-#endif
+#include "residue_frame.h"
 
 /* Everything below is the probe itself, compiled only where it runs: an
  * instrumented build returns 77 before calling any of it, and would
  * otherwise carry every helper as an unused function. */
 #if !AMA_PROBE_IS_INSTRUMENTED
 
-#if defined(__GNUC__) || defined(__clang__)
-#  define RESIDUE_NOINLINE __attribute__((noinline))
-#  define RESIDUE_KEEP_LIVE(buf) __asm__ __volatile__("" : : "r"(buf) : "memory")
-#elif defined(_MSC_VER)
-#  define RESIDUE_NOINLINE __declspec(noinline)
-#  define RESIDUE_KEEP_LIVE(buf) ((void)(buf)[0])
-#else
-#  define RESIDUE_NOINLINE
-#  define RESIDUE_KEEP_LIVE(buf) ((void)(buf)[0])
-#endif
-
 /* The depth the probe covers below the probed call's entry frame. */
 #define SCAN_BYTES 32768u
-
-/* The pattern the poison writes.  Distinct from every needle byte the two
- * harnesses derive and from the sentinel. */
-#define RESIDUE_POISON_BYTE 0x5Au
 
 /* The most the window may fall short of SCAN_BYTES before the harness calls
  * itself defective: the caller's frame, the scanner's frame and the mark
@@ -205,10 +178,6 @@
  * never anything like 4 KiB.  A shortfall past this means a layout the
  * probe was not written for. */
 #define RESIDUE_WINDOW_SLACK_BYTES 4096u
-
-/* Every probed call runs below a buffer of this size its wrapper keeps live
- * (see THE GAP above). */
-#define GAP_BYTES 512u
 
 /* The span the last poison_stack() wrote, and the span the last scan read;
  * integers, because both name dead frames. */
@@ -227,10 +196,17 @@ RESIDUE_NOINLINE static void poison_stack(void) {
 }
 
 /* The mark the window ends at: the address of a local in a leaf BELOW the
- * scanner.  Everything the scanner's own frame holds — its saved registers
- * above all, which on AArch64 carry whatever needle the caller had live —
+ * scanner.  Everything the scanner's own frame holds -- its saved registers
+ * above all, which on AArch64 carry whatever needle the caller had live --
  * lies above this address and outside the window (defect (a) above).  The
- * leaf touches no needle, so nothing it spills can be one. */
+ * leaf touches no needle, so nothing it spills can be one.
+ *
+ * How far under the scanner's stack pointer the local sits is the compiler's
+ * choice (one byte to twenty-eight, residue_frame.h), and a needle search
+ * does not depend on it: the probed call ran a whole GAP below, and COVERAGE
+ * fails a window that has come apart from the poison.  A harness that has
+ * to read from the caller's stack pointer exactly takes
+ * RESIDUE_STACK_POINTER (residue_frame.h) and not this. */
 RESIDUE_NOINLINE static void residue_stack_mark(uintptr_t *out) {
     volatile uint8_t mark = 0;
     *out = (uintptr_t)(const void *)&mark;

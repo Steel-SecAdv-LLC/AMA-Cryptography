@@ -65,11 +65,14 @@
  * require for secp256k1.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_once.h"
 #include "internal/ama_ct_barrier.h"
@@ -709,7 +712,7 @@ static void nistp_jac_double(nistp_jac *r, const nistp_jac *p, const nistp_curve
     nistp_mod_add(t1, t1, t1, m, nl);                /* 8*gamma^2 */
     nistp_mod_sub(out.Y, out.Y, t1, m, nl);
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 
 }
 
@@ -811,7 +814,7 @@ static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,
         out.Z[k] = (p->Z[k] & mask_q) | (out.Z[k] & ~mask_q);
     }
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 
 }
 
@@ -874,7 +877,7 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
     unsigned w, i, limb;
 
     nistp_jac_set_infinity(&table[0]);
-    table[1] = *base;
+    memcpy(&table[1], base, sizeof(table[1]));
     for (i = 2; i < NISTP_TABLE_SIZE; i++)
         nistp_jac_add(&table[i], &table[i - 1], base, c);
 
@@ -905,7 +908,7 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
         nistp_jac_add(&acc, &acc, &sel, c);
     }
 
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
 
     ama_secure_memzero(table, sizeof(table));
     ama_secure_memzero(&acc, sizeof(acc));
@@ -1023,7 +1026,7 @@ static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
 
     nistp_generator(&base[0], c);
     for (j = 1; j < NISTP_COMB_BLOCKS; j++) {
-        base[j] = base[j - 1];
+        memcpy(&base[j], &base[j - 1], sizeof(base[j]));
         for (b = 0; b < e; b++)
             nistp_jac_double(&base[j], &base[j], c);
     }
@@ -1099,7 +1102,7 @@ static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
         nistp_jac_add(&acc, &acc, &sel, c);
     }
 
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
     ama_secure_memzero(&acc, sizeof(acc));
     ama_secure_memzero(&sel, sizeof(sel));
 }
@@ -1192,7 +1195,7 @@ static void nistp_jac_add_affine_vartime(nistp_jac *r, const nistp_jac *p,
     nistp_mod_sub(out.Z, out.Z, z1z1, m, nl);
     nistp_mod_sub(out.Z, out.Z, hh, m, nl);
 
-    *r = out;
+    memcpy(r, &out, sizeof(*r));
 }
 
 /**
@@ -1254,7 +1257,7 @@ static void nistp_shamir(nistp_jac *out,
                 nistp_jac_add_affine_vartime(&acc, &acc, tx[idx], ty[idx], c);
         }
     }
-    *out = acc;
+    memcpy(out, &acc, sizeof(*out));
 }
 
 /* ============================================================================
@@ -1420,9 +1423,9 @@ static int nistp_scalar_is_high(const uint64_t *s, const nistp_curve *c) {
 static void nistp_hmac(unsigned hlen, const uint8_t *key, size_t klen,
                        const uint8_t *msg, size_t mlen, uint8_t *out) {
     switch (hlen) {
-        case 32: ama_hmac_sha256(key, klen, msg, mlen, out); break;
-        case 48: (void)ama_hmac_sha384(key, klen, msg, mlen, out); break;
-        default: (void)ama_hmac_sha512(key, klen, msg, mlen, out); break;
+        case 32: ama_hmac_sha256_inner(key, klen, msg, mlen, out); break;
+        case 48: (void)ama_hmac_sha384_inner(key, klen, msg, mlen, out); break;
+        default: (void)ama_hmac_sha512_inner(key, klen, msg, mlen, out); break;
     }
 }
 
@@ -1666,6 +1669,8 @@ AMA_API const char *ama_nistp_curve_name(ama_nist_curve_t curve) {
     return c ? c->name : NULL;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_pubkey_from_privkey_body(ama_nist_curve_t curve, const uint8_t *private_key, uint8_t *public_key);
+
 /* ============================================================================
  * PUBLIC API — keys
  * ============================================================================ */
@@ -1673,6 +1678,17 @@ AMA_API const char *ama_nistp_curve_name(ama_nist_curve_t curve) {
 AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
                                                   const uint8_t *private_key,
                                                   uint8_t *public_key) {
+    ama_error_t rc = ama_nistp_pubkey_from_privkey_body(curve, private_key, public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_NISTP_BYTES);
+    return rc;
+}
+
+/* ama_nistp_pubkey_from_privkey() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+static ama_error_t ama_nistp_pubkey_from_privkey_inner(ama_nist_curve_t curve,
+                                                       const uint8_t *private_key,
+                                                       uint8_t *public_key) {
     const nistp_curve *c = nistp_lookup(curve);
     uint64_t d[AMA_NISTP_MAX_LIMBS];
     uint64_t x[AMA_NISTP_MAX_LIMBS], y[AMA_NISTP_MAX_LIMBS];
@@ -1723,7 +1739,23 @@ done:
     return rc;
 }
 
+/* ama_nistp_pubkey_from_privkey_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_pubkey_from_privkey_body(ama_nist_curve_t curve, const uint8_t *private_key, uint8_t *public_key) {
+    return ama_nistp_pubkey_from_privkey_inner(curve, private_key, public_key);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_keypair_body(ama_nist_curve_t curve, uint8_t *private_key, uint8_t *public_key);
+
 AMA_API ama_error_t ama_nistp_keypair(ama_nist_curve_t curve,
+                                      uint8_t *private_key,
+                                      uint8_t *public_key) {
+    ama_error_t rc = ama_nistp_keypair_body(curve, private_key, public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_NISTP_BYTES);
+    return rc;
+}
+
+/* ama_nistp_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_keypair_body(ama_nist_curve_t curve,
                                       uint8_t *private_key,
                                       uint8_t *public_key) {
     const nistp_curve *c = nistp_lookup(curve);
@@ -1748,7 +1780,7 @@ AMA_API ama_error_t ama_nistp_keypair(ama_nist_curve_t curve,
             candidate[0] = (uint8_t)(candidate[0] & ((1u << (c->qbits % 8u)) - 1u));
         if (nistp_scalar_load(d, candidate, c) && !nistp_is_zero(d, c->nlimbs)) {
             memcpy(private_key, candidate, c->nbytes);
-            rc = ama_nistp_pubkey_from_privkey(curve, private_key, public_key);
+            rc = ama_nistp_pubkey_from_privkey_inner(curve, private_key, public_key);
             goto done;
         }
     }
@@ -1902,11 +1934,23 @@ done:
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdh_body(ama_nist_curve_t curve, const uint8_t *private_key, const uint8_t *peer_public_key, uint8_t *shared_secret);
+
 /* ============================================================================
  * PUBLIC API — ECDH (SP 800-56A §5.7.1.2, cofactor 1)
  * ============================================================================ */
 
 AMA_API ama_error_t ama_nistp_ecdh(ama_nist_curve_t curve,
+                                   const uint8_t *private_key,
+                                   const uint8_t *peer_public_key,
+                                   uint8_t *shared_secret) {
+    ama_error_t rc = ama_nistp_ecdh_body(curve, private_key, peer_public_key, shared_secret);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_NISTP_BYTES);
+    return rc;
+}
+
+/* ama_nistp_ecdh(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdh_body(ama_nist_curve_t curve,
                                    const uint8_t *private_key,
                                    const uint8_t *peer_public_key,
                                    uint8_t *shared_secret) {
@@ -2177,7 +2221,19 @@ static ama_error_t nistp_sign_dispatch(const nistp_curve *c,
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdsa_sign_raw_ex_body(ama_nist_curve_t curve, const uint8_t *digest, size_t digest_len, const uint8_t *private_key, uint8_t *signature, uint32_t flags);
+
 AMA_API ama_error_t ama_nistp_ecdsa_sign_raw_ex(ama_nist_curve_t curve,
+                                                const uint8_t *digest, size_t digest_len,
+                                                const uint8_t *private_key,
+                                                uint8_t *signature, uint32_t flags) {
+    ama_error_t rc = ama_nistp_ecdsa_sign_raw_ex_body(curve, digest, digest_len, private_key, signature, flags);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_NISTP_BYTES);
+    return rc;
+}
+
+/* ama_nistp_ecdsa_sign_raw_ex(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdsa_sign_raw_ex_body(ama_nist_curve_t curve,
                                                 const uint8_t *digest, size_t digest_len,
                                                 const uint8_t *private_key,
                                                 uint8_t *signature, uint32_t flags) {
@@ -2190,7 +2246,20 @@ AMA_API ama_error_t ama_nistp_ecdsa_sign_raw_ex(ama_nist_curve_t curve,
                                signature, signature + c->nbytes);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdsa_sign_ex_body(ama_nist_curve_t curve, const uint8_t *digest, size_t digest_len, const uint8_t *private_key, uint8_t *signature, size_t *signature_len, uint32_t flags);
+
 AMA_API ama_error_t ama_nistp_ecdsa_sign_ex(ama_nist_curve_t curve,
+                                            const uint8_t *digest, size_t digest_len,
+                                            const uint8_t *private_key,
+                                            uint8_t *signature, size_t *signature_len,
+                                            uint32_t flags) {
+    ama_error_t rc = ama_nistp_ecdsa_sign_ex_body(curve, digest, digest_len, private_key, signature, signature_len, flags);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_NISTP_BYTES);
+    return rc;
+}
+
+/* ama_nistp_ecdsa_sign_ex(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdsa_sign_ex_body(ama_nist_curve_t curve,
                                             const uint8_t *digest, size_t digest_len,
                                             const uint8_t *private_key,
                                             uint8_t *signature, size_t *signature_len,

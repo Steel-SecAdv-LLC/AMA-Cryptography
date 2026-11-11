@@ -55,10 +55,12 @@
  * primitives FROST uses) take PUBLIC scalars only and say so at each site.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_scrubbed_inner.h"
 #include "internal/ama_stack_wipe.h"
 #include "internal/ama_ed25519_canonical.h"
 #include "internal/ama_ed25519_backend.h"
@@ -958,6 +960,8 @@ static ama_error_t ed25519_sign_core(
  * ED25519 API FUNCTIONS
  * ============================================================================ */
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_keypair_body(uint8_t public_key[32], uint8_t secret_key[64]);
+
 /**
  * Generate Ed25519 keypair
  *
@@ -967,6 +971,13 @@ static ama_error_t ed25519_sign_core(
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
+    ama_error_t rc = ama_ed25519_keypair_body(public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+    return rc;
+}
+
+/* ama_ed25519_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_keypair_body(uint8_t public_key[32], uint8_t secret_key[64]) {
     uint8_t hash[64];
 
     if (!public_key || !secret_key) {
@@ -988,13 +999,14 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
     memcpy(secret_key + 32, public_key, 32);
 
     ama_secure_memzero(hash, sizeof(hash));
-    /* INVARIANT-6 backstop: the comb and the scalar arithmetic spill limbs of
-     * `a` into frames no named scrub reaches (measured by
-     * tests/c/test_ed25519_stack_residue.c).  Same construction and reason as
-     * the AEAD entry points, twice the depth: see internal/ama_stack_wipe.h. */
-    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);
+    /* INVARIANT-6: the comb and the scalar arithmetic spill limbs of `a`
+     * into frames no named scrub reaches (measured by
+     * tests/c/test_ed25519_stack_residue.c).  The entry point clears the
+     * stack this body used: see internal/ama_stack_wipe.h. */
     return AMA_SUCCESS;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_sign_body(uint8_t signature[64], const uint8_t *message, size_t message_len, const uint8_t secret_key[64]);
 
 /**
  * Sign a message with Ed25519
@@ -1006,6 +1018,18 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_ed25519_sign(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t secret_key[64]
+) {
+    ama_error_t rc = ama_ed25519_sign_body(signature, message, message_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+    return rc;
+}
+
+/* ama_ed25519_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_sign_body(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -1109,10 +1133,11 @@ ama_error_t ama_ed25519_sign(
      * buffer whose exemption has to be re-derived by the next reader. */
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(derived_a, sizeof(derived_a));
-    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
 
     return rc;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_expand_secret_key_body(uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES], const uint8_t secret_key[64]);
 
 /**
  * Expand a 64-byte secret key into the 128-byte signing form
@@ -1127,6 +1152,16 @@ ama_error_t ama_ed25519_sign(
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_ed25519_expand_secret_key(
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
+    const uint8_t secret_key[64]
+) {
+    ama_error_t rc = ama_ed25519_expand_secret_key_body(expanded, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+    return rc;
+}
+
+/* ama_ed25519_expand_secret_key(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_expand_secret_key_body(
     uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
     const uint8_t secret_key[64]
 ) {
@@ -1170,9 +1205,10 @@ ama_error_t ama_ed25519_expand_secret_key(
     }
 
     ama_secure_memzero(hash, sizeof(hash));
-    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
     return rc;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_sign_expanded_body(uint8_t signature[64], const uint8_t *message, size_t message_len, const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]);
 
 /**
  * Sign a message with an expanded Ed25519 key
@@ -1189,6 +1225,18 @@ ama_error_t ama_ed25519_expand_secret_key(
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_ed25519_sign_expanded(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]
+) {
+    ama_error_t rc = ama_ed25519_sign_expanded_body(signature, message, message_len, expanded);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+    return rc;
+}
+
+/* ama_ed25519_sign_expanded(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_sign_expanded_body(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -1212,7 +1260,6 @@ ama_error_t ama_ed25519_sign_expanded(
                            key_mismatch);
 
     ama_secure_memzero(tag, sizeof(tag));
-    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
     return rc;
 }
 
@@ -1465,6 +1512,8 @@ ama_error_t ama_ed25519_batch_verify(
  * are 32-byte little-endian Y||sign(X).
  * ====================================================================== */
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_point_from_scalar_body(uint8_t point[32], const uint8_t scalar[32]);
+
 /**
  * Raw scalar-basepoint multiplication: point = scalar * G.
  *
@@ -1485,16 +1534,31 @@ ama_error_t ama_ed25519_batch_verify(
  */
 AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
                                                   const uint8_t scalar[32]) {
+    ama_error_t rc = ama_ed25519_point_from_scalar_body(point, scalar);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+    return rc;
+}
+
+/* ama_ed25519_point_from_scalar() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_ed25519_point_from_scalar_inner(uint8_t point[32],
+                                                const uint8_t scalar[32]) {
     /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
      * rather than a segfault.  See include/ama_cryptography.h. */
     if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     ed25519_scalarmult_base(point, scalar);
-    /* Same backstop as ama_ed25519_keypair, and for the same measured reason:
-     * without it a 21-bit limb of the scalar survived in a dead frame of the
-     * reduction (tests/c/test_ed25519_stack_residue.c), and a FROST nonce
-     * plus the published share z_i gives the long-term share s_i. */
-    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);
+    /* The entry point clears the stack this used, as for ama_ed25519_keypair
+     * and for the same measured reason: without it a 21-bit limb of the
+     * scalar survived in a dead frame of the reduction
+     * (tests/c/test_ed25519_stack_residue.c), and a FROST nonce plus the
+     * published share z_i gives the long-term share s_i. */
     return AMA_SUCCESS;
+}
+
+/* ama_ed25519_point_from_scalar_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ed25519_point_from_scalar_body(uint8_t point[32], const uint8_t scalar[32]) {
+    return ama_ed25519_point_from_scalar_inner(point, scalar);
 }
 
 /**
@@ -1574,6 +1638,8 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY void ama_ed25519_sc_reduce_body(uint8_t s[64]);
+
 /**
  * Reduce a 64-byte scalar modulo the Ed25519 group order l.
  * Input: 64-byte little-endian integer. Output written to first 32 bytes.
@@ -1581,8 +1647,23 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
  * @param s  In/out: 64-byte buffer, reduced result in s[0..31]
  */
 AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]) {
+    ama_ed25519_sc_reduce_body(s);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+}
+
+/* ama_ed25519_sc_reduce() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_ed25519_sc_reduce_inner(uint8_t s[64]) {
     sc25519_reduce(s);
 }
+
+/* ama_ed25519_sc_reduce_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_ed25519_sc_reduce_body(uint8_t s[64]) {
+    ama_ed25519_sc_reduce_inner(s);
+}
+
+static AMA_SCRUBBED_BODY void ama_ed25519_sc_muladd_body(uint8_t s[32], const uint8_t a[32], const uint8_t b[32], const uint8_t c[32]);
 
 /**
  * Scalar multiply-add: s = (a + b * c) mod l.
@@ -1597,8 +1678,26 @@ AMA_API void ama_ed25519_sc_muladd(uint8_t s[32],
                            const uint8_t a[32],
                            const uint8_t b[32],
                            const uint8_t c[32]) {
+    ama_ed25519_sc_muladd_body(s, a, b, c);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ED25519_BYTES);
+}
+
+/* ama_ed25519_sc_muladd() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_ed25519_sc_muladd_inner(uint8_t s[32],
+                                 const uint8_t a[32],
+                                 const uint8_t b[32],
+                                 const uint8_t c[32]) {
     sc25519_muladd(s, a, b, c);
 }
+
+/* ama_ed25519_sc_muladd_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_ed25519_sc_muladd_body(uint8_t s[32], const uint8_t a[32], const uint8_t b[32], const uint8_t c[32]) {
+    ama_ed25519_sc_muladd_inner(s, a, b, c);
+}
+
+static AMA_SCRUBBED_BODY void ama_ed25519_sha512_body(const uint8_t *data, size_t len, uint8_t out[64]);
 
 /**
  * SHA-512 hash (exposed for FROST challenge computation).
@@ -1608,7 +1707,21 @@ AMA_API void ama_ed25519_sc_muladd(uint8_t s[32],
  */
 AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len,
                                 uint8_t out[64]) {
+    ama_ed25519_sha512_body(data, len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA512_BYTES);
+}
+
+/* ama_ed25519_sha512() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_ed25519_sha512_inner(const uint8_t *data, size_t len,
+                              uint8_t out[64]) {
     sha512(data, len, out);
+}
+
+/* ama_ed25519_sha512_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_ed25519_sha512_body(const uint8_t *data, size_t len, uint8_t out[64]) {
+    ama_ed25519_sha512_inner(data, len, out);
 }
 
 #ifdef AMA_TESTING_MODE

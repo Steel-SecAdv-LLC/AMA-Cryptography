@@ -704,6 +704,10 @@ class TestCalibration:
             # The private-key PEM / JWK codec, and BIP32's private child step.
             "base64",
             "secp256k1-seckey",
+            # HKDF over SHA3-256 and HMAC-SHA-2; the hardware AEAD tiers
+            # (AES-NI + PCLMULQDQ GCM, AVX2 ChaCha20 x8), unpinned and pinned.
+            "hkdf",
+            "aead-bulk",
         }
     )
 
@@ -922,6 +926,8 @@ ENTRY_POINTS: dict[str, str] = {
     # Decode is the side that reads secret CHARACTERS; the driver round-trips.
     "base64": "ama_base64_decode",
     "secp256k1-seckey": "ama_secp256k1_seckey_tweak_add",
+    "hkdf": "ama_hkdf_sha256",
+    "aead-bulk": "ama_aes256_gcm_encrypt",
 }
 
 
@@ -1000,6 +1006,14 @@ class TestEveryTargetMeasuresItsEntryPoint:
 #: fail a correct implementation; the taint target is its blocking instrument.
 TAINT_ONLY_ENTRY_POINTS: dict[str, str] = {
     "slhdsa-sign": "ama_slhdsa_sign",
+    # Rejection sampling (FIPS 204 Algorithm 7) varies the work per key and
+    # message; ExpandA from rho varies key generation's.
+    "ml-dsa-sign": "ama_ml_dsa_sign_ctx",
+    # SampleNTT rejection-samples A from rho, which derives from the seed.
+    "ml-kem-keygen": "ama_kyber_keypair_from_seed",
+    # Binding factors hash the group public key, the image of the secret, and
+    # feed the variable-time public-point multiply.
+    "frost-sign": "ama_frost_round2_sign",
 }
 
 
@@ -1079,6 +1093,174 @@ class TestTheSlhDsaTaintTarget:
 
 
 #: A spelled-out or numeric count, as prose states one ("the other thirteen").
+_PROFILE = """\
+# callgrind format
+version: 1
+creator: callgrind-3.22.0
+events: Ir
+fl=(1) driver.c
+fn=(1) main
+12 40
+cfn=(2) ama_chacha20poly1305_encrypt
+calls=1 0
+12 9000
+fn=(2)
+30 100
+cfn=(3) ama_chacha20_block_x8_avx2
+calls=1 0
+31 8000
+fn=(3)
+40 8000
+fn=(4) walk'2
+50 7
+"""
+
+
+class TestTheKernelATargetNamesMustHaveRun:
+    """The dispatcher confirming a pin says what it wired, not what ran.
+
+    ``aead-bulk`` named the AVX2 and NEON ChaCha20 x8 kernels and ran
+    256-byte messages, which never enter them; its count and taint lanes
+    passed over the scalar cipher (Copilot review, 2026-11-08).  Each lane now
+    reads which functions executed and refuses a run that missed a kernel its
+    target and pin name.  Measured 2026-11-10 on the real drivers and library
+    (x86-64, Valgrind 3.22): as dispatched and pinned to aes-gcm-aesni, both
+    lanes pass; with the two drivers put back to 256 bytes, both exit 2 naming
+    ``ama_chacha20_block_x8_avx2``.  These tests hold the decision; CI's own
+    runs of the target are what execute it against the library.
+    """
+
+    def test_a_profile_names_what_ran(self, tool: ModuleType, tmp_path: Path) -> None:
+        profile = tmp_path / "callgrind.out"
+        profile.write_text(_PROFILE, encoding="utf-8")
+        # Subjects and callees both, each name once however often it recurs,
+        # and a recursion level is not another function.
+        assert tool.executed_functions(profile) == {
+            "main",
+            "ama_chacha20poly1305_encrypt",
+            "ama_chacha20_block_x8_avx2",
+            "walk",
+        }
+
+    def test_which_kernels_a_run_must_reach(self, tool: ModuleType) -> None:
+        assert tool.required_kernels("ecdsa", None, "x86_64") == ()
+        assert tool.required_kernels("ecdsa", "kyber-ntt-avx2", "x86_64") == ()
+        assert tool.required_kernels("aead-bulk", None, "x86_64") == ("ama_chacha20_block_x8_avx2",)
+        # A target that names kernels, on an ISA it names none for.
+        assert tool.required_kernels("aead-bulk", None, "riscv64") == ()
+        # A pin nothing was named for is not "nothing to check".
+        assert tool.required_kernels("aead-bulk", "chacha20-avx2x8", "x86_64") is None
+        for target, rows in tool._REQUIRED_KERNELS.items():
+            assert target in tool._DRIVERS or target in tool._TAINT_DRIVERS
+            assert None in rows, f"{target} names no kernel for the dispatched run"
+
+    @pytest.mark.parametrize(
+        ("pin", "executed", "refused"),
+        [
+            (None, {"main", "ama_chacha20_block_x8_avx2"}, None),
+            (None, {"main", "ama_chacha20poly1305_encrypt"}, "did not execute"),
+            (None, None, "could not be read"),
+            ("aes-gcm-aesni", {"ama_aes256_gcm_encrypt_avx2"}, "ama_aes256_gcm_decrypt_avx2"),
+            (
+                "aes-gcm-aesni",
+                {"ama_aes256_gcm_encrypt_avx2", "ama_aes256_gcm_decrypt_avx2"},
+                None,
+            ),
+            ("chacha20-avx2x8", {"ama_chacha20_block_x8_avx2"}, "none for --dispatch-only"),
+        ],
+    )
+    def test_the_refusal(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        pin: Optional[str],
+        executed: Optional[set[str]],
+        refused: Optional[str],
+    ) -> None:
+        monkeypatch.setattr(tool, "host_isa", lambda: "x86_64")
+        monkeypatch.setattr(tool, "_DISPATCH_ONLY", pin)
+        verdict = tool._kernels_refusal("aead-bulk", executed)
+        if refused is None:
+            assert verdict is None
+        else:
+            assert verdict is not None and refused in verdict
+        # A target that names no kernel is never refused, read or not.
+        assert tool._kernels_refusal("ecdsa", None) is None
+
+    @pytest.mark.parametrize(("ran", "expected"), [(True, 0), (False, 2)])
+    def test_the_count_lane_reads_the_profile_of_its_own_measurement(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        ran: bool,
+        expected: int,
+    ) -> None:
+        monkeypatch.setattr(tool, "host_isa", lambda: "x86_64")
+        counts: dict[str, Optional[dict[str, int]]] = {k: _m(5_000_000) for k in tool.KEY_CLASSES}
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+
+        def _measured(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, int]]:
+            kernel = "ama_chacha20_block_x8_avx2" if ran else "chacha20_block_scalar"
+            (workdir / "callgrind.out").write_text(
+                f"fn=(1) main\n1 1\ncfn=(2) {kernel}\ncalls=1 0\n1 1\n", encoding="utf-8"
+            )
+            return counts[key_class]
+
+        monkeypatch.setattr(tool, "_measure", _measured)
+        argv = ["--lib", str(lib), "--include", str(tmp_path), "--target", "aead-bulk"]
+        assert tool.main(argv) == expected
+        if not ran:
+            assert "did not execute: ama_chacha20_block_x8_avx2" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(("ran", "expected"), [(True, 0), (False, 2)])
+    def test_the_taint_lane_replays_the_driver_to_see_what_ran(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        ran: bool,
+        expected: int,
+    ) -> None:
+        monkeypatch.setattr(tool, "host_isa", lambda: "x86_64")
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+        monkeypatch.setattr(tool, "_run_taint", lambda *a, **k: (0, ""))
+        replays: list[Path] = []
+
+        def _replayed(driver: Path, workdir: Path) -> set[str]:
+            replays.append(driver)
+            return {"main", "ama_chacha20_block_x8_avx2"} if ran else {"main"}
+
+        monkeypatch.setattr(tool, "_replay_functions", _replayed)
+        argv = ["--lib", str(lib), "--include", str(tmp_path), "--target", "aead-bulk", "--taint"]
+        assert tool.main(argv) == expected
+        assert len(replays) == 1
+        if not ran:
+            assert "did not execute: ama_chacha20_block_x8_avx2" in capsys.readouterr().err
+        # A target that names no kernel costs no second run.
+        replays.clear()
+        argv[argv.index("aead-bulk")] = "x25519"
+        assert tool.main(argv) == 0 and not replays
+
+
 _COUNT_WORD = (
     r"(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
     r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-[a-z]+)?|\d+)"

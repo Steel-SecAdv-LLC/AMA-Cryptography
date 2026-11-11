@@ -37,18 +37,48 @@ extern "C" {
  * linker flag can take it back off.  With nothing marked, the .def is the sole
  * authority and a clone cannot appear in it, because nothing declares one.
  * MSVC is unaffected and keeps dllexport: it emits no such clones. */
+/* AMA_CLEAR_REGS: while the library itself is compiled, every exported
+ * function clears every call-clobbered register on return
+ * (zero_call_used_regs("all"): the general registers but the return value,
+ * %xmm0-15 and the x87 stack on x86-64; x0-x18 on AArch64, where the portable
+ * sources compile with -mgeneral-regs-only and cannot name a SIMD register,
+ * so each NEON and SVE2 kernel clears its own on return instead:
+ * AMA_SIMD_CLEAR_REGS, src/c/internal/ama_simd_clear_regs.h), whatever its
+ * callees and libc left there.  The clearing runs at the function's own
+ * return, so the library is built without sibling calls (CMakeLists.txt):
+ * a public function ending in a tail call would leave through its callee's
+ * return instead, uncleared.  A secret left in one is not in
+ * memory yet, but the next save of the register file puts it there, where
+ * nothing scrubs it: the lazy-binding trampoline (_dl_runtime_resolve_xsavec),
+ * a signal frame, a ucontext switch.  Measured 2026-11-08: PBKDF2-SHA512,
+ * Argon2id and the plaintext of all three AEADs were left in vector registers
+ * by the public call, and the HKDF-SHA3-256 output reached the stack that way
+ * under CPython 3.12 (tests/c/test_register_residue.c pins every row).  GCC
+ * 11+ and clang 15+; a compiler without the attribute (MSVC) gets the
+ * declaration unchanged, and so does every consumer, which defines none of
+ * the three macros below. */
+#if (defined(AMA_BUILDING_SHARED) || defined(AMA_BUILDING_STATIC) || \
+     defined(AMA_TESTING_MODE)) && defined(__has_attribute)
+  #if __has_attribute(zero_call_used_regs)
+    #define AMA_CLEAR_REGS __attribute__((zero_call_used_regs("all")))
+  #endif
+#endif
+#ifndef AMA_CLEAR_REGS
+  #define AMA_CLEAR_REGS
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
   #if defined(AMA_BUILDING_SHARED) && defined(AMA_EXPORTS_FROM_DEF)
-    #define AMA_API  /* exports stated by the generated .def */
+    #define AMA_API AMA_CLEAR_REGS  /* exports stated by the generated .def */
   #elif defined(AMA_BUILDING_SHARED)
-    #define AMA_API __declspec(dllexport)
+    #define AMA_API __declspec(dllexport) AMA_CLEAR_REGS
   #elif defined(AMA_BUILDING_STATIC) || defined(AMA_TESTING_MODE)
-    #define AMA_API  /* static library or test build — no dllimport */
+    #define AMA_API AMA_CLEAR_REGS  /* static library or test build — no dllimport */
   #else
     #define AMA_API __declspec(dllimport)
   #endif
 #else
-  #define AMA_API
+  #define AMA_API AMA_CLEAR_REGS
 #endif
 
 /* ============================================================================
@@ -521,10 +551,28 @@ AMA_API ama_error_t ama_base64_decode(uint8_t *out, size_t out_cap,
  * `AMA_STACK_WIPE_BYTES` of it.
  *
  * Call it from the frame that called the primitive, immediately after it
- * returns, so the wipe lands where the primitive's frame was.  Every AEAD
- * entry point in this library does.  It is a backstop for compiler-made
- * copies, not a substitute for scrubbing named buffers, and it clears only
- * what is BELOW the current frame — never the caller's own locals.
+ * returns, so the wipe lands where the primitive's frame was.  It is a
+ * backstop for compiler-made copies, not a substitute for scrubbing named
+ * buffers, and it clears only what is BELOW the current frame — never the
+ * caller's own locals.
+ *
+ * The library's own secret-handling entry points need no such call.  Each
+ * one clears the stack it used before it returns, to a depth measured for
+ * its family (src/c/internal/ama_stack_wipe.h has the table and what it was
+ * measured on).  This function is for a caller's own code that handled a
+ * secret below the current frame.
+ *
+ * STACK REQUIREMENT.  An entry point clears its family's depth whether or
+ * not a given call wrote that far, so that depth is the stack the entry
+ * point needs below it.  In an optimised build it runs from 1 KiB (Base64,
+ * Ascon-Hash256) through 4 KiB (the AEADs, SHA-512, X25519) and 16 KiB
+ * (Ed25519, the NIST curves, Argon2id's own frames) to 44 KiB for ML-KEM,
+ * 76 KiB for ML-DSA key generation and 172 KiB for ML-DSA signing.  A
+ * thread that calls ML-DSA signing needs a stack larger than the 128 KiB
+ * some C libraries give a thread by default; it needed more than that
+ * before the depth was cleared as well (154,479 bytes measured).
+ * tests/c/test_pq_parser_stack.c holds the three post-quantum figures under
+ * the budgets it states.
  */
 AMA_API void ama_secure_stack_wipe(void);
 

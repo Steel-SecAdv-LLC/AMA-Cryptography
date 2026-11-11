@@ -26,6 +26,7 @@
  * entries, both as plain uint64_t arrays.
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #if defined(__x86_64__) || defined(_M_X64)
 
 #include <immintrin.h>
@@ -70,10 +71,17 @@ void ama_ed25519_select15_avx2(uint64_t *out, const uint64_t *row, uint32_t mag,
     const __m256i vmag = _mm256_set1_epi32((int)mag);
     const __m256i two = _mm256_set1_epi32(2);
     __m256i idx = _mm256_set_epi32(2, 2, 2, 2, 1, 1, 1, 1);
+    /* One accumulator set for both entries of a step.  The result is the OR
+     * of every masked entry either way; keeping separate even/odd sets (as
+     * the 12-limb fold above does) needed more live YMM registers than the
+     * ISA has once the 15-limb tail is added, so gcc spilled them to a
+     * 32-byte-realigned frame and left through LEAVE -- an instruction Intel's
+     * Data Operand Independent Timing list does not include, restoring a
+     * caller register that held secret limbs (tools/check_ct_operand.py).
+     * Folded, the loop fits in registers and has no frame. */
     __m256i a0 = _mm256_setzero_si256(), a1 = a0, a2 = a0;
-    __m256i b0 = a0, b1 = a0, b2 = a0;
-    __m128i a3 = _mm_setzero_si128(), b3 = a3;
-    uint64_t a4 = 0, b4 = 0;
+    __m128i a3 = _mm_setzero_si128();
+    uint64_t a4 = 0;
     int k;
 
     for (k = 0; k < entries; k += 2) {
@@ -83,24 +91,25 @@ void ama_ed25519_select15_avx2(uint64_t *out, const uint64_t *row, uint32_t mag,
         const uint64_t *e0 = row + 15 * k;
         const uint64_t *e1 = row + 15 * (k + 1);
         idx = _mm256_add_epi32(idx, two);
-        a0 = _mm256_or_si256(a0, _mm256_and_si256(m0, LOAD256(e0 + 0)));
-        a1 = _mm256_or_si256(a1, _mm256_and_si256(m0, LOAD256(e0 + 4)));
-        a2 = _mm256_or_si256(a2, _mm256_and_si256(m0, LOAD256(e0 + 8)));
-        a3 = _mm_or_si128(a3, _mm_and_si128(_mm256_castsi256_si128(m0),
-                                            _mm_loadu_si128((const __m128i *)(e0 + 12))));
-        a4 |= e0[14] & (uint64_t)_mm256_extract_epi64(m0, 0);
-        b0 = _mm256_or_si256(b0, _mm256_and_si256(m1, LOAD256(e1 + 0)));
-        b1 = _mm256_or_si256(b1, _mm256_and_si256(m1, LOAD256(e1 + 4)));
-        b2 = _mm256_or_si256(b2, _mm256_and_si256(m1, LOAD256(e1 + 8)));
-        b3 = _mm_or_si128(b3, _mm_and_si128(_mm256_castsi256_si128(m1),
-                                            _mm_loadu_si128((const __m128i *)(e1 + 12))));
-        b4 |= e1[14] & (uint64_t)_mm256_extract_epi64(m1, 0);
+        a0 = _mm256_or_si256(a0, _mm256_or_si256(_mm256_and_si256(m0, LOAD256(e0 + 0)),
+                                                 _mm256_and_si256(m1, LOAD256(e1 + 0))));
+        a1 = _mm256_or_si256(a1, _mm256_or_si256(_mm256_and_si256(m0, LOAD256(e0 + 4)),
+                                                 _mm256_and_si256(m1, LOAD256(e1 + 4))));
+        a2 = _mm256_or_si256(a2, _mm256_or_si256(_mm256_and_si256(m0, LOAD256(e0 + 8)),
+                                                 _mm256_and_si256(m1, LOAD256(e1 + 8))));
+        a3 = _mm_or_si128(a3, _mm_or_si128(
+            _mm_and_si128(_mm256_castsi256_si128(m0),
+                          _mm_loadu_si128((const __m128i *)(e0 + 12))),
+            _mm_and_si128(_mm256_castsi256_si128(m1),
+                          _mm_loadu_si128((const __m128i *)(e1 + 12)))));
+        a4 |= (e0[14] & (uint64_t)_mm256_extract_epi64(m0, 0)) |
+              (e1[14] & (uint64_t)_mm256_extract_epi64(m1, 0));
     }
-    STORE256(out + 0, _mm256_or_si256(a0, b0));
-    STORE256(out + 4, _mm256_or_si256(a1, b1));
-    STORE256(out + 8, _mm256_or_si256(a2, b2));
-    _mm_storeu_si128((__m128i *)(out + 12), _mm_or_si128(a3, b3));
-    out[14] = a4 | b4;
+    STORE256(out + 0, a0);
+    STORE256(out + 4, a1);
+    STORE256(out + 8, a2);
+    _mm_storeu_si128((__m128i *)(out + 12), a3);
+    out[14] = a4;
 }
 
 #else /* not x86-64: nothing to build; the template's SSE2/scalar fold is used */

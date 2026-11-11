@@ -72,7 +72,7 @@ compiler that does perform the conversion, not as a signal this gate reproduces 
 today's toolchain; the operative measurement is the per-target limits below (all
 zero), which the gate DOES reproduce on both gcc 13 and clang 18.
 
-Per-target limits are set from measurement, not from headroom: all TWENTY-THREE
+Per-target limits are set from measurement, not from headroom: all TWENTY-FIVE
 targets measure a cross-class delta of exactly zero under both gcc 13 and
 clang 18 at -O3, with a same-class floor of exactly zero, and every limit is
 0.  `ecdsa` was the last holdout — it carried a limit of 64 for the DER
@@ -93,6 +93,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -278,9 +279,11 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: secure-memzero        0 / 0               0 / 0                0
 #: base64                0 / 0               0 / 0                0
 #: secp256k1-seckey      0 / 0               0 / 0                0
+#: hkdf                  0 / 0               0 / 0                0
+#: aead-bulk             0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All twenty-three are exactly zero, on both compilers, with a same-class floor of
+#: All twenty-five are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
@@ -326,7 +329,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
 #:
-#: `x25519-batch` is the thirteenth of the twenty-three, and it exists because a
+#: `x25519-batch` is the thirteenth of the twenty-five, and it exists because a
 #: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers seven info-only wall-clock lanes, and each one that names a reason
@@ -368,7 +371,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
 #: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the twenty-three is invariant by construction and measures
+    # Every one of the twenty-five is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -431,12 +434,17 @@ THRESHOLDS = {
     # Both added 2026-10-08 with their measurement in the table above.
     "base64": 0,
     "secp256k1-seckey": 0,
+    # HKDF (SHA3-256 and HMAC-SHA-2) and the hardware AEAD tiers (AES-NI
+    # GCM, AVX2 ChaCha20 x8), added 2026-11-08 with their taint drivers;
+    # measured in the table above.
+    "hkdf": 0,
+    "aead-bulk": 0,
 }
 
 #: The prose above states this inventory's size in five present-tense places
-#: ("all TWENTY-THREE", "All twenty-three are exactly zero", "the thirteenth
-#: of the twenty-three", "Every one of the twenty-three", "across all
-#: twenty-three targets" / "the inventory is twenty-three" below MISS_THRESHOLD) — past-tense
+#: ("all TWENTY-FIVE", "All twenty-five are exactly zero", "the thirteenth
+#: of the twenty-five", "Every one of the twenty-five", "across all
+#: twenty-five targets" / "the inventory is twenty-five" below MISS_THRESHOLD) — past-tense
 #: records such as "the other thirteen sat at 0" describe the inventory at
 #: the moment they were measured and stay as written.  The count drifted
 #: before this check existed: at one point the same dict was
@@ -450,7 +458,7 @@ THRESHOLDS = {
 #: seventeen" while the table held twenty — so they no longer state a count
 #: at all, and tests/test_ghash_constant_time_gate.py fails if a comment
 #: under src/c or include that names this tool states one again.
-_DOCUMENTED_TARGET_COUNT = 23
+_DOCUMENTED_TARGET_COUNT = 25
 if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
     raise SystemExit(
         f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
@@ -533,6 +541,20 @@ int main(int argc, char **argv) {
 """
 
 _REMEDY = {
+    "aead-bulk": (
+        "The AES-NI GCM kernel (src/c/ama_aes_gcm_aesni.c), the AVX2 ChaCha20\n"
+        "x8 kernel (src/c/avx2/ama_chacha20_avx2.c) and Poly1305 must process\n"
+        "every block the public lengths imply with no key-dependent branch or\n"
+        "index. Run with --dispatch-only aes-gcm-aesni to separate the GCM\n"
+        "kernel from ChaCha, and --taint to see the site."
+    ),
+    "hkdf": (
+        "src/c/ama_hkdf.c and the HMAC cores under it (ama_hmac_sha256.c,\n"
+        "ama_hmac_sha384.c, ama_sha512.c, ama_sha3.c) must process every block\n"
+        "the public lengths imply and nothing that depends on the key bytes. A\n"
+        "delta means a key-dependent early exit or a branch in a hash core;\n"
+        "run --taint on the same target to see the site."
+    ),
     "base64": (
         "src/c/ama_base64.c maps every 6-bit group and every character through\n"
         "masked range arithmetic (in_range, eq_mask) and folds every validity\n"
@@ -2524,6 +2546,212 @@ int main(void) {
     return 0;
 }
 """,
+    "aead-bulk": _TAINT_PRELUDE
+    + r"""
+/* Secret: the key and the plaintext, through AES-256-GCM and
+ * ChaCha20-Poly1305 encrypt and decrypt over 768 bytes, on the tier the
+ * dispatcher selects (AES-NI + PCLMULQDQ GCM and the AVX2 ChaCha20 x8 kernel
+ * on an x86-64 host under Valgrind; CI also pins aes-gcm-aesni).  768 bytes
+ * because chacha20_xor enters the x8 kernel only for 512 bytes or more
+ * (src/c/ama_chacha20poly1305.c): at 256 it never ran, so the kernel this
+ * target names was not measured; 768 runs it once and the scalar tail four
+ * times, and check_ct_operand.py requires the x8 kernel to consume taint.  The
+ * ciphertext and tag are public outputs; the recovered plaintext stays
+ * tainted. */
+int main(void) {
+    uint8_t key[32], nonce[12], aad[32], tag[16];
+    static uint8_t pt[768], ct[768], back[768];
+    for (unsigned i = 0; i < (unsigned)sizeof key; i++)
+        key[i] = (uint8_t)(0x5Eu * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < (unsigned)sizeof pt; i++) pt[i] = (uint8_t)(i * 7u + 1u);
+    memset(nonce, 0x24, sizeof nonce);
+    memset(aad, 0x7B, sizeof aad);
+    TAINT(key, sizeof key);
+    TAINT(pt, sizeof pt);
+    static volatile uint8_t sink;
+    ama_error_t rc = ama_aes256_gcm_encrypt(key, nonce, pt, sizeof pt, aad, sizeof aad, ct, tag);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(ct, sizeof ct);
+    UNTAINT(tag, sizeof tag);
+    rc = ama_aes256_gcm_decrypt(key, nonce, ct, sizeof ct, aad, sizeof aad, tag, back);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    sink = (uint8_t)(sink ^ back[1]);
+    rc = ama_chacha20poly1305_encrypt(key, nonce, pt, sizeof pt, aad, sizeof aad, ct, tag);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(ct, sizeof ct);
+    UNTAINT(tag, sizeof tag);
+    rc = ama_chacha20poly1305_decrypt(key, nonce, ct, sizeof ct, aad, sizeof aad, tag, back);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    sink = (uint8_t)(sink ^ back[1]);
+    return 0;
+}
+""",
+    "ml-dsa-sign": _TAINT_PRELUDE
+    + r"""
+/* Secret: the ML-DSA-65 key-generation seed xi, hence every secret the key
+ * holds (rho', K, s1, s2, t0) and every signing intermediate.  Key generation
+ * and one signature run under taint.  The library declassifies exactly what
+ * FIPS 204 publishes or what decides only a discarded candidate: rho (the
+ * public key's first field), c~ (the signature's first field), the accepted
+ * attempt's hint bits, each per-attempt rejection decision (sec. 3.6.1
+ * note 3) and each RejBoundedPoly accept bit (src/c/ama_dilithium.c,
+ * dil_eta_accept); z, r0, c*t0 and every coefficient stay tainted. */
+int main(void) {
+    static uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES], sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+    static uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
+    static const uint8_t message[48] = "AMA Cryptography ML-DSA taint driver.";
+    uint8_t xi[32];
+    for (unsigned i = 0; i < 32u; i++) xi[i] = (uint8_t)(0x5Au + 37u * i);
+    TAINT(xi, sizeof xi);
+    ama_error_t rc = ama_ml_dsa_keypair_from_seed(AMA_ML_DSA_65, xi, pk, sk);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(pk, sizeof pk);
+    size_t len = sizeof sig;
+    rc = ama_ml_dsa_sign_ctx(AMA_ML_DSA_65, sig, &len, message, sizeof message, NULL, 0, sk);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(sig, sizeof sig);
+    static volatile uint8_t sink;
+    sink = (uint8_t)(sink ^ sig[0]);
+    return 0;
+}
+""",
+    "ml-kem-keygen": _TAINT_PRELUDE
+    + r"""
+/* AMA_TESTING_MODE seam (src/c/internal/ama_testing_exports.h). */
+ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
+                                              const uint8_t *pk, size_t pk_len,
+                                              const uint8_t m[32],
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len);
+/* Secret: the ML-KEM-1024 key-generation seeds d and z, then the
+ * encapsulation randomness m.  (kyber-decaps keeps the decapsulation key
+ * secret; this target covers the two other algorithms.)  rho, the
+ * encapsulation key's trailing field, is declassified at its computation
+ * because SampleNTT rejection-samples A from it; sigma, s, e, m and the
+ * shared secret stay tainted. */
+int main(void) {
+    static uint8_t pk[AMA_ML_KEM_1024_PUBLIC_KEY_BYTES], sk[AMA_ML_KEM_1024_SECRET_KEY_BYTES];
+    static uint8_t ct[AMA_ML_KEM_1024_CIPHERTEXT_BYTES];
+    uint8_t d[32], z[32], m[32], ss[32];
+    for (unsigned i = 0; i < 32u; i++) {
+        d[i] = (uint8_t)(0x11u + 3u * i);
+        z[i] = (uint8_t)(0x77u + i);
+        m[i] = (uint8_t)(0xA5u ^ (7u * i));
+    }
+    TAINT(d, sizeof d);
+    TAINT(z, sizeof z);
+    ama_error_t rc = ama_kyber_keypair_from_seed(d, z, pk, sk);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(pk, sizeof pk);
+    TAINT(m, sizeof m);
+    size_t ct_len = sizeof ct;
+    rc = ama_kyber_test_encapsulate_derand(AMA_ML_KEM_1024, pk, sizeof pk, m, ct, &ct_len,
+                                           ss, sizeof ss);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(ct, sizeof ct);
+    static volatile uint8_t sink;
+    sink = (uint8_t)(sink ^ ss[0]);
+    return 0;
+}
+""",
+    "hkdf": _TAINT_PRELUDE
+    + r"""
+/* Secret: the input keying material, through ama_hkdf (SHA3-256) and HKDF
+ * over HMAC-SHA-256/-384/-512, plus each HMAC called directly with a 300-byte
+ * secret KEY.  In HKDF the IKM is HMAC's message (Extract is keyed by the
+ * salt, Expand by the digest-sized PRK), so a long IKM never reached HMAC's
+ * longer-than-a-block key path (the key hashed first); the direct calls do,
+ * for every block size (64, 128 and 136 bytes). */
+int main(void) {
+    uint8_t ikm[64], okm[96], salt[32], info[24];
+    static uint8_t big[300];
+    for (unsigned i = 0; i < (unsigned)sizeof ikm; i++)
+        ikm[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < (unsigned)sizeof big; i++) big[i] = (uint8_t)(i * 151u);
+    memset(salt, 0x5A, sizeof salt);
+    memset(info, 0x0F, sizeof info);
+    TAINT(ikm, sizeof ikm);
+    TAINT(big, sizeof big);
+    ama_error_t rc;
+    rc = ama_hkdf(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm, sizeof okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hkdf_sha256(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm, sizeof okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hkdf_sha384(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm, sizeof okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hkdf_sha512(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm, sizeof okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hkdf_sha256(NULL, 0, big, sizeof big, NULL, 0, okm, 32);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    ama_hmac_sha256(big, sizeof big, info, sizeof info, okm);
+    rc = ama_hmac_sha3_256(big, sizeof big, info, sizeof info, okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hmac_sha384(big, sizeof big, info, sizeof info, okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    rc = ama_hmac_sha512(big, sizeof big, info, sizeof info, okm);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    static volatile uint8_t sink;
+    sink = (uint8_t)(sink ^ okm[0]);
+    return 0;
+}
+""",
+    "frost-sign": _TAINT_PRELUDE
+    + r"""
+/* Secret: the FROST group secret (hence every share) and each signer's nonce
+ * pair.  The group public key, the public halves of the shares and the
+ * round-1 commitments are public and untainted.  The library branches only
+ * on verdicts it returns (src/c/ama_frost.c; internal/ama_ct_declassify.h). */
+int main(void) {
+    uint8_t secret[32], gpk[32], shares[3 * AMA_FROST_SHARE_BYTES];
+    uint8_t nonce[2][AMA_FROST_NONCE_BYTES], comm[2 * AMA_FROST_COMMITMENT_BYTES];
+    uint8_t sig[AMA_FROST_SIG_SHARE_BYTES];
+    static const uint8_t idx[2] = {1, 2};
+    static const uint8_t message[32] = "AMA FROST taint driver message";
+    for (unsigned i = 0; i < 32u; i++) secret[i] = (uint8_t)(0x21u + 5u * i);
+    secret[31] &= 0x0F;
+    TAINT(secret, sizeof secret);
+    ama_error_t rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, secret);
+    UNTAINT(&rc, sizeof rc);
+    if (rc != AMA_SUCCESS) return 1;
+    UNTAINT(gpk, sizeof gpk);
+    for (int p = 0; p < 3; p++) UNTAINT(shares + p * AMA_FROST_SHARE_BYTES + 32, 32);
+    for (int p = 0; p < 2; p++) {
+        rc = ama_frost_round1_commit(nonce[p], comm + p * AMA_FROST_COMMITMENT_BYTES,
+                                     shares + p * AMA_FROST_SHARE_BYTES);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+        UNTAINT(comm + p * AMA_FROST_COMMITMENT_BYTES, AMA_FROST_COMMITMENT_BYTES);
+        TAINT(nonce[p], sizeof nonce[p]);
+    }
+    static volatile uint8_t sink;
+    for (int p = 0; p < 2; p++) {
+        rc = ama_frost_round2_sign(sig, message, sizeof message,
+                                   shares + p * AMA_FROST_SHARE_BYTES, idx[p], nonce[p],
+                                   comm, idx, 2, gpk);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+        UNTAINT(sig, sizeof sig);
+        sink = (uint8_t)(sink ^ sig[0]);
+    }
+    return 0;
+}
+""",
 }
 
 #: Targets that have a taint driver and NO instruction-count driver, each with
@@ -2535,6 +2763,34 @@ int main(void) {
 #: published -- and answers it without a threshold.  ``main`` refuses to run
 #: one of these without ``--taint`` rather than falling back to anything.
 _TAINT_ONLY: dict[str, str] = {
+    "ml-dsa-sign": (
+        "ML-DSA signing is a rejection-sampling loop (FIPS 204 Algorithm 7): the "
+        "number of attempts, and so the instruction count, varies with the key "
+        "and message by construction, and key generation's RejBoundedPoly and "
+        "ExpandA consume a seed-dependent number of XOF bytes. FIPS 204 sec. "
+        "3.6.1 note 3 places that timing in the message, not the private key. "
+        "The taint driver checks that nothing else -- no coefficient, no "
+        "rejected candidate's value -- decides a branch or an address."
+    ),
+    "frost-sign": (
+        "FROST binding factors rho_i = H(i, msg, commitments, group public key) "
+        "are public, but the group public key is the image of the secret, so "
+        "every key class has different binding factors, and rho_i * E_i is "
+        "computed by the variable-time public-point multiply "
+        "(ama_ed25519_scalarmult_public): measured, the classes retire 69,544 "
+        "(gcc 13) and 85,028 (clang 18) different instructions with the "
+        "nonces and commitments held fixed, all of it in that public "
+        "arithmetic. The taint driver checks that no secret -- share or "
+        "nonce -- decides a branch or an address."
+    ),
+    "ml-kem-keygen": (
+        "ML-KEM key generation expands A by rejection sampling (SampleNTT, FIPS "
+        "203 Algorithm 7) from rho, which derives from the seed d, so two key "
+        "classes consume different numbers of XOF bytes and retire different "
+        "counts by construction; rho is published in the encapsulation key. "
+        "The taint driver checks that nothing else derived from d, z or the "
+        "encapsulation randomness m decides a branch or an address."
+    ),
     "slhdsa-sign": (
         "SLH-DSA signing does a different amount of work per (key, message) BY "
         "CONSTRUCTION: WOTS+ chain lengths are the base-w digits of the FORS "
@@ -2563,6 +2819,19 @@ _TAINT_REPORT_RE = re.compile(
 #: the dispatcher's own AMA_DISPATCH_ONLY contract, so a lane can state which
 #: implementation its numbers describe instead of inheriting the host's.
 _DISPATCH_ONLY: Optional[str] = None
+
+#: Select the MULX+ADX kernels Valgrind's CPUID hides (``--assume-adx``).
+#: Valgrind 3.22 executes ADCX/ADOX but reports CPUID ADX clear, so the X25519
+#: MULX ladder and the P-curve MULX Montgomery multiply -- what production runs
+#: on every ADX-capable x86-64 CPU -- were never selected under any Valgrind
+#: lane.  The AMA_TESTING_MODE archive honours AMA_TESTING_ASSUME_ADX=1 (see
+#: detect_x86_features in src/c/ama_cpuid.c); the run is trusted only when the
+#: library confirms it.
+_ASSUME_ADX: bool = False
+
+#: The library's confirmation, and its refusal, of AMA_TESTING_ASSUME_ADX=1.
+_ASSUME_ADX_HONOURED = "AMA_TESTING_ASSUME_ADX=1 honored"
+_ASSUME_ADX_REFUSED = "AMA_TESTING_ASSUME_ADX=1 refused"
 
 
 #: The dispatcher's own refusal line for an unrecognised AMA_DISPATCH_ONLY.
@@ -2593,6 +2862,16 @@ def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
     passed as "honoured", which is not what ``--dispatch-only``'s help says
     ("The run FAILS if the dispatcher does not report the pin as honoured").
     """
+    if _ASSUME_ADX:
+        for line in wiring:
+            if _ASSUME_ADX_REFUSED in line:
+                return line
+        if not any(_ASSUME_ADX_HONOURED in line for line in wiring):
+            return (
+                f"the library never reported {_ASSUME_ADX_HONOURED!r}: the archive "
+                f"is not an AMA_TESTING_MODE build, or the target never read CPUID, "
+                f"so the MULX+ADX kernels were not selected"
+            )
     if _DISPATCH_ONLY is None:
         return None
     for line in wiring:
@@ -2619,6 +2898,135 @@ def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
     )
 
 
+#: Kernels a target exists to measure: by dispatcher pin (``None`` is "as
+#: dispatched") and by ISA.  A run of such a target is INCONCLUSIVE unless
+#: every kernel named for its pin executed, in each lane by that lane's own
+#: evidence: callgrind's per-function record in the count lane, a callgrind
+#: replay of the same driver in the taint lane, and a site where the secret
+#: was consumed in ``tools/check_ct_operand.py``.
+#:
+#: The dispatcher confirming a pin (:func:`_dispatch_pin_was_honoured`) says
+#: which function it WIRED.  It says nothing about whether the workload
+#: reached it, and that is the gap this closes: ``aead-bulk`` ran 256-byte
+#: messages, below the 512 bytes at which ``chacha20_xor`` enters the x8
+#: kernel, so its count and taint lanes passed over the scalar ChaCha20 while
+#: naming the AVX2 and NEON kernels (Copilot review, 2026-11-08).  The operand
+#: gate was given the check then; these two lanes were not until 2026-11-10.
+#:
+#: As dispatched, only the ChaCha20 kernel is named on x86-64: which AES-GCM
+#: tier the dispatcher selects depends on the CPUID Valgrind reports (AES-NI
+#: here, VAES on a host and release that expose it), and the pinned run names
+#: that tier instead.  Measured 2026-11-10, x86-64 under Valgrind 3.22, both
+#: drivers: as dispatched ``ama_chacha20_block_x8_avx2`` and the two
+#: ``ama_aes256_gcm_*_avx2`` functions execute; pinned to ``aes-gcm-aesni``
+#: the two GCM functions do and no x8 ChaCha20 does, because every other slot
+#: is left at its scalar fallback.
+#:
+#: On AArch64 the NEON x8 entry point is two calls to the x4 kernel and
+#: consumes nothing itself (CI's first AArch64 operand run with the check,
+#: 4831936, found no site in ``ama_chacha20_block_x8_neon``), so the x4 kernel
+#: is the one named.
+_REQUIRED_KERNELS: dict[str, dict[Optional[str], dict[str, tuple[str, ...]]]] = {
+    "aead-bulk": {
+        None: {
+            "x86_64": ("ama_chacha20_block_x8_avx2",),
+            "aarch64": ("ama_chacha20_block_x4_neon",),
+        },
+        "aes-gcm-aesni": {
+            "x86_64": ("ama_aes256_gcm_encrypt_avx2", "ama_aes256_gcm_decrypt_avx2"),
+        },
+    },
+}
+
+
+def host_isa() -> str:
+    """This host's ISA as :data:`_REQUIRED_KERNELS` spells it."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    return machine
+
+
+def required_kernels(target: str, pin: Optional[str], isa: str) -> Optional[tuple[str, ...]]:
+    """The kernels a run of ``target`` under ``pin`` must reach on ``isa``.
+
+    ``()`` for a target that names none.  ``None`` for a target that names
+    kernels and has no row for this pin: such a run has stated which tier it
+    measures and nothing can say whether it reached it, so the caller must
+    refuse the run and not treat the missing row as nothing to check.
+    """
+    rows = _REQUIRED_KERNELS.get(target)
+    if rows is None:
+        return ()
+    if pin not in rows:
+        return None
+    return rows[pin].get(isa, ())
+
+
+_CALLGRIND_FUNCTION = re.compile(r"^c?fn=\(\d+\) (\S+)", re.MULTILINE)
+
+
+def executed_functions(profile: Path) -> set[str]:
+    """Every function a callgrind profile records as having run.
+
+    Callgrind writes a name once, where the function first appears as the
+    subject (``fn=``) or the callee (``cfn=``) of a cost line, and writes
+    neither for a function that never executed.  A ``'N`` suffix marks a
+    recursion level, not another function.
+    """
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    return {name.split("'", 1)[0] for name in _CALLGRIND_FUNCTION.findall(text)}
+
+
+def _replay_functions(driver: Path, workdir: Path) -> Optional[set[str]]:
+    """The functions ``driver`` executes, from one more run under callgrind.
+
+    For the taint lane, whose own run is under Memcheck and records no
+    functions.  The driver, its arguments and its environment are the same,
+    and Memcheck's client requests are no-ops under any other tool, so the
+    replay takes the path the taint run took.
+    """
+    profile = workdir / "replay.callgrind.out"
+    proc = subprocess.run(
+        ["valgrind", "--tool=callgrind", f"--callgrind-out-file={profile}", str(driver)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_driver_env(),
+    )
+    if proc.returncode != 0 or not profile.is_file():
+        return None
+    return executed_functions(profile)
+
+
+def _kernels_refusal(target: str, executed: Optional[set[str]]) -> Optional[str]:
+    """Why this run did not measure the kernels it exists for, or ``None``."""
+    required = required_kernels(target, _DISPATCH_ONLY, host_isa())
+    if required is None:
+        return (
+            f"{target!r} names the kernels it measures, and none for "
+            f"--dispatch-only={_DISPATCH_ONLY!r}: add the row to _REQUIRED_KERNELS "
+            "with the kernel that pin selects."
+        )
+    if not required:
+        return None
+    if executed is None:
+        return (
+            "the function record of the run could not be read, so nothing shows which kernel ran."
+        )
+    missing = [kernel for kernel in required if kernel not in executed]
+    if missing:
+        return (
+            f"the kernel(s) this target exists to measure did not execute: "
+            f"{', '.join(missing)}. Either the workload no longer reaches them or the "
+            "dispatcher did not wire them, and the verdict would describe whatever ran "
+            "in their place."
+        )
+    return None
+
+
 def _driver_env() -> dict[str, str]:
     """The environment every driver invocation runs under.
 
@@ -2630,6 +3038,8 @@ def _driver_env() -> dict[str, str]:
     env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
     if _DISPATCH_ONLY is not None:
         env["AMA_DISPATCH_ONLY"] = _DISPATCH_ONLY
+    if _ASSUME_ADX:
+        env["AMA_TESTING_ASSUME_ADX"] = "1"
     return env
 
 
@@ -2673,6 +3083,114 @@ def _run_taint(driver: Path, workdir: Path) -> Optional[tuple[int, str]]:
     return reports, log
 
 
+_HKDF_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* HKDF with the INPUT KEYING MATERIAL as the class variable, through every
+ * construction the library ships: ama_hkdf (SHA3-256) and HKDF over
+ * HMAC-SHA-256/-384/-512.  The hybrid KEM combiner, the agent binding and
+ * every key schedule in ama_cryptography derive keys through these, and no
+ * deterministic instrument measured them on their own before.  Salt, info
+ * and lengths are FIXED: they feed the block count for a legitimate reason.
+ * A 300-byte IKM covers a multi-block HMAC message; HMAC's
+ * longer-than-a-block KEY path (the key hashed first) is reached by calling
+ * each HMAC directly with that 300-byte buffer as the key, since in HKDF the
+ * IKM is the message and the keys are the salt and the digest-sized PRK.
+ * Invariant by construction: cross-class delta 0, noise floor 0. */
+int main(int argc, char **argv) {
+    uint8_t ikm[64], okm[96], salt[32], info[24];
+    static uint8_t big[300];
+    unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+    for (unsigned i = 0; i < (unsigned)sizeof ikm; i++)
+        ikm[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < (unsigned)sizeof big; i++)
+        big[i] = (uint8_t)(fill * 29u + i * 151u);
+    memset(salt, 0x5A, sizeof salt);
+    memset(info, 0x0F, sizeof info);
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 50; i++) {
+        if (ama_hkdf(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm, sizeof okm)
+            != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hkdf_sha256(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm,
+                            sizeof okm) != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hkdf_sha384(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm,
+                            sizeof okm) != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hkdf_sha512(salt, sizeof salt, ikm, sizeof ikm, info, sizeof info, okm,
+                            sizeof okm) != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hkdf_sha256(NULL, 0, big, sizeof big, NULL, 0, okm, 32) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        ama_hmac_sha256(big, sizeof big, info, sizeof info, okm);
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha3_256(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha384(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+        if (ama_hmac_sha512(big, sizeof big, info, sizeof info, okm) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ okm[0]);
+    }
+    return 0;
+}
+"""
+
+_AEAD_BULK_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* AES-256-GCM and ChaCha20-Poly1305 over a 768-byte message, encrypt and
+ * decrypt, with the KEY as the class variable, on whatever tier the
+ * dispatcher selects.  768: chacha20_xor enters the x8 kernel only at 512
+ * bytes or more, so a 256-byte message never ran it; 768 is one x8 call and
+ * four scalar-tail blocks.  On whatever tier the
+ * dispatcher selects.  The ghash and aead-verify targets force the scalar
+ * AES (ama_test_force_aes_gcm_scalar) and run no bulk ChaCha, so the AES-NI
+ * + PCLMULQDQ GCM kernel and the AVX2 ChaCha20 x8 kernel -- the code nearly
+ * every x86-64 host runs -- were measured by no deterministic instrument.
+ * CI runs this target as dispatched and again pinned with --dispatch-only
+ * aes-gcm-aesni, which the dispatcher must confirm.  Nonce, AAD and message
+ * are FIXED: the question is whether the key changes the instruction
+ * stream.  Cross-class delta 0. */
+int main(int argc, char **argv) {
+    uint8_t key[32], nonce[12], aad[32], tag[16];
+    static uint8_t pt[768], ct[768], back[768];
+    unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+    for (unsigned i = 0; i < (unsigned)sizeof key; i++)
+        key[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);
+    memset(nonce, 0x24, sizeof nonce);
+    memset(aad, 0x7B, sizeof aad);
+    for (unsigned i = 0; i < (unsigned)sizeof pt; i++) pt[i] = (uint8_t)(i * 7u + 1u);
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 100; i++) {
+        if (ama_aes256_gcm_encrypt(key, nonce, pt, sizeof pt, aad, sizeof aad, ct, tag)
+            != AMA_SUCCESS) return 1;
+        if (ama_aes256_gcm_decrypt(key, nonce, ct, sizeof ct, aad, sizeof aad, tag, back)
+            != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ back[0] ^ tag[0]);
+        if (ama_chacha20poly1305_encrypt(key, nonce, pt, sizeof pt, aad, sizeof aad, ct, tag)
+            != AMA_SUCCESS) return 1;
+        if (ama_chacha20poly1305_decrypt(key, nonce, ct, sizeof ct, aad, sizeof aad, tag, back)
+            != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ back[0] ^ tag[0]);
+    }
+    return 0;
+}
+"""
+
+
 _DRIVERS = {
     "ghash": _DRIVER,
     "ecdsa": _ECDSA_DRIVER,
@@ -2697,6 +3215,8 @@ _DRIVERS = {
     "secure-memzero": _SECURE_MEMZERO_DRIVER,
     "base64": _BASE64_DRIVER,
     "secp256k1-seckey": _SECP256K1_SECKEY_DRIVER,
+    "hkdf": _HKDF_DRIVER,
+    "aead-bulk": _AEAD_BULK_DRIVER,
 }
 
 
@@ -2761,11 +3281,11 @@ def _limit_for(metric: str, count_threshold: int) -> int:
 
 
 #: Miss-count threshold.  Zero, and that is measured rather than aspirational:
-#: across all twenty-three targets at gcc 13 -O3 and clang 18 -O3, every
+#: across all twenty-five targets at gcc 13 -O3 and clang 18 -O3, every
 #: cross-class miss delta and every same-class noise floor is exactly 0.  (An
 #: earlier revision of this note said "all ten targets" and cited ecdsa as
 #: "the one target with a legitimate public-data spread ... 24 instructions
-#: and 8 data references".  Both were stale: the inventory is twenty-three, and
+#: and 8 data references".  Both were stale: the inventory is twenty-five, and
 #: ecdsa's spread went to zero when the target moved to
 #: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists
@@ -2978,6 +3498,43 @@ def _measure(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, 
     return measured
 
 
+def build_driver(
+    source_text: str, lib: Path, include: Path, cc: str, workdir: Path
+) -> tuple[Optional[Path], str]:
+    """Compile a measurement driver against ``lib``; ``(path, "")`` or ``(None, why)``.
+
+    One function, shared with ``tools/check_ct_operand.py``, so that the
+    secret-operand gate links exactly the program the taint and count lanes
+    link: same flags, same rpath rule, same libraries.
+    """
+    source = workdir / "driver.c"
+    source.write_text(source_text, encoding="utf-8")
+    driver = workdir / "driver"
+    compile_cmd = [
+        cc,
+        "-O2",
+        str(source),
+        f"-I{include}",
+        "-o",
+        str(driver),
+        str(lib),
+        "-lpthread",
+        "-lm",
+    ]
+    # A shared library named on the command line links fine but is not
+    # found at load time without an rpath, which is how this check came to
+    # report PASS over a driver that never started.  The exit-status check
+    # in _measure() now catches that; embedding the rpath means
+    # the caller does not hit it in the first place.  CI passes the static
+    # archive, for which this is a no-op.
+    if ".so" in lib.name or lib.suffix in (".dylib", ".so"):
+        compile_cmd.append(f"-Wl,-rpath,{lib.resolve().parent}")
+    compiled = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+    if compiled.returncode != 0:
+        return None, f"{' '.join(compile_cmd)}\n{compiled.stderr}"
+    return driver, ""
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -3020,6 +3577,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "if the dispatcher does not report the pin as honoured.",
     )
     parser.add_argument(
+        "--assume-adx",
+        action="store_true",
+        help="Select the MULX+ADX kernels (X25519 ladder, P-curve Montgomery "
+        "multiply) that Valgrind's CPUID hides, via the AMA_TESTING_MODE-only "
+        "AMA_TESTING_ASSUME_ADX=1. The run FAILS if the library does not "
+        "report the assumption as honoured.",
+    )
+    parser.add_argument(
         "--taint",
         action="store_true",
         help="Run the target's TAINT driver under Memcheck instead of the "
@@ -3040,8 +3605,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # Apply the tier pin before any driver runs, so the callgrind path, the
     # taint path and the wiring probe all measure the same implementation.
-    global _DISPATCH_ONLY
+    global _DISPATCH_ONLY, _ASSUME_ADX
     _DISPATCH_ONLY = args.dispatch_only
+    _ASSUME_ADX = bool(args.assume_adx)
 
     if args.taint and args.target not in _TAINT_DRIVERS:
         print(
@@ -3078,37 +3644,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="ama-ghash-ct-") as tmp:
         workdir = Path(tmp)
-        source = workdir / "driver.c"
-        source.write_text(
+        driver, build_error = build_driver(
             _TAINT_DRIVERS[args.target] if args.taint else _DRIVERS[args.target],
-            encoding="utf-8",
-        )
-        driver = workdir / "driver"
-
-        compile_cmd = [
+            args.lib,
+            args.include,
             args.cc,
-            "-O2",
-            str(source),
-            f"-I{args.include}",
-            "-o",
-            str(driver),
-            str(args.lib),
-            "-lpthread",
-            "-lm",
-        ]
-        # A shared library named on the command line links fine but is not
-        # found at load time without an rpath, which is how this check came to
-        # report PASS over a driver that never started.  The exit-status check
-        # in _measure() now catches that; embedding the rpath means
-        # the caller does not hit it in the first place.  CI passes the static
-        # archive, for which this is a no-op.
-        if ".so" in args.lib.name or args.lib.suffix in (".dylib", ".so"):
-            compile_cmd.append(f"-Wl,-rpath,{args.lib.resolve().parent}")
-        compiled = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
-        if compiled.returncode != 0:
+            workdir,
+        )
+        if driver is None:
             print(
-                "CONSTANT-TIME CHECK INCONCLUSIVE — the driver did not build.\n"
-                f"{' '.join(compile_cmd)}\n{compiled.stderr}",
+                "CONSTANT-TIME CHECK INCONCLUSIVE — the driver did not build.\n" + build_error,
                 file=sys.stderr,
             )
             return 2
@@ -3169,10 +3714,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         refusal = _dispatch_pin_was_honoured(wiring)
         if refusal is not None:
             print(
-                f"CONSTANT-TIME CHECK INCONCLUSIVE — the dispatcher refused, or "
-                f"did not confirm, --dispatch-only={_DISPATCH_ONLY!r}, so this "
-                f"run could have measured the default wiring while claiming to "
-                f"measure that tier.\n  {refusal}",
+                f"CONSTANT-TIME CHECK INCONCLUSIVE — the library refused, or "
+                f"did not confirm, --dispatch-only={_DISPATCH_ONLY!r} / "
+                f"--assume-adx={_ASSUME_ADX}, so this run could have measured the "
+                f"default wiring while claiming to measure that tier.\n  {refusal}",
                 file=sys.stderr,
             )
             return 2
@@ -3187,6 +3732,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 return 2
             reports, log = taint
+            refusal = (
+                _kernels_refusal(args.target, _replay_functions(driver, workdir))
+                if required_kernels(args.target, _DISPATCH_ONLY, host_isa()) != ()
+                else None
+            )
+            if refusal is not None:
+                print(f"CONSTANT-TIME CHECK INCONCLUSIVE — {refusal}", file=sys.stderr)
+                return 2
             print(f"[{args.target}] secret-taint analysis under Memcheck:")
             for line in wiring:
                 print(f"  wiring: {line}")
@@ -3225,6 +3778,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "CONSTANT-TIME CHECK INCONCLUSIVE — callgrind produced no measurement.",
                 file=sys.stderr,
             )
+            return 2
+        # The profile of the measurement just taken: what ran, not what was wired.
+        profile = workdir / "callgrind.out"
+        refusal = _kernels_refusal(
+            args.target, executed_functions(profile) if profile.is_file() else None
+        )
+        if refusal is not None:
+            print(f"CONSTANT-TIME CHECK INCONCLUSIVE — {refusal}", file=sys.stderr)
             return 2
         floors = {name: abs(floor_a[name] - floor_b[name]) for name in _METRICS}
         for name, value in floors.items():

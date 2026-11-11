@@ -122,4 +122,30 @@ static inline uint64_t ama_ct_value_barrier_u64(uint64_t v) {
 #endif
 }
 
+/**
+ * @brief Return @p v, opaquely, from a general-purpose register.
+ *
+ * The 32-bit form has a different job from the select-mask use above: it
+ * keeps a SECRET scalar loop scalar.  Under the register constraint the
+ * value cannot be lifted into a vector lane, so the loop cannot be
+ * auto-vectorised -- which is the point where the loop's lane narrowing,
+ * extraction or masking would otherwise be emitted as FP-domain shuffles
+ * (SHUFPS, MOVHLPS, MOVMSKPS ...) that Intel's Data Operand Independent
+ * Timing list does not include.  tools/check_ct_operand.py
+ * measures every such site.  Callers: kyber_compress_d_impl and the secret
+ * decode/encode loops of src/c/ama_kyber.c, enc6 in src/c/ama_base64.c.
+ *
+ * Do not apply it to a loop whose vectorised form is integer-domain and
+ * measured: the AES S-box scan above is the standing example.
+ */
+static inline uint32_t ama_ct_value_barrier_u32(uint32_t v) {
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__("" : "+r"(v));
+    return v;
+#else
+    volatile uint32_t opaque = v;
+    return opaque;
+#endif
+}
+
 #endif /* AMA_CT_BARRIER_H */

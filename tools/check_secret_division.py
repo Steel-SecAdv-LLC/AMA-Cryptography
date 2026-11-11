@@ -119,35 +119,40 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "function.",
     ),
     "ama_argon2id_core": (
-        # EXACT on the CI compiler.  gcc-13 -O3 emits 6; gcc-14.2 and gcc-15.2
-        # (ubuntu-latest since 2026-11) emit 10, every one attributed to source
-        # with `objdump -d -l` on a -g Release build (2026-11-06, x86-64):
-        #   ama_argon2.c:684  x1  segment_length = m_cost / (lanes * 4)
-        #   ama_argon2.c:536  x3  ref_lane = J2 % lanes
-        #   ama_argon2.c:577  x6  abs_index = (start + z) % lane_length
-        # The newer gcc inlines `argon2_index_alpha` into more loop versions, so
-        # the SAME three expressions are emitted more times; no divide on any
-        # new operand appeared, and the `relative_position % lane_length`
-        # expression that precedes `abs_index` is folded on every compiler.
-        # A count above 10, or a divide outside these three expressions, is
-        # a new finding and must be attributed the same way.
-        10,
-        "ama_argon2.c `argon2_index_alpha` (inlined into ama_argon2id_core): "
-        "`ref_lane = J2 % lanes`. On Argon2id's data-INdependent phase J2 "
-        "comes from the counter-driven address "
-        "block and is public. On the data-dependent phase it is derived from "
-        "the password, which RFC 9106 section 3.4 specifies: that phase's "
-        "addressing is data-dependent by design, and `memory[ref_index]` at "
-        "its call site is a secret-indexed read into a multi-megabyte buffer — "
-        "a far stronger channel than divide latency, on the same secret. "
-        "Removing the divide would deviate from RFC 9106 without changing "
-        "the property. Recorded rather than silently dropped. The other two "
-        "divisors, `lanes * ARGON2_SYNC_POINTS` (the `segment_length` "
-        "quotient in `ama_argon2id_core`) and `lane_length` (the "
-        "`abs_index` modulus in `argon2_index_alpha`), are the public "
-        "memory geometry; the `abs_index` dividend `start + z` is derived "
-        "from J1 in the same two phases as J2 and carries the same "
-        "justification.",
+        # EXACT ceiling, measured 2026-11-08 on x86-64 -g Release shared
+        # objects and attributed with `objdump -d -l`: gcc-13.3 emits 3 and
+        # gcc-14.2 emits 4 (it duplicates the per-slice `ref_start`):
+        #   ama_argon2id_core   m_cost / (lanes * ARGON2_SYNC_POINTS)    once
+        #   argon2_fastmod_c    UINT64_MAX / d + 1u (d = lanes)          once
+        #   ama_argon2id_core   ((slice + 1u) * segment_length) % lane_length
+        #                                                     once per slice
+        # None is inside the per-block loop; both reduction constants were
+        # hoisted out of it (Copilot review, 2026-11-08), which lowered the
+        # ceiling from 5 to 4.
+        # Corrected per AGENTS 6.6: this entry used to allow 10 and record
+        # `J2 % lanes` and `(start + z) % lane_length` as password-derived
+        # dividends that could not be removed "without deviating from RFC
+        # 9106".  Both are removed (2026-11-08): the first is an exact
+        # Lemire-Kaser-Kurz reduction, verified over all 2^32 x 255 (n, d)
+        # pairs the API admits (d <= ARGON2_MAX_PARALLELISM = 255), the
+        # second a masked subtraction, and
+        # the KATs are unchanged.  A count above 4, or a divide on any other
+        # expression, is a new finding and is attributed the same way.
+        4,
+        "ama_argon2.c: no divide in ama_argon2id_core or the helpers inlined "
+        "into it has a secret operand, and none is in the per-block loop.  "
+        "`argon2_fastmod_c` forms the reduction constant once per hash as "
+        "`UINT64_MAX / d + 1u` with d = lanes, the public parallelism; the "
+        "password-derived J2 is then reduced by multiplication, not division "
+        "(`argon2_ct_mod_u32`).  `ama_argon2id_core` computes "
+        "`((slice + 1u) * segment_length) % lane_length` (`ref_start`) once "
+        "per slice, from the public pass geometry; the password-derived "
+        "`sum = (uint64_t)start + z` is reduced by one masked subtraction.  "
+        "`ama_argon2id_core` also computes `segment_length = m_cost / "
+        "(lanes * ARGON2_SYNC_POINTS)` once, from the public cost "
+        "parameters.  The data-dependent addressing RFC 9106 section 3.4 "
+        "specifies for the second half of pass 0 onward remains, by design; "
+        "what reaches a divide does not.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
         14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)

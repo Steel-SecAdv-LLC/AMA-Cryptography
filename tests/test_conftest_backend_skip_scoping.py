@@ -1155,6 +1155,51 @@ def test_memcheck_marked_skip_becomes_a_failure_under_the_memcheck_flag(
     result.stdout.fnmatch_lines(["*CI FAILURE: valgrind not installed*"])
 
 
+def test_a_memcheck_test_of_an_isa_the_host_lacks_is_not_escalated(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The x86-64 memcheck lane cannot run an AArch64 memcheck probe, and the
+    lane's promise (valgrind is installed) is not what that skip reports.
+    Built with whichever token THIS host lacks, as the backend case is."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_MEMCHECK", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    isolated_conftest.makepyfile(f"""
+        import pytest
+
+        @pytest.mark.requires_memcheck
+        @pytest.mark.requires_host_isa({_unsatisfied_isa_token()!r})
+        def test_guarded_write_probe():
+            pytest.skip("the probe is written for another instruction set")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_a_memcheck_skip_on_a_host_that_has_the_isa_still_fails(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The half that keeps the exemption honest on the memcheck lane."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_MEMCHECK", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+        import conftest
+
+        conftest.HOST_ISA_PREDICATES["probe-isa"] = lambda: True
+
+        @pytest.mark.requires_memcheck
+        @pytest.mark.requires_host_isa("probe-isa")
+        def test_guarded_write_probe():
+            pytest.skip("valgrind not installed")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+
+
 def test_memcheck_marked_skip_under_the_backends_flag_alone_stays_a_skip(
     isolated_conftest: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,

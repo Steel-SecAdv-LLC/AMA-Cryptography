@@ -29,6 +29,9 @@
  * ama_hmac_sha512_3 kernel).
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "../include/ama_cryptography.h"  /* AMA_API, ama_error_t, AMA_SUCCESS */
 #include "internal/ama_sha2.h"            /* shared SHA-512/384 streaming core */
 #include <string.h>
@@ -36,6 +39,8 @@
 
 /* Block size is the SHA-512 block (128 bytes); digest is 48 bytes.  Both come
  * from internal/ama_sha2.h (AMA_SHA512_BLOCK_SIZE / AMA_SHA384_DIGEST_SIZE). */
+
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha384_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[48]);
 
 /**
  * @brief Compute HMAC-SHA-384 (RFC 2104 / FIPS 198-1).
@@ -54,6 +59,17 @@
 AMA_API ama_error_t ama_hmac_sha384(const uint8_t *key, size_t key_len,
                                     const uint8_t *msg, size_t msg_len,
                                     uint8_t out[48]) {
+    ama_error_t rc = ama_hmac_sha384_body(key, key_len, msg, msg_len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HMAC_BYTES);
+    return rc;
+}
+
+/* ama_hmac_sha384() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_hmac_sha384_inner(const uint8_t *key, size_t key_len,
+                                  const uint8_t *msg, size_t msg_len,
+                                  uint8_t out[48]) {
     uint8_t k_prime[AMA_SHA512_BLOCK_SIZE];
     uint8_t ipad[AMA_SHA512_BLOCK_SIZE];
     uint8_t opad[AMA_SHA512_BLOCK_SIZE];
@@ -103,4 +119,9 @@ AMA_API ama_error_t ama_hmac_sha384(const uint8_t *key, size_t key_len,
     ama_secure_memzero(inner_hash, sizeof(inner_hash));
 
     return AMA_SUCCESS;
+}
+
+/* ama_hmac_sha384_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha384_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[48]) {
+    return ama_hmac_sha384_inner(key, key_len, msg, msg_len, out);
 }

@@ -41,17 +41,40 @@
  * - Secure memory cleanup via ama_secure_memzero
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_testing_exports.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
 #include "fe51.h"
 #include "fe64.h"
+
+/* Copy the scalar and clamp it (RFC 7748 section 5) through general
+ * registers only.  A plain `memcpy(z, n, 32)` lets the compiler move the
+ * scalar through XMM registers, and gcc 15.2 then extracted a half with
+ * MOVHLPS (x25519_scalarmult+0x12b), an instruction outside Intel's DOIT
+ * list, on secret bytes.  Each 64-bit word passes a value barrier, which
+ * pins it to a general register, so no vector register holds the scalar.
+ * The CT-operand gate (`tools/check_ct_operand.py --target x25519`) pins
+ * it on the CI compiler. */
+static inline void x25519_copy_clamp(uint8_t z[32], const uint8_t n[32]) {
+    for (int i = 0; i < 4; i++) {
+        uint64_t w;
+        memcpy(&w, n + 8 * i, sizeof(w));
+        w = ama_ct_value_barrier_u64(w);
+        memcpy(z + 8 * i, &w, sizeof(w));
+    }
+    z[0]  &= 248;
+    z[31] &= 127;
+    z[31] |= 64;
+}
 
 /* PR D (2026-04) — MULX+ADX fe64 kernel runtime branch.
  *
@@ -309,10 +332,7 @@ void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
     int t;
 
     /* Copy and clamp scalar per RFC 7748 Section 5 */
-    memcpy(z, n, 32);
-    z[0]  &= 248;
-    z[31] &= 127;
-    z[31] |= 64;
+    x25519_copy_clamp(z, n);
 
     /* Decode u-coordinate: canonicalize first (mask bit 255 and reduce
      * mod p — see x25519_canonicalize_u above), then load. */
@@ -463,10 +483,7 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
     int t;
 
     /* Copy and clamp scalar per RFC 7748 Section 5 */
-    memcpy(z, n, 32);
-    z[0]  &= 248;
-    z[31] &= 127;
-    z[31] |= 64;
+    x25519_copy_clamp(z, n);
 
     /* Decode u-coordinate: canonicalize first (mask bit 255 and reduce
      * mod p — see x25519_canonicalize_u above), then load. */
@@ -666,10 +683,7 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
     int64_t r;
     int i;
 
-    memcpy(z, n, 32);
-    z[0]  &= 248;
-    z[31] &= 127;
-    z[31] |= 64;
+    x25519_copy_clamp(z, n);
 
     x25519_canonicalize_u(u, p);
     unpack25519(x, u);
@@ -761,6 +775,8 @@ AMA_API const char *ama_x25519_field_path(void) {
  * ama_x25519_keypair was executed by no suite. */
 AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
 
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_keypair_body(uint8_t public_key[32], uint8_t secret_key[32]);
+
 /**
  * @brief Generate X25519 keypair.
  *
@@ -772,6 +788,16 @@ AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_x25519_keypair(
+    uint8_t public_key[32],
+    uint8_t secret_key[32]
+) {
+    ama_error_t rc = ama_x25519_keypair_body(public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_keypair_body(
     uint8_t public_key[32],
     uint8_t secret_key[32]
 ) {
@@ -804,6 +830,8 @@ AMA_API ama_error_t ama_x25519_keypair(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_key_exchange_body(uint8_t shared_secret[32], const uint8_t our_secret_key[32], const uint8_t their_public_key[32]);
+
 /**
  * @brief X25519 Diffie-Hellman key exchange.
  *
@@ -816,6 +844,17 @@ AMA_API ama_error_t ama_x25519_keypair(
  * @return AMA_SUCCESS or AMA_ERROR_CRYPTO
  */
 AMA_API ama_error_t ama_x25519_key_exchange(
+    uint8_t shared_secret[32],
+    const uint8_t our_secret_key[32],
+    const uint8_t their_public_key[32]
+) {
+    ama_error_t rc = ama_x25519_key_exchange_body(shared_secret, our_secret_key, their_public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_key_exchange(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_key_exchange_body(
     uint8_t shared_secret[32],
     const uint8_t our_secret_key[32],
     const uint8_t their_public_key[32]
@@ -834,17 +873,25 @@ AMA_API ama_error_t ama_x25519_key_exchange(
      * all-zero case needs no wipe (the buffer already holds zeros), so the
      * only thing the branch ever selected was the return code; select it
      * with a mask instead. */
-    uint32_t zero_or = 0;
-    int i;
-    for (i = 0; i < 32; i++) {
-        zero_or |= shared_secret[i];
+    /* Word-wise, each word through a value barrier: the byte loop was
+     * vectorised by gcc on AArch64 into a NEON OR-reduction read back with
+     * FMOV (general <- SIMD), which Arm's DIT list does not name, on the
+     * shared secret (tools/check_ct_operand.py --target x25519, AArch64). */
+    uint64_t zero_or = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t w;
+        memcpy(&w, shared_secret + 8 * i, sizeof(w));
+        zero_or |= ama_ct_value_barrier_u64(w);
     }
-    /* is_zero_mask = 0xFFFFFFFF iff zero_or == 0 (zero_or < 256). */
-    uint32_t is_zero_mask = 0u - ((zero_or - 1u) >> 31);
+    /* (x | -x) has its top bit set iff x != 0. */
+    const uint32_t nonzero = (uint32_t)((zero_or | (0u - zero_or)) >> 63);
+    uint32_t is_zero_mask = nonzero - 1u; /* 0xFFFFFFFF iff all-zero */
     int32_t rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~is_zero_mask) |
                            ((uint32_t)AMA_ERROR_CRYPTO & is_zero_mask));
     return (ama_error_t)rc;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_scalarmult_batch_body(uint8_t out[][32], const uint8_t scalars[][32], const uint8_t points[][32], size_t count);
 
 /* ============================================================================
  * Batch scalar multiplication (additive API for SIMD parallelism)
@@ -868,6 +915,18 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * accidental use of a partially-failing batch result.
  * ============================================================================ */
 AMA_API ama_error_t ama_x25519_scalarmult_batch(
+    uint8_t out[][32],
+    const uint8_t scalars[][32],
+    const uint8_t points[][32],
+    size_t count
+) {
+    ama_error_t rc = ama_x25519_scalarmult_batch_body(out, scalars, points, count);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_X25519_BYTES);
+    return rc;
+}
+
+/* ama_x25519_scalarmult_batch(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_x25519_scalarmult_batch_body(
     uint8_t out[][32],
     const uint8_t scalars[][32],
     const uint8_t points[][32],
@@ -927,15 +986,21 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
      * rejected; the only bit the caller learns is the boolean
      * batch-level outcome, identical to what the return code already
      * exposes. */
+    /* Word-wise through value barriers, as in ama_x25519_key_exchange: the
+     * byte loops below were vectorised on AArch64 and moved secret-derived
+     * words into SIMD registers with FMOV, which Arm's DIT list does not
+     * name. */
     uint8_t batch_zero_mask = 0;
     for (i = 0; i < count; i++) {
-        uint8_t lane_or = 0;
-        size_t j;
-        for (j = 0; j < 32; j++) {
-            lane_or |= out[i][j];
+        uint64_t lane_or = 0;
+        for (size_t k = 0; k < 4; k++) {
+            uint64_t w;
+            memcpy(&w, out[i] + 8 * k, sizeof(w));
+            lane_or |= ama_ct_value_barrier_u64(w);
         }
         /* lane_zero_mask: 0xFF if lane_or == 0, else 0x00. */
-        uint8_t lane_zero_mask = (uint8_t)((((uint32_t)lane_or) - 1u) >> 8) & 0xFFu;
+        const uint64_t nonzero = (lane_or | (0u - lane_or)) >> 63;
+        uint8_t lane_zero_mask = (uint8_t)(0u - (uint8_t)(1u - nonzero));
         batch_zero_mask |= lane_zero_mask;
     }
     /* RFC 7748 Sec 6.1: implementations MAY reject all-zero shared
@@ -950,12 +1015,15 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
      * and a wipe when something is. */
     {
         uint8_t keep = (uint8_t)~batch_zero_mask;
+        const uint64_t keep64 = ama_ct_value_barrier_u64((uint64_t)keep * 0x0101010101010101ULL);
         uint32_t reject_mask = 0u - (uint32_t)(batch_zero_mask & 1u);
         int32_t rc;
         for (i = 0; i < count; i++) {
-            size_t j;
-            for (j = 0; j < 32; j++) {
-                out[i][j] &= keep;
+            for (size_t k = 0; k < 4; k++) {
+                uint64_t w;
+                memcpy(&w, out[i] + 8 * k, sizeof(w));
+                w = ama_ct_value_barrier_u64(w) & keep64;
+                memcpy(out[i] + 8 * k, &w, sizeof(w));
             }
         }
         rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~reject_mask) |

@@ -500,6 +500,63 @@ AMA_API const char *ama_dispatch_active_slot(void);
  */
 AMA_API int ama_dispatch_table_is_sealed(void);
 
+
+/* ============================================================================
+ * Hardware data-independent-timing mode (Intel DOITM, Arm PSTATE.DIT)
+ * ============================================================================
+ *
+ * The vendor lists that tools/check_ct_operand.py holds secret operands to
+ * are contracts about a MODE, not unconditional properties of the silicon:
+ *
+ *   - Arm: with PSTATE.DIT = 0 "the architecture makes no statement about the
+ *     timing properties of any instructions"; the listed instructions are
+ *     data-independent only while DIT = 1.  DIT is per thread (it is PSTATE),
+ *     is writable at EL0 when FEAT_DIT is implemented, and resets to 0.
+ *   - Intel: DOITM is bit 0 of IA32_UARCH_MISC_CTL (MSR 1B01H), enumerated
+ *     by bit 12 of IA32_ARCH_CAPABILITIES (MSR 10AH), which exists only when
+ *     CPUID.(EAX=07H,ECX=0):EDX[29] = 1.  Intel states that pre-Ice Lake Core
+ *     and pre-Gracemont Atom parts that do not enumerate the control may be
+ *     assumed to behave as if it were enabled.  Both MSRs are reachable only
+ *     with privilege: RDMSR from user mode raises #GP (measured: SIGSEGV on
+ *     Linux), so a library can neither read nor set the mode.
+ *
+ * ama_ct_hw_mode_status() reports what the CALLING THREAD can know:
+ *
+ *   AMA_CT_HW_MODE_ENABLED         the mode is in force for this thread
+ *                                  (AArch64 with FEAT_DIT and DIT = 1).
+ *   AMA_CT_HW_MODE_DISABLED        the control exists and is not set
+ *                                  (AArch64 with FEAT_DIT and DIT = 0).
+ *   AMA_CT_HW_MODE_NOT_IMPLEMENTED the CPU offers no such control: AArch64
+ *                                  without FEAT_DIT, an Intel part without
+ *                                  IA32_ARCH_CAPABILITIES, or a non-Intel
+ *                                  x86-64 part (DOITM is Intel's).
+ *   AMA_CT_HW_MODE_UNKNOWN         the answer needs privilege or an OS
+ *                                  interface this library does not have: an
+ *                                  Intel part with IA32_ARCH_CAPABILITIES,
+ *                                  or a platform with no probe here.
+ *
+ * ama_ct_hw_mode_enable() sets PSTATE.DIT for the calling thread where
+ * FEAT_DIT is implemented and returns the resulting status.  Everywhere else
+ * it changes nothing and returns the same value as ama_ct_hw_mode_status().
+ * The library never sets the mode on its own: DIT is caller-visible thread
+ * state, and changing it behind the caller's back is not this library's
+ * decision.  The deployment requirement is in docs/constant-time-testing.md.
+ */
+#define AMA_CT_HW_MODE_ENABLED 1
+#define AMA_CT_HW_MODE_DISABLED 2
+#define AMA_CT_HW_MODE_NOT_IMPLEMENTED 3
+#define AMA_CT_HW_MODE_UNKNOWN 4
+
+/** Data-independent-timing mode of the calling thread (AMA_CT_HW_MODE_*). */
+AMA_API int ama_ct_hw_mode_status(void);
+
+/** Enable it for the calling thread where unprivileged code can; returns the status. */
+AMA_API int ama_ct_hw_mode_enable(void);
+
+/** Constant name of the control this host's mode refers to:
+ *  "arm-pstate-dit", "intel-doitm" or "none". */
+AMA_API const char *ama_ct_hw_mode_control(void);
+
 #ifdef __cplusplus
 }
 #endif

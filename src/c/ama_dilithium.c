@@ -40,14 +40,19 @@
  *   `CSRC_ALIGN_REPORT.md` for KAT results.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_ct_declassify.h"
+#include "internal/ama_ct_barrier.h"
 
 /* Forward declarations from ama_sha3.c */
 extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -619,11 +624,20 @@ static int32_t dil_decompose(int32_t *a0, int32_t a, const dil_params *P) {
  * MakeHint: compute hint bit (FIPS 204 Algorithm 39).
  */
 static unsigned int dil_make_hint(int32_t a0, int32_t a1, const dil_params *P) {
-    if (a0 > P->gamma2 || a0 < -P->gamma2 ||
-        (a0 == -P->gamma2 && a1 != 0)) {
-        return 1;
-    }
-    return 0;
+    /* h = [a0 > g] | [a0 < -g] | ([a0 == -g] & [a1 != 0]), each term a sign
+     * bit, with no branch.  a0 is w0 - c*s2 + c*t0 -- secret-derived on every
+     * attempt -- and the short-circuit form branched on it, so a rejected
+     * attempt's timing said which clause fired (the sign of a0), which the
+     * hint bit does not (tools/check_ghash_constant_time.py --taint
+     * --target ml-dsa-sign).  |a0| < q and g < 2^19, so no difference below
+     * overflows. */
+    const int32_t g = P->gamma2;
+    const uint32_t above = (uint32_t)(g - a0) >> 31;
+    const uint32_t below = (uint32_t)(a0 + g) >> 31;
+    const uint32_t d = (uint32_t)(a0 + g);
+    const uint32_t at_neg = 1u ^ ((d | (0u - d)) >> 31);
+    const uint32_t a1_nonzero = ((uint32_t)a1 | (0u - (uint32_t)a1)) >> 31;
+    return above | below | (at_neg & a1_nonzero);
 }
 
 #ifdef AMA_TESTING_MODE
@@ -694,6 +708,17 @@ static int32_t dil_use_hint(int32_t a, unsigned int hint, const dil_params *P) {
  * POLYNOMIAL PACKING / UNPACKING
  * ============================================================================ */
 
+/* A coefficient of a SECRET polynomial (s1, s2, t0, w1), read through a
+ * general-purpose register.  The bit-packing loops below narrow 32-bit
+ * coefficients to bytes; auto-vectorised, gcc did the narrowing with SHUFPS
+ * lane shuffles (112 sites in key generation, 64 in signing), and SHUFPS is
+ * not on Intel's Data Operand Independent Timing list
+ * (tools/check_ct_operand.py --target ml-dsa-sign).  Scalar, the packing is
+ * shifts and ORs.  These run once per key or per accepted signature. */
+static inline int32_t dil_secret_coeff(const dil_poly *a, unsigned int idx) {
+    return (int32_t)ama_ct_value_barrier_u32((uint32_t)a->coeffs[idx]);
+}
+
 /**
  * Pack a polynomial with coefficients in [-eta, eta] (FIPS 204 §7.2 SimpleBitPack
  * of eta - c).
@@ -709,14 +734,14 @@ static void dil_polyeta_pack(uint8_t *r, const dil_poly *a, const dil_params *P)
 
     if (P->eta == 2) {
         for (i = 0; i < DIL_N / 8; ++i) {
-            t[0] = (uint8_t)(P->eta - a->coeffs[8*i + 0]);
-            t[1] = (uint8_t)(P->eta - a->coeffs[8*i + 1]);
-            t[2] = (uint8_t)(P->eta - a->coeffs[8*i + 2]);
-            t[3] = (uint8_t)(P->eta - a->coeffs[8*i + 3]);
-            t[4] = (uint8_t)(P->eta - a->coeffs[8*i + 4]);
-            t[5] = (uint8_t)(P->eta - a->coeffs[8*i + 5]);
-            t[6] = (uint8_t)(P->eta - a->coeffs[8*i + 6]);
-            t[7] = (uint8_t)(P->eta - a->coeffs[8*i + 7]);
+            t[0] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 0));
+            t[1] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 1));
+            t[2] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 2));
+            t[3] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 3));
+            t[4] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 4));
+            t[5] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 5));
+            t[6] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 6));
+            t[7] = (uint8_t)(P->eta - dil_secret_coeff(a, 8*i + 7));
 
             r[3*i + 0] = (uint8_t)((t[0] >> 0) | (t[1] << 3) | (t[2] << 6));
             r[3*i + 1] = (uint8_t)((t[2] >> 2) | (t[3] << 1) | (t[4] << 4) | (t[5] << 7));
@@ -726,8 +751,8 @@ static void dil_polyeta_pack(uint8_t *r, const dil_poly *a, const dil_params *P)
     }
 
     for (i = 0; i < DIL_N / 2; ++i) {
-        t[0] = (uint8_t)(P->eta - a->coeffs[2*i + 0]);
-        t[1] = (uint8_t)(P->eta - a->coeffs[2*i + 1]);
+        t[0] = (uint8_t)(P->eta - dil_secret_coeff(a, 2*i + 0));
+        t[1] = (uint8_t)(P->eta - dil_secret_coeff(a, 2*i + 1));
         r[i] = (uint8_t)(t[0] | (t[1] << 4));
     }
 }
@@ -832,14 +857,14 @@ static void dil_polyt0_pack(uint8_t *r, const dil_poly *a) {
     int32_t t[8];
 
     for (i = 0; i < DIL_N / 8; ++i) {
-        t[0] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 0];
-        t[1] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 1];
-        t[2] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 2];
-        t[3] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 3];
-        t[4] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 4];
-        t[5] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 5];
-        t[6] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 6];
-        t[7] = (1 << (DIL_D - 1)) - a->coeffs[8*i + 7];
+        t[0] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 0);
+        t[1] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 1);
+        t[2] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 2);
+        t[3] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 3);
+        t[4] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 4);
+        t[5] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 5);
+        t[6] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 6);
+        t[7] = (1 << (DIL_D - 1)) - dil_secret_coeff(a, 8*i + 7);
 
         r[13*i +  0] = (uint8_t)(t[0]);
         r[13*i +  1] = (uint8_t)(t[0] >> 8);
@@ -1026,15 +1051,15 @@ static void dil_polyw1_pack(uint8_t *r, const dil_poly *a, const dil_params *P) 
 
     if (P->gamma2 == (DIL_Q - 1) / 88) {
         for (i = 0; i < DIL_N / 4; ++i) {
-            r[3*i + 0] = (uint8_t)(a->coeffs[4*i + 0] | (a->coeffs[4*i + 1] << 6));
-            r[3*i + 1] = (uint8_t)((a->coeffs[4*i + 1] >> 2) | (a->coeffs[4*i + 2] << 4));
-            r[3*i + 2] = (uint8_t)((a->coeffs[4*i + 2] >> 4) | (a->coeffs[4*i + 3] << 2));
+            r[3*i + 0] = (uint8_t)(dil_secret_coeff(a, 4*i + 0) | (dil_secret_coeff(a, 4*i + 1) << 6));
+            r[3*i + 1] = (uint8_t)((dil_secret_coeff(a, 4*i + 1) >> 2) | (dil_secret_coeff(a, 4*i + 2) << 4));
+            r[3*i + 2] = (uint8_t)((dil_secret_coeff(a, 4*i + 2) >> 4) | (dil_secret_coeff(a, 4*i + 3) << 2));
         }
         return;
     }
 
     for (i = 0; i < DIL_N / 2; ++i) {
-        r[i] = (uint8_t)(a->coeffs[2*i + 0] | (a->coeffs[2*i + 1] << 4));
+        r[i] = (uint8_t)(dil_secret_coeff(a, 2*i + 0) | (dil_secret_coeff(a, 2*i + 1) << 4));
     }
 }
 
@@ -1060,16 +1085,16 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
     buf[DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
 
     ama_shake128_inc_init(&shake_ctx);
-    ama_shake128_inc_absorb(&shake_ctx, buf, DIL_SEEDBYTES + 2);
-    ama_shake128_inc_finalize(&shake_ctx);
-    ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake128_inc_absorb_inner(&shake_ctx, buf, DIL_SEEDBYTES + 2);
+    ama_shake128_inc_finalize_inner(&shake_ctx);
+    ama_shake128_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
     while (ctr < DIL_N) {
         if (pos + 3 > sizeof(stream)) {
             /* Squeeze more bytes from the XOF */
-            ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake128_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
         t  = stream[pos++];
@@ -1090,6 +1115,39 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
  * next nibble is consumed. This ensures a uniform distribution over [-4, 4].
  */
 /**
+ * CoeffFromHalfByte (FIPS 204 Algorithm 15) for one nibble b of the
+ * RejBoundedPoly stream: returns 1 and the coefficient in *c when b is
+ * accepted (b < 15 for eta = 2, folded mod 5; b < 9 for eta = 4), else 0.
+ *
+ * The stream is SHAKE256(rho'), secret, and acceptance decides the loop, so
+ * the acceptance bit -- and nothing else -- is declassified.  It is safe to
+ * expose: b is uniform on [0, 15], an accepted b's coefficient is uniform on
+ * [-eta, eta] whatever the pattern of accepts and rejects around it, so the
+ * pattern carries no information about any coefficient.  The coefficient is
+ * computed without a branch and stays secret.
+ */
+static inline unsigned int dil_eta_accept(uint8_t b, const dil_params *P, int32_t *c) {
+    const int32_t lim = (P->eta == 2) ? 15 : 9;
+    unsigned int ok = (unsigned int)((uint32_t)((int32_t)b - lim) >> 31);
+    *c = (P->eta == 2) ? 2 - (int32_t)(b - ((205 * b) >> 10) * 5) : 4 - (int32_t)b;
+    AMA_CT_DECLASSIFY(&ok, sizeof(ok));
+    return ok;
+}
+
+/**
+ * One ML-DSA.Sign_internal rejection decision (FIPS 204 Algorithm 7 lines
+ * 23 and 28), declassified: the bit says only that this attempt is
+ * discarded.  FIPS 204 sec. 3.6.1 note 3 states the timing leakage of
+ * signing is information about the message and not the private key; the
+ * values the decision is taken on (z, r0, c*t0, the hint count) stay secret.
+ */
+static inline int dil_reject_public(int bad) {
+    unsigned int v = (unsigned int)(bad != 0);
+    AMA_CT_DECLASSIFY(&v, sizeof(v));
+    return (int)v;
+}
+
+/**
  * Sample polynomial with coefficients in [-eta, eta] from SHAKE256 stream
  * (FIPS 204 RejBoundedPoly). Uses incremental SHAKE256 for proper XOF streaming.
  */
@@ -1105,9 +1163,9 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
     ama_shake256_inc_init(&shake_ctx);
-    ama_shake256_inc_absorb(&shake_ctx, buf, DIL_CRHBYTES + 2);
-    ama_shake256_inc_finalize(&shake_ctx);
-    ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake256_inc_absorb_inner(&shake_ctx, buf, DIL_CRHBYTES + 2);
+    ama_shake256_inc_finalize_inner(&shake_ctx);
+    ama_shake256_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
@@ -1115,7 +1173,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         uint8_t t0, t1;
 
         if (pos >= sizeof(stream)) {
-            ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake256_inc_squeeze_inner(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
 
@@ -1128,21 +1186,13 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
          * Getting this wrong yields a secret vector with the right *shape*
          * and the wrong *distribution*, which no roundtrip test can see —
          * only the FIPS 204 key-generation KATs catch it. */
-        if (P->eta == 2) {
-            if (t0 < 15) {
-                t0 = (uint8_t)(t0 - (205 * t0 >> 10) * 5);
-                a->coeffs[ctr++] = 2 - (int32_t)t0;
+        {
+            int32_t c;
+            if (dil_eta_accept(t0, P, &c)) {
+                a->coeffs[ctr++] = c;
             }
-            if (t1 < 15 && ctr < DIL_N) {
-                t1 = (uint8_t)(t1 - (205 * t1 >> 10) * 5);
-                a->coeffs[ctr++] = 2 - (int32_t)t1;
-            }
-        } else {
-            if (t0 < 9) {
-                a->coeffs[ctr++] = 4 - (int32_t)t0;
-            }
-            if (t1 < 9 && ctr < DIL_N) {
-                a->coeffs[ctr++] = 4 - (int32_t)t1;
+            if (ctr < DIL_N && dil_eta_accept(t1, P, &c)) {
+                a->coeffs[ctr++] = c;
             }
         }
     }
@@ -1170,21 +1220,13 @@ static int dil_rej_eta_from_stream(dil_poly *a,
         uint8_t t0 = stream[pos] & 0x0F;
         uint8_t t1 = stream[pos] >> 4;
         pos++;
-        if (P->eta == 2) {
-            if (t0 < 15) {
-                t0 = (uint8_t)(t0 - (205 * t0 >> 10) * 5);
-                a->coeffs[ctr++] = 2 - (int32_t)t0;
+        {
+            int32_t c;
+            if (dil_eta_accept(t0, P, &c)) {
+                a->coeffs[ctr++] = c;
             }
-            if (t1 < 15 && ctr < DIL_N) {
-                t1 = (uint8_t)(t1 - (205 * t1 >> 10) * 5);
-                a->coeffs[ctr++] = 2 - (int32_t)t1;
-            }
-        } else {
-            if (t0 < 9) {
-                a->coeffs[ctr++] = 4 - (int32_t)t0;
-            }
-            if (t1 < 9 && ctr < DIL_N) {
-                a->coeffs[ctr++] = 4 - (int32_t)t1;
+            if (ctr < DIL_N && dil_eta_accept(t1, P, &c)) {
+                a->coeffs[ctr++] = c;
             }
         }
     }
@@ -1277,7 +1319,7 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ama_shake256(buf, DIL_CRHBYTES + 2, stream, P->polyz_packedbytes);
+    ama_shake256_inner(buf, DIL_CRHBYTES + 2, stream, P->polyz_packedbytes);
     dil_polyz_unpack(a, stream, P);
     /* `stream` is the packed masking vector y and `buf` carries rhoprime
      * (INVARIANT-12). y is the ephemeral whose disclosure, with the emitted
@@ -1368,9 +1410,9 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t *seed, const dil_param
 
     /* Absorb seed, finalize, then squeeze first block */
     ama_shake256_inc_init(&shake_ctx);
-    ama_shake256_inc_absorb(&shake_ctx, seed, P->ctildebytes);
-    ama_shake256_inc_finalize(&shake_ctx);
-    ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+    ama_shake256_inc_absorb_inner(&shake_ctx, seed, P->ctildebytes);
+    ama_shake256_inc_finalize_inner(&shake_ctx);
+    ama_shake256_inc_squeeze_inner(&shake_ctx, buf, sizeof(buf));
 
     /* First 8 bytes encode signs */
     signs = 0;
@@ -1386,7 +1428,7 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t *seed, const dil_param
         do {
             if (pos >= sizeof(buf)) {
                 /* Squeeze next block from the same SHAKE256 state */
-                ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+                ama_shake256_inc_squeeze_inner(&shake_ctx, buf, sizeof(buf));
                 pos = 0;
             }
             b = buf[pos++];
@@ -1525,10 +1567,10 @@ static void dil_polyveck_decompose(dil_polyveck *v1, dil_polyveck *v0,
 /**
  * MakeHint on vectors
  */
-static unsigned int dil_polyveck_make_hint(uint8_t *hint,
-                                            const dil_polyveck *v0,
-                                            const dil_polyveck *v1,
-                                            const dil_params *P) {
+static unsigned int dil_polyveck_hint_bits(uint8_t hbits[DIL_K_MAX][DIL_N],
+                                           const dil_polyveck *v0,
+                                           const dil_polyveck *v1,
+                                           const dil_params *P) {
     unsigned int i, j, s = 0;
 
 #ifdef AMA_TESTING_MODE
@@ -1537,38 +1579,50 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
     }
 #endif
 
-    /* The scan always runs to completion.  Returning at the first hint past
-     * omega made a rejected attempt's cost a function of WHERE the overflow
-     * happened, which is a function of w0 - c*s2 + c*t0 and therefore of the
-     * private key — the same class dil_poly_chknorm above was fixed for.
-     * The count keeps rising past omega so the caller can still reject
-     * (`n > P->omega`); only the WRITE is clamped, and the clamp is on the
-     * running count rather than on a return.
-     *
-     * Writing hint[s] at a secret-derived index is not the same class and is
-     * inherent: on an ACCEPTED attempt those positions are the emitted
-     * signature, hence public.  A rejected attempt is discarded. */
+    /* The secret half of hint construction.  Every coefficient's bit goes to
+     * its own fixed slot and the count accumulates without a branch, so this
+     * pass has neither a secret-dependent branch nor a secret-dependent
+     * address.  The previous single pass wrote hint[s] at the running count
+     * s on every attempt, accepted or rejected, which made the store
+     * addresses of a REJECTED attempt -- discarded, never published -- a
+     * function of w0 - c*s2 + c*t0.  The positions are packed by
+     * dil_polyveck_pack_hint only once the attempt is accepted, when they are
+     * the signature.  The scan always runs to completion (see
+     * dil_poly_chknorm), and the count keeps rising past omega so the caller
+     * can reject on it. */
     for (i = 0; i < P->k; ++i) {
         for (j = 0; j < DIL_N; ++j) {
-            unsigned int h =
-                dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P) ? 1u : 0u;
+            const unsigned int h =
+                dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P);
 #ifdef AMA_TESTING_MODE
             if (dil_test_make_hint_edge_armed && v0->vec[i].coeffs[j] == -P->gamma2 &&
                 v1->vec[i].coeffs[j] == 0) {
                 dil_test_make_hint_edge_hits++;
             }
 #endif
-            if (h && s < (unsigned int)P->omega) {
-                hint[s] = (uint8_t)j;
-            }
+            hbits[i][j] = (uint8_t)h;
             s += h;
         }
-        /* Cumulative count, clamped so the buffer's tail stays well-formed
-         * on an attempt that will be rejected anyway. */
-        hint[P->omega + i] =
-            (uint8_t)(s <= (unsigned int)P->omega ? s : (unsigned int)P->omega);
     }
     return s;
+}
+
+/* The public half: pack an ACCEPTED attempt's hint bits (FIPS 204 Algorithm
+ * 20, HintBitPack).  Called only after the omega check passed and the bits
+ * were declassified -- they are exactly what the signature publishes. */
+static void dil_polyveck_pack_hint(uint8_t *hint, uint8_t hbits[DIL_K_MAX][DIL_N],
+                                   const dil_params *P) {
+    unsigned int i, j, s = 0;
+
+    memset(hint, 0, (size_t)P->omega + P->k);  // PUBLIC-DATA: hint — the signature's hint field, packed from public bits
+    for (i = 0; i < P->k; ++i) {
+        for (j = 0; j < DIL_N; ++j) {
+            if (hbits[i][j] && s < (unsigned int)P->omega) {
+                hint[s++] = (uint8_t)j;
+            }
+        }
+        hint[P->omega + i] = (uint8_t)s;
+    }
 }
 
 /**
@@ -1859,12 +1913,16 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
         memcpy(h_input, seedbuf, DIL_SEEDBYTES);
         h_input[DIL_SEEDBYTES] = (uint8_t)P->k;
         h_input[DIL_SEEDBYTES + 1] = (uint8_t)P->l;
-        ama_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
+        ama_shake256_inner(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
         ama_secure_memzero(h_input, sizeof(h_input));
     }
     rho = seedbuf;
     rhoprime = rho + DIL_SEEDBYTES;
     key = rhoprime + DIL_CRHBYTES;
+    /* rho is the public key's first field (FIPS 204 Algorithm 22, pkEncode),
+     * and ExpandA rejection-samples A from it by specification.  rho' and K
+     * stay secret. */
+    AMA_CT_DECLASSIFY(rho, DIL_SEEDBYTES);
 
     /* Sample secret vectors s1 (nonces 0..l-1) and s2 (nonces l..l+k-1) in
      * contiguous batched passes over the shared rhoprime seed. */
@@ -1873,7 +1931,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
 
     /* Compute t = A*s1 + s2, expanding A one row at a time — A is used exactly
      * once here, so holding all 56 polynomials only ever cost 57 KB of frame. */
-    s1hat = s1;
+    memcpy(&s1hat, &s1, sizeof(s1hat));
     dil_polyvecl_ntt(&s1hat, P->l);
     dil_matrix_pointwise_rowwise(&t, rho, &s1hat, P);
     /* Reduce BEFORE the inverse NTT, not only after it.
@@ -1946,7 +2004,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     }
 
     /* Compute tr = H(pk) */
-    ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(public_key, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* Pack secret key: rho || key || tr || s1 || s2 || t0 */
     memcpy(secret_key, rho, DIL_SEEDBYTES);
@@ -2145,7 +2203,7 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
         }
     }
 
-    ama_shake256(pk, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(pk, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* Precedence matches the pre-row-wise implementation: an out-of-range
      * coefficient is a malformed key (INVALID_PARAM), and only a well-formed
@@ -2193,19 +2251,19 @@ static ama_error_t dil_hash_mu(const uint8_t *tr,
 
     rc = ama_shake256_inc_init(&ctx);
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_absorb(&ctx, tr, DIL_TRBYTES);
+        rc = ama_shake256_inc_absorb_inner(&ctx, tr, DIL_TRBYTES);
     }
     if (rc == AMA_SUCCESS && prefix_len) {
-        rc = ama_shake256_inc_absorb(&ctx, prefix, prefix_len);
+        rc = ama_shake256_inc_absorb_inner(&ctx, prefix, prefix_len);
     }
     if (rc == AMA_SUCCESS && message_len) {
-        rc = ama_shake256_inc_absorb(&ctx, message, message_len);
+        rc = ama_shake256_inc_absorb_inner(&ctx, message, message_len);
     }
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_finalize(&ctx);
+        rc = ama_shake256_inc_finalize_inner(&ctx);
     }
     if (rc == AMA_SUCCESS) {
-        rc = ama_shake256_inc_squeeze(&ctx, mu, DIL_CRHBYTES);
+        rc = ama_shake256_inc_squeeze_inner(&ctx, mu, DIL_CRHBYTES);
     }
     /* The absorbed state is a function of the message and of tr; neither is a
      * long-term secret, but the state is scrubbed on every path regardless
@@ -2277,6 +2335,7 @@ static ama_error_t dil_build_ctx_prefix(const uint8_t *ctx, size_t ctx_len,
         ama_secure_memzero(mu, sizeof(mu));                                    \
         ama_secure_memzero(rhoprime, sizeof(rhoprime));                        \
         ama_secure_memzero(hashbuf, sizeof(hashbuf));                          \
+        ama_secure_memzero(hbits, sizeof(hbits));                              \
     } while (0)
 
 /* @param rnd  FIPS 204 Algorithm 7 line 3's `rnd`: NULL selects the
@@ -2302,6 +2361,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
     dil_polyveck s2, t0, w1, w0, ct0, cs2;
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
+    uint8_t hbits[DIL_K_MAX][DIL_N];
     size_t eta_off, t0_off;
     unsigned int n, i;
     uint16_t nonce = 0;
@@ -2342,6 +2402,9 @@ static ama_error_t dil_sign_internal(const dil_params *P,
             sk_bad |= dil_polyeta_unpack(&s2.vec[i],
                 secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
         }
+        /* Whether the encoding is in range is the verdict returned to the
+         * caller (AMA_ERROR_INVALID_PARAM); the coefficients stay secret. */
+        AMA_CT_DECLASSIFY(&sk_bad, sizeof(sk_bad));
         if (sk_bad) {
             ama_secure_memzero(&s1, sizeof(s1));
             ama_secure_memzero(&s2, sizeof(s2));
@@ -2408,7 +2471,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
     }
     memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
-    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
+    ama_shake256_inner(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
                  rhoprime, DIL_CRHBYTES);
 
     /* Rejection sampling loop
@@ -2435,7 +2498,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Compute w = A*NTT(y).  yhat is hoisted (see above) so its
          * stack slot persists past the loop for scrub. */
-        yhat = y;
+        memcpy(&yhat, &y, sizeof(yhat));
         dil_polyvecl_ntt(&yhat, P->l);
         dil_polyvec_matrix_pointwise(&w1, mat, &yhat, P);
         /* Same l-fold accumulator, same precondition — see the bound note in
@@ -2451,10 +2514,12 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Pack w1 and compute challenge hash */
         {
-            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX] = {0};
+            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             uint8_t challenge_seed[DIL_CRHBYTES +
                                    DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             const size_t w1_len = (size_t)P->k * P->polyw1_packedbytes;
+
+            memset(w1_packed, 0, sizeof(w1_packed));  // PUBLIC-DATA: w1_packed (pre-use init; w1 = HighBits(A*y) is what a verifier recomputes from the signature, FIPS 204 Algorithm 8)
 
             for (i = 0; i < P->k; ++i) {
                 dil_polyw1_pack(w1_packed + i * P->polyw1_packedbytes, &w1.vec[i], P);
@@ -2462,9 +2527,14 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
             memcpy(challenge_seed, mu, DIL_CRHBYTES);
             memcpy(challenge_seed + DIL_CRHBYTES, w1_packed, w1_len);
-            ama_shake256(challenge_seed, DIL_CRHBYTES + w1_len,
+            ama_shake256_inner(challenge_seed, DIL_CRHBYTES + w1_len,
                         signature, P->ctildebytes);
         }
+        /* c~ is the signature's first field, and SampleInBall below branches
+         * on SHAKE256(c~) by specification (FIPS 204 Algorithm 29).  The
+         * attempt-level timing this exposes is the leakage FIPS 204 sec. 3.6.1
+         * note 3 attributes to the message and not to the private key. */
+        AMA_CT_DECLASSIFY(signature, P->ctildebytes);
 
         /* Compute challenge polynomial c from c_tilde */
         dil_poly_challenge(&cp, signature, P);
@@ -2479,7 +2549,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         }
 
         /* Check ||z||_inf < gamma1 - beta */
-        if (dil_polyvecl_chknorm(&z, P->gamma1 - P->beta, P->l))
+        if (dil_reject_public(dil_polyvecl_chknorm(&z, P->gamma1 - P->beta, P->l)))
             continue;
 
         /* Compute w0 - c*s2 */
@@ -2491,7 +2561,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         dil_polyveck_reduce(&w0, P->k);
 
         /* Check ||w0 - cs2||_inf < gamma2 - beta */
-        if (dil_polyveck_chknorm(&w0, P->gamma2 - P->beta, P->k))
+        if (dil_reject_public(dil_polyveck_chknorm(&w0, P->gamma2 - P->beta, P->k)))
             continue;
 
         /* Compute c*t0 */
@@ -2502,22 +2572,28 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         }
 
         /* Check ||ct0||_inf < gamma2 */
-        if (dil_polyveck_chknorm(&ct0, P->gamma2, P->k))
+        if (dil_reject_public(dil_polyveck_chknorm(&ct0, P->gamma2, P->k)))
             continue;
 
         /* Compute hints: make_hint(w0-cs2+ct0, w1) per FIPS 204 */
-        memset(hint, 0, sizeof(hint));  // PUBLIC-DATA: hint — ML-DSA hint buffer (public part of signature), pre-use init
         dil_polyveck_add(&w0, &w0, &ct0, P->k);
-        n = dil_polyveck_make_hint(hint, &w0, &w1, P);
-        if (n > P->omega)
+        n = dil_polyveck_hint_bits(hbits, &w0, &w1, P);
+        if (dil_reject_public(n > P->omega))
             continue;
+
+        /* Accepted: these bits are the signature's hint field. */
+        AMA_CT_DECLASSIFY(hbits, sizeof(hbits));
+        dil_polyveck_pack_hint(hint, hbits, P);
 
         /* All checks passed */
         reject = 0;
     }
 
     /* Pack signature: c_tilde || z (l * polyz_packed) || hints (omega + k) */
-    /* c_tilde already written at signature[0..47] */
+    /* c_tilde already written at signature[0..47].  The accepted z is the
+     * signature's second field (FIPS 204 Algorithm 26, sigEncode); only a
+     * REJECTED z is secret, and the loop above never packs one. */
+    AMA_CT_DECLASSIFY(&z, sizeof(z));
     for (i = 0; i < P->l; ++i) {
         dil_polyz_pack(signature + P->ctildebytes + i * P->polyz_packedbytes,
                        &z.vec[i], P);
@@ -2562,13 +2638,17 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     uint8_t c_tilde2[DIL_CTILDEBYTES_MAX];
     dil_polyvecl z;
     /* h_vec is filled element-by-element in the loop below before it is
-     * read; zero-initialised so cppcheck 2.17 can see that, since it
-     * cannot follow the P->k bound. */
-    dil_polyveck t1, w1prime, h_vec = {0};
+     * read; zeroed first so cppcheck 2.17 can see that, since it cannot
+     * follow the P->k bound.  An explicit memset, not `= {0}`: clang lowers
+     * an aggregate initialiser this size to a call into glibc's memset
+     * (see src/c/internal/ama_string_ops.h). */
+    dil_polyveck t1, w1prime, h_vec;
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
     uint8_t tr[DIL_TRBYTES];
     unsigned int i;
+
+    memset(&h_vec, 0, sizeof(h_vec));  // PUBLIC-DATA: h_vec (pre-use init on the verification path; the hint is decoded from the public signature)
 
     if (!P || !message || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
@@ -2668,7 +2748,7 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     }
 
     /* Compute tr = H(pk) */
-    ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
+    ama_shake256_inner(public_key, P->pk_bytes, tr, DIL_TRBYTES);
 
     /* mu = H(tr || prefix || M) — streamed, no allocation. */
     {
@@ -2691,7 +2771,8 @@ static ama_error_t dil_verify_internal(const dil_params *P,
      * thread stack.  Holding the whole 56-polynomial matrix put the frame at
      * ~101 KB, on the wrong side of musl's 128 KB default once anything else
      * was below it. */
-    dil_polyvecl zhat = z;
+    dil_polyvecl zhat;
+    memcpy(&zhat, &z, sizeof(zhat));
     dil_polyvecl_ntt(&zhat, P->l);
     dil_matrix_pointwise_rowwise(&w1prime, rho, &zhat, P);
 
@@ -2738,7 +2819,7 @@ static ama_error_t dil_verify_internal(const dil_params *P,
                                 i * P->polyw1_packedbytes,
                             &w1prime.vec[i], P);
         }
-        ama_shake256(challenge_input, challenge_len, c_tilde2, P->ctildebytes);
+        ama_shake256_inner(challenge_input, challenge_len, c_tilde2, P->ctildebytes);
         ama_secure_memzero(challenge_input, sizeof(challenge_input));
     }
 
@@ -2788,14 +2869,36 @@ AMA_API const char *ama_ml_dsa_param_set_name(ama_ml_dsa_param_set_t ps) {
     return P ? P->name : NULL;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_body(ama_ml_dsa_param_set_t ps, uint8_t *public_key, uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_keypair(ama_ml_dsa_param_set_t ps,
+                                       uint8_t *public_key, uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_keypair_body(ps, public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_KEYGEN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_body(ama_ml_dsa_param_set_t ps,
                                        uint8_t *public_key, uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_keygen_internal(P, NULL, public_key, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_from_seed_body(ama_ml_dsa_param_set_t ps, const uint8_t xi[32], uint8_t *public_key, uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
+                                                 const uint8_t xi[32],
+                                                 uint8_t *public_key,
+                                                 uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_keypair_from_seed_body(ps, xi, public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_KEYGEN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_keypair_from_seed(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_keypair_from_seed_body(ama_ml_dsa_param_set_t ps,
                                                  const uint8_t xi[32],
                                                  uint8_t *public_key,
                                                  uint8_t *secret_key) {
@@ -2804,7 +2907,18 @@ AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
     return dil_keygen_internal(P, xi, public_key, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_pubkey_from_privkey_body(ama_ml_dsa_param_set_t ps, const uint8_t *secret_key, uint8_t *public_key);
+
 AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
+                                                   const uint8_t *secret_key,
+                                                   uint8_t *public_key) {
+    ama_error_t rc = ama_ml_dsa_pubkey_from_privkey_body(ps, secret_key, public_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_CHECK_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_pubkey_from_privkey(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_pubkey_from_privkey_body(ama_ml_dsa_param_set_t ps,
                                                    const uint8_t *secret_key,
                                                    uint8_t *public_key) {
     const dil_params *P = dil_params_for(ps);
@@ -2812,7 +2926,17 @@ AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
     return dil_pubkey_from_sk(P, secret_key, public_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_privkey_check_body(ama_ml_dsa_param_set_t ps, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
+                                             const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_privkey_check_body(ps, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_CHECK_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_privkey_check(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_privkey_check_body(ama_ml_dsa_param_set_t ps,
                                              const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P || !secret_key) return AMA_ERROR_INVALID_PARAM;
@@ -2869,7 +2993,20 @@ static ama_error_t dil_sign_ctx_variant(ama_ml_dsa_param_set_t ps,
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_ctx_body(ama_ml_dsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+                                        uint8_t *signature, size_t *signature_len,
+                                        const uint8_t *message, size_t message_len,
+                                        const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_sign_ctx_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_SIGN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_sign_ctx(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_ctx_body(ama_ml_dsa_param_set_t ps,
                                         uint8_t *signature, size_t *signature_len,
                                         const uint8_t *message, size_t message_len,
                                         const uint8_t *ctx, size_t ctx_len,
@@ -2878,7 +3015,20 @@ AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
                                 ctx, ctx_len, NULL, secret_key);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_hedged_body(ama_ml_dsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key) {
+    ama_error_t rc = ama_ml_dsa_sign_hedged_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ML_DSA_SIGN_BYTES);
+    return rc;
+}
+
+/* ama_ml_dsa_sign_hedged(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ml_dsa_sign_hedged_body(ama_ml_dsa_param_set_t ps,
                                            uint8_t *signature, size_t *signature_len,
                                            const uint8_t *message, size_t message_len,
                                            const uint8_t *ctx, size_t ctx_len,

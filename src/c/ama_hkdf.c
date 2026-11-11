@@ -15,17 +15,35 @@
  * - Constant-time operations where possible
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 /* ========================================================================== */
 /* HMAC-SHA-512 (RFC 2104) — public API for BIP32 key derivation             */
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha512_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[64]);
+
 /* ========================================================================== */
 
 AMA_API ama_error_t ama_hmac_sha512(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[64]
+) {
+    ama_error_t rc = ama_hmac_sha512_body(key, key_len, msg, msg_len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HMAC_BYTES);
+    return rc;
+}
+
+/* ama_hmac_sha512() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_hmac_sha512_inner(
     const uint8_t *key, size_t key_len,
     const uint8_t *msg, size_t msg_len,
     uint8_t out[64]
@@ -41,6 +59,11 @@ AMA_API ama_error_t ama_hmac_sha512(
     if (rc == 0)  return AMA_SUCCESS;
     if (rc == -2) return AMA_ERROR_OVERFLOW;
     return AMA_ERROR_MEMORY;
+}
+
+/* ama_hmac_sha512_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha512_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[64]) {
+    return ama_hmac_sha512_inner(key, key_len, msg, msg_len, out);
 }
 
 /* SHA3-256 constants */
@@ -82,7 +105,7 @@ static ama_error_t hmac_sha3_256(
 
     /* If key is longer than block size, hash it first */
     if (key_len > SHA3_256_BLOCK_SIZE) {
-        rc = ama_sha3_256(key, key_len, key_hash);
+        rc = ama_sha3_256_inner(key, key_len, key_hash);
         if (rc != AMA_SUCCESS) {
             return rc;
         }
@@ -109,18 +132,18 @@ static ama_error_t hmac_sha3_256(
      * block).  The block-size + data_len overflow guard is no longer needed
      * because no single buffer of that size is ever materialised. */
     rc = ama_sha3_init(&ctx);
-    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, k_ipad, SHA3_256_BLOCK_SIZE);
-    if (rc == AMA_SUCCESS && data_len > 0) rc = ama_sha3_update(&ctx, data, data_len);
-    if (rc == AMA_SUCCESS) rc = ama_sha3_final(&ctx, inner_hash);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update_inner(&ctx, k_ipad, SHA3_256_BLOCK_SIZE);
+    if (rc == AMA_SUCCESS && data_len > 0) rc = ama_sha3_update_inner(&ctx, data, data_len);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_final_inner(&ctx, inner_hash);
     if (rc != AMA_SUCCESS) {
         goto cleanup;
     }
 
     /* Outer hash: H(K XOR opad || inner_hash) */
     rc = ama_sha3_init(&ctx);
-    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, k_opad, SHA3_256_BLOCK_SIZE);
-    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, inner_hash, SHA3_256_DIGEST_SIZE);
-    if (rc == AMA_SUCCESS) rc = ama_sha3_final(&ctx, output);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update_inner(&ctx, k_opad, SHA3_256_BLOCK_SIZE);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update_inner(&ctx, inner_hash, SHA3_256_DIGEST_SIZE);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_final_inner(&ctx, output);
 
 cleanup:
     /* Scrub sensitive data */
@@ -133,11 +156,26 @@ cleanup:
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha3_256_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[32]);
+
 /**
  * Public HMAC-SHA3-256 API.
  * Delegates to the internal hmac_sha3_256() used by HKDF.
  */
 AMA_API ama_error_t ama_hmac_sha3_256(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[32]
+) {
+    ama_error_t rc = ama_hmac_sha3_256_body(key, key_len, msg, msg_len, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_HMAC_BYTES);
+    return rc;
+}
+
+/* ama_hmac_sha3_256() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_hmac_sha3_256_inner(
     const uint8_t *key, size_t key_len,
     const uint8_t *msg, size_t msg_len,
     uint8_t out[32]
@@ -153,6 +191,11 @@ AMA_API ama_error_t ama_hmac_sha3_256(
         return AMA_ERROR_INVALID_PARAM;
     }
     return hmac_sha3_256(key, key_len, msg, msg_len, out);
+}
+
+/* ama_hmac_sha3_256_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hmac_sha3_256_body(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[32]) {
+    return ama_hmac_sha3_256_inner(key, key_len, msg, msg_len, out);
 }
 
 /**
@@ -290,6 +333,8 @@ cleanup:
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_body(const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len, const uint8_t* info, size_t info_len, uint8_t* okm, size_t okm_len);
+
 /**
  * HKDF key derivation (RFC 5869)
  *
@@ -307,6 +352,24 @@ cleanup:
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_hkdf(
+    const uint8_t* salt,
+    size_t salt_len,
+    const uint8_t* ikm,
+    size_t ikm_len,
+    const uint8_t* info,
+    size_t info_len,
+    uint8_t* okm,
+    size_t okm_len
+) {
+    ama_error_t rc = ama_hkdf_body(salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_hkdf() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_hkdf_inner(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -356,6 +419,11 @@ cleanup:
     return rc;
 }
 
+/* ama_hkdf_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_body(const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len, const uint8_t* info, size_t info_len, uint8_t* okm, size_t okm_len) {
+    return ama_hkdf_inner(salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+}
+
 /* ========================================================================== */
 /* HKDF-SHA-2 (RFC 5869) — SHA-256/384/512 PRF variants                       */
 /*                                                                            */
@@ -366,29 +434,24 @@ cleanup:
 /* on the native ama_hmac_sha{256,384,512} primitives (INVARIANT-1).          */
 /* ========================================================================== */
 
-/* ama_hmac_sha256 is declared in src/c/ama_hmac_sha256.h; forward-declare it
- * here (its header is not on this TU's include path) — ama_hmac_sha384/512 are
- * declared in ama_cryptography.h already included above. */
-extern void ama_hmac_sha256(const uint8_t *key, size_t key_len,
-                            const uint8_t *data, size_t data_len,
-                            uint8_t out[32]);
-
+/* The PRFs are the HMACs' inner functions (internal/ama_scrubbed_inner.h):
+ * a derivation's entry point clears the stack once, for all of it. */
 typedef void (*ama_hkdf_prf_fn)(const uint8_t *key, size_t key_len,
                                 const uint8_t *msg, size_t msg_len,
                                 uint8_t *out);
 
 static void ama_hkdf_prf_sha256(const uint8_t *k, size_t kl,
                                 const uint8_t *m, size_t ml, uint8_t *o) {
-    ama_hmac_sha256(k, kl, m, ml, o);
+    ama_hmac_sha256_inner(k, kl, m, ml, o);
 }
 static void ama_hkdf_prf_sha384(const uint8_t *k, size_t kl,
                                 const uint8_t *m, size_t ml, uint8_t *o) {
     /* ama_hmac_sha384 only fails on NULL key/out — never passed here. */
-    (void)ama_hmac_sha384(k, kl, m, ml, o);
+    (void)ama_hmac_sha384_inner(k, kl, m, ml, o);
 }
 static void ama_hkdf_prf_sha512(const uint8_t *k, size_t kl,
                                 const uint8_t *m, size_t ml, uint8_t *o) {
-    (void)ama_hmac_sha512(k, kl, m, ml, o);
+    (void)ama_hmac_sha512_inner(k, kl, m, ml, o);
 }
 
 /* RFC 5869 Extract-then-Expand, parameterised by PRF + hash length. */
@@ -464,7 +527,20 @@ cleanup:
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha256_body(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t *okm, size_t okm_len);
+
 AMA_API ama_error_t ama_hkdf_sha256(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    ama_error_t rc = ama_hkdf_sha256_body(salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_hkdf_sha256(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha256_body(
     const uint8_t *salt, size_t salt_len,
     const uint8_t *ikm, size_t ikm_len,
     const uint8_t *info, size_t info_len,
@@ -474,7 +550,20 @@ AMA_API ama_error_t ama_hkdf_sha256(
                                  info, info_len, okm, okm_len);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha384_body(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t *okm, size_t okm_len);
+
 AMA_API ama_error_t ama_hkdf_sha384(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    ama_error_t rc = ama_hkdf_sha384_body(salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_hkdf_sha384(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha384_body(
     const uint8_t *salt, size_t salt_len,
     const uint8_t *ikm, size_t ikm_len,
     const uint8_t *info, size_t info_len,
@@ -484,7 +573,20 @@ AMA_API ama_error_t ama_hkdf_sha384(
                                  info, info_len, okm, okm_len);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha512_body(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t *okm, size_t okm_len);
+
 AMA_API ama_error_t ama_hkdf_sha512(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    ama_error_t rc = ama_hkdf_sha512_body(salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_hkdf_sha512(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_sha512_body(
     const uint8_t *salt, size_t salt_len,
     const uint8_t *ikm, size_t ikm_len,
     const uint8_t *info, size_t info_len,

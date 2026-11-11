@@ -99,8 +99,10 @@
         # probes are declared in include/ama_cpuid.h, which is not installed
         # and carries no AMA_API; the Keccak entries are raw permutations,
         # the class ama_keccak_f1600_generic above already is; and
-        # ama_stack_wipe_below is the internal helper behind
-        # ama_secure_stack_wipe.  Exact names, never a wildcard: the gate
+        # ama_stack_wipe_cap and the ama_stack_wipe_frame_* family are the
+        # parts of the internal AMA_STACK_WIPE_BELOW() behind
+        # ama_secure_stack_wipe and every scrubbed entry point
+        # (src/c/internal/ama_stack_wipe.h).  Exact names, never a wildcard: the gate
         # parses exact names, and a second pattern competing with `ama_*`
         # is not reliably ordered by every linker.
         ama_has_adx;
@@ -127,7 +129,46 @@
         ama_keccak_f1600_bmi;
         ama_keccak_f1600_x4_avx2;
         ama_keccak_f1600_x4_generic;
-        ama_stack_wipe_below;
+        ama_stack_wipe_cap;
+        ama_stack_wipe_frame_1024;
+        ama_stack_wipe_frame_2048;
+        ama_stack_wipe_frame_4096;
+        ama_stack_wipe_frame_8192;
+        ama_stack_wipe_frame_16384;
+        ama_stack_wipe_frame_24576;
+        ama_stack_wipe_frame_45056;
+        ama_stack_wipe_frame_49152;
+        ama_stack_wipe_frame_77824;
+        ama_stack_wipe_frame_176128;
+        ama_stack_wipe_frame_196608;
+
+        # What the library's own code calls in place of a scrubbed entry
+        # point: the same work, with no stack clearing of its own
+        # (src/c/internal/ama_scrubbed_inner.h).  A caller outside the
+        # library has no entry point above it to clear what these leave.
+        ama_sha3_256_inner;
+        ama_sha3_512_inner;
+        ama_shake256_inner;
+        ama_sha3_update_inner;
+        ama_sha3_final_inner;
+        ama_shake128_inc_absorb_inner;
+        ama_shake128_inc_finalize_inner;
+        ama_shake128_inc_squeeze_inner;
+        ama_shake256_inc_absorb_inner;
+        ama_shake256_inc_finalize_inner;
+        ama_shake256_inc_squeeze_inner;
+        ama_sha256_inner;
+        ama_hmac_sha256_inner;
+        ama_hmac_sha384_inner;
+        ama_hmac_sha512_inner;
+        ama_hmac_sha3_256_inner;
+        ama_hkdf_inner;
+        ama_ed25519_point_from_scalar_inner;
+        ama_ed25519_sc_reduce_inner;
+        ama_ed25519_sc_muladd_inner;
+        ama_ed25519_sha512_inner;
+        ama_aes256_key_expansion_consttime_inner;
+        ama_aes256_encrypt_block_consttime_inner;
 
         # The AArch64 counterparts of the SIMD kernels localised above.  Only
         # the x86 names were listed, so on AArch64 the `ama_*` wildcard kept

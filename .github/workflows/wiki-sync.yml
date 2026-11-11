@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   sync-wiki:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # This job holds `contents: write`; without a bound a hung clone or push
     # would keep it for GitHub's 360-minute default.  Measured over all 42
     # runs of this workflow (2026-03-10 to 2026-08-02): the longest took 0.9

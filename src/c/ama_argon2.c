@@ -19,11 +19,14 @@
  * - Single-threaded execution (parallelism parameter affects layout only)
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 
 /* ============================================================================
  * CONSTANTS
@@ -508,6 +511,35 @@ static void argon2_G_xor(ama_argon2_g_fn g_fn,
  * slices (slices 0 and 1), and data-dependent indexing elsewhere.
  * ============================================================================ */
 
+/* High 64 bits of a * b for b < 2^32, from 64-bit products only (no
+ * __int128, so MSVC builds it too).  Both partial products are below
+ * 2^64 - 2^33 + 1 and (lo >> 32) is below 2^32, so the sum cannot wrap. */
+static inline uint64_t argon2_mulhi_u64_u32(uint64_t a, uint32_t b) {
+    const uint64_t lo = (a & 0xFFFFFFFFu) * b;
+    const uint64_t hi = (a >> 32) * b;
+    return (hi + (lo >> 32)) >> 32;
+}
+
+/* n mod d for a SECRET n and a public d >= 1, without a division on n.
+ * Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation" (2019),
+ * fastmod_u32: with c = floor((2^64 - 1) / d) + 1, n mod d is the high half
+ * of (c * n mod 2^64) * d, exactly, for every 32-bit n and d.  (d = 1 gives
+ * c = 0 and remainder 0.)  The division that forms c is on the public d, and
+ * is done once per hash (argon2_fastmod_c), not once per block. */
+static inline uint64_t argon2_fastmod_c(uint32_t d) {
+    return UINT64_MAX / d + 1u;
+}
+
+static inline uint32_t argon2_ct_mod_u32(uint32_t n, uint64_t c, uint32_t d) {
+    return (uint32_t)argon2_mulhi_u64_u32(c * n, d);
+}
+
+/* All-ones when a == b, else zero, without a branch. */
+static inline uint32_t argon2_eq_mask(uint32_t a, uint32_t b) {
+    const uint32_t x = a ^ b;
+    return ((x | (0u - x)) >> 31) - 1u;
+}
+
 /**
  * Generate pseudo-random index for block reference.
  *
@@ -516,28 +548,48 @@ static void argon2_G_xor(ama_argon2_g_fn g_fn,
  * @param index     Position within the segment
  * @param lane      Current lane
  * @param lanes     Total number of lanes
+ * @param lanes_c   argon2_fastmod_c(lanes), formed once per hash
  * @param segment_length Length of one segment
+ * @param ref_start Start of the reference area in the lane (public; formed
+ *                  once per slice by the caller)
  * @param pseudo_rand The pseudo-random value J1||J2 to use for indexing
  * @return The reference block index
+ *
+ * The reference block's position is data-dependent BY SPECIFICATION in
+ * Argon2id once the first half of the first pass is done (RFC 9106 sec.
+ * 3.4.1.2): J1 and J2 are then words of the previous block, which derive from
+ * the password.  The ADDRESS that results is the algorithm.  Dividing to get
+ * it is not: `J2 % lanes` and `(start + z) % lane_length` were DIV
+ * instructions on password-derived operands, whose latency depends on the
+ * dividend, and no vendor data-independent-timing list admits a divide
+ * (tools/check_ct_operand.py --target argon2id).  Both are reductions by a
+ * public modulus, done here without a division on the secret; the result is
+ * bit-identical, so every RFC 9106 test vector is unchanged.
  */
 static uint32_t argon2_index_alpha(
     uint32_t pass, uint32_t slice, uint32_t index,
-    uint32_t lane, uint32_t lanes,
-    uint32_t segment_length, uint64_t pseudo_rand)
+    uint32_t lane, uint32_t lanes, uint64_t lanes_c,
+    uint32_t segment_length, uint32_t ref_start, uint64_t pseudo_rand)
 {
     uint32_t J1 = (uint32_t)(pseudo_rand & 0xFFFFFFFF);
     uint32_t J2 = (uint32_t)(pseudo_rand >> 32);
 
-    /* Determine reference lane */
+    /* Determine reference lane.  pass and slice are public. */
     uint32_t ref_lane;
     if (pass == 0 && slice == 0) {
         ref_lane = lane;
     } else {
-        ref_lane = J2 % lanes;
+        ref_lane = argon2_ct_mod_u32(J2, lanes_c, lanes);
     }
 
-    /* Determine reference set size */
+    /* Determine reference set size.  Whether the reference lane is the
+     * current one depends on J2, so it selects by mask, not by branch:
+     * `same` adds the current segment's blocks so far, `!same` excludes the
+     * last block of the previous segment when this is the segment's first. */
     uint32_t lane_length = segment_length * ARGON2_SYNC_POINTS;
+    const uint32_t same = argon2_eq_mask(ref_lane, lane);
+    const uint32_t other_tail = (index == 0) ? (uint32_t)-1 : 0;
+    const uint32_t tail = (same & (index - 1u)) | (~same & other_tail);
     uint32_t reference_area_size;
 
     if (pass == 0) {
@@ -546,19 +598,11 @@ static uint32_t argon2_index_alpha(
             /* First slice: only reference blocks in current segment, current lane */
             reference_area_size = index - 1;
         } else {
-            if (ref_lane == lane) {
-                reference_area_size = slice * segment_length + index - 1;
-            } else {
-                reference_area_size = slice * segment_length + ((index == 0) ? (uint32_t)-1 : 0);
-            }
+            reference_area_size = slice * segment_length + tail;
         }
     } else {
         /* Subsequent passes: can reference all blocks except current */
-        if (ref_lane == lane) {
-            reference_area_size = lane_length - segment_length + index - 1;
-        } else {
-            reference_area_size = lane_length - segment_length + ((index == 0) ? (uint32_t)-1 : 0);
-        }
+        reference_area_size = lane_length - segment_length + tail;
     }
 
     /* Map J1 to an index in the reference area */
@@ -566,15 +610,14 @@ static uint32_t argon2_index_alpha(
     uint64_t y = (reference_area_size * (x >> 32));
     uint64_t z = reference_area_size - 1 - (y >> 32);
 
-    /* Determine starting position of reference area */
-    uint32_t start;
-    if (pass == 0) {
-        start = 0;
-    } else {
-        start = ((slice + 1) * segment_length) % lane_length;
-    }
+    /* Starting position of the reference area: public, from the caller. */
+    const uint32_t start = ref_start;
 
-    uint32_t abs_index = (uint32_t)((start + z) % lane_length);
+    /* start < lane_length and z < reference_area_size <= lane_length, so the
+     * sum is below 2 * lane_length and one masked subtraction reduces it. */
+    const uint64_t sum = (uint64_t)start + z;
+    const uint64_t ge = 1u - ((sum - lane_length) >> 63);
+    uint32_t abs_index = (uint32_t)(sum - ge * lane_length);
     return ref_lane * lane_length + abs_index;
 }
 
@@ -792,8 +835,14 @@ static ama_error_t ama_argon2id_core(
      * - Pass 0, slices 0-1: data-independent (generate pseudo-random from counter)
      * - All other cases: data-dependent (use previous block's first qword)
      * ---------------------------------------------------------------- */
+    /* Public reduction constants, formed outside the per-block loop. */
+    const uint64_t lanes_c = argon2_fastmod_c(lanes);
     for (uint32_t pass = 0; pass < t_cost; pass++) {
         for (uint32_t slice = 0; slice < ARGON2_SYNC_POINTS; slice++) {
+            /* RFC 9106 sec. 3.4.1.2: the reference area starts at the
+             * segment after this one, except in the first pass. */
+            const uint32_t ref_start =
+                (pass == 0) ? 0u : ((slice + 1u) * segment_length) % lane_length;
 
             for (uint32_t lane = 0; lane < lanes; lane++) {
                 /* For data-independent addressing (Argon2id: pass 0, slice 0 or 1),
@@ -868,7 +917,20 @@ static ama_error_t ama_argon2id_core(
                     /* Compute reference block index */
                     uint32_t ref_index = argon2_index_alpha(
                         pass, slice, idx,
-                        lane, lanes, segment_length, pseudo_rand);
+                        lane, lanes, lanes_c, segment_length, ref_start, pseudo_rand);
+                    /* The reference block's ADDRESS is password-dependent by
+                     * RFC 9106 sec. 3.4's design from the second half of pass
+                     * 0 on; no implementation can remove that channel, and it
+                     * is why `argon2id` is an operand-only target of the
+                     * secret-operand gate.  Declassified here, where the index
+                     * becomes an address, under AMA_TESTING_MODE only (a no-op
+                     * in every shipped object): how the index is computed
+                     * stays measured (that is where the secret DIV was), and
+                     * the blocks' contents stay tainted.  Without it gcc 15.2
+                     * iterated argon2_g on a pointer derived from this index,
+                     * so the loop's exit branch inherited the address's taint
+                     * and Memcheck reported it. */
+                    AMA_CT_DECLASSIFY(&ref_index, sizeof(ref_index));
 
                     /* Apply compression function */
                     if (pass == 0) {
@@ -912,6 +974,8 @@ static ama_error_t ama_argon2id_core(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, uint8_t *output, size_t out_len);
+
 /* ============================================================================
  * Public API (3 entry points)
  *
@@ -930,8 +994,18 @@ AMA_API ama_error_t ama_argon2id(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    uint8_t *output, size_t out_len)
-{
+    uint8_t *output, size_t out_len) {
+    ama_error_t rc = ama_argon2id_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, output, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len) {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
@@ -939,12 +1013,24 @@ AMA_API ama_error_t ama_argon2id(
                              /*h0_out=*/NULL);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, uint8_t *output, size_t out_len);
+
 AMA_API ama_error_t ama_argon2id_legacy(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    uint8_t *output, size_t out_len)
-{
+    uint8_t *output, size_t out_len) {
+    ama_error_t rc = ama_argon2id_legacy_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, output, out_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id_legacy(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len) {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
@@ -952,12 +1038,24 @@ AMA_API ama_error_t ama_argon2id_legacy(
                              /*h0_out=*/NULL);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_verify_body(const uint8_t *password, size_t pwd_len, const uint8_t *salt, size_t salt_len, uint32_t t_cost, uint32_t m_cost, uint32_t parallelism, const uint8_t *expected_tag, size_t tag_len);
+
 AMA_API ama_error_t ama_argon2id_legacy_verify(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    const uint8_t *expected_tag, size_t tag_len)
-{
+    const uint8_t *expected_tag, size_t tag_len) {
+    ama_error_t rc = ama_argon2id_legacy_verify_body(password, pwd_len, salt, salt_len, t_cost, m_cost, parallelism, expected_tag, tag_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ARGON2_BYTES);
+    return rc;
+}
+
+/* ama_argon2id_legacy_verify(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_argon2id_legacy_verify_body(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len) {
     if (!expected_tag || tag_len < 4 || tag_len > AMA_ARGON2ID_MAX_TAG_LEN) {
         /* Upper bound: application-sane ceiling on Argon2 tag length
          * (``AMA_ARGON2ID_MAX_TAG_LEN`` = 1024, 32× the default 32-byte

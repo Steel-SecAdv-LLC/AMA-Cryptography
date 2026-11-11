@@ -31,6 +31,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "internal/ama_ct_barrier.h"
 
 #if defined(__GNUC__) || defined(__clang__)
 #define FE51_INLINE static inline __attribute__((hot, always_inline))
@@ -146,6 +147,24 @@ static inline void fe51_frombytes(fe51 h, const uint8_t *s) {
     h[4] = (lo3 >> 12)                   & FE51_MASK51;  /* bits 204..254 (bit 255 cleared) */
 }
 
+/* One 64-bit little-endian store from a general register (byte-swapped
+ * first on a big-endian host).  Byte-at-a-time stores of a secret word were
+ * vectorised by gcc on AArch64, which moved the words into SIMD registers
+ * with FMOV (general -> SIMD), an instruction Arm's DIT list does not name; a
+ * whole-word store is one STR.  The value barrier keeps it there: without
+ * it gcc 13 x86-64 spilled the four words to the tobytes frame and copied
+ * them out with two MOVDQU through %xmm0/%xmm1, leaving the X25519 shared
+ * secret in an unscrubbed stack slot and in two call-clobbered registers
+ * (tests/c/test_register_residue.c).  Same construction as store64_le in
+ * ama_sha3.c. */
+static inline void fe51_store64_le(uint8_t *p, uint64_t x) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    x = __builtin_bswap64(x);
+#endif
+    x = ama_ct_value_barrier_u64(x);
+    memcpy(p, &x, sizeof(x));
+}
+
 /**
  * Reduce and store field element to 32 bytes (little-endian).
  */
@@ -184,48 +203,11 @@ static inline void fe51_tobytes(uint8_t *s, const fe51 h) {
     c = t[3] >> 51; t[4] += c; t[3] &= FE51_MASK51;
     t[4] &= FE51_MASK51;
 
-    /* Pack 5 × 51-bit limbs into 32 bytes */
-    uint64_t combined;
-
-    combined = t[0] | (t[1] << 51);               /* bits 0..101 in 2 words */
-    s[ 0] = (uint8_t)(combined);
-    s[ 1] = (uint8_t)(combined >> 8);
-    s[ 2] = (uint8_t)(combined >> 16);
-    s[ 3] = (uint8_t)(combined >> 24);
-    s[ 4] = (uint8_t)(combined >> 32);
-    s[ 5] = (uint8_t)(combined >> 40);
-    s[ 6] = (uint8_t)(combined >> 48);
-    s[ 7] = (uint8_t)(combined >> 56);
-
-    combined = (t[1] >> 13) | (t[2] << 38);
-    s[ 8] = (uint8_t)(combined);
-    s[ 9] = (uint8_t)(combined >> 8);
-    s[10] = (uint8_t)(combined >> 16);
-    s[11] = (uint8_t)(combined >> 24);
-    s[12] = (uint8_t)(combined >> 32);
-    s[13] = (uint8_t)(combined >> 40);
-    s[14] = (uint8_t)(combined >> 48);
-    s[15] = (uint8_t)(combined >> 56);
-
-    combined = (t[2] >> 26) | (t[3] << 25);
-    s[16] = (uint8_t)(combined);
-    s[17] = (uint8_t)(combined >> 8);
-    s[18] = (uint8_t)(combined >> 16);
-    s[19] = (uint8_t)(combined >> 24);
-    s[20] = (uint8_t)(combined >> 32);
-    s[21] = (uint8_t)(combined >> 40);
-    s[22] = (uint8_t)(combined >> 48);
-    s[23] = (uint8_t)(combined >> 56);
-
-    combined = (t[3] >> 39) | (t[4] << 12);
-    s[24] = (uint8_t)(combined);
-    s[25] = (uint8_t)(combined >> 8);
-    s[26] = (uint8_t)(combined >> 16);
-    s[27] = (uint8_t)(combined >> 24);
-    s[28] = (uint8_t)(combined >> 32);
-    s[29] = (uint8_t)(combined >> 40);
-    s[30] = (uint8_t)(combined >> 48);
-    s[31] = (uint8_t)(combined >> 56);
+    /* Pack 5 x 51-bit limbs into four 64-bit little-endian words. */
+    fe51_store64_le(s +  0, t[0] | (t[1] << 51));
+    fe51_store64_le(s +  8, (t[1] >> 13) | (t[2] << 38));
+    fe51_store64_le(s + 16, (t[2] >> 26) | (t[3] << 25));
+    fe51_store64_le(s + 24, (t[3] >> 39) | (t[4] << 12));
 }
 
 static inline void fe51_add(fe51 h, const fe51 f, const fe51 g) {
@@ -241,13 +223,18 @@ static inline void fe51_add(fe51 h, const fe51 f, const fe51 g) {
  * b must be 0 or 1.
  */
 static inline void fe51_cswap(fe51 p, fe51 q, uint64_t b) {
-    uint64_t mask = 0 - b; /* 0 if b==0, all-ones if b==1 */
-    uint64_t t;
-    t = mask & (p[0] ^ q[0]); p[0] ^= t; q[0] ^= t;
-    t = mask & (p[1] ^ q[1]); p[1] ^= t; q[1] ^= t;
-    t = mask & (p[2] ^ q[2]); p[2] ^= t; q[2] ^= t;
-    t = mask & (p[3] ^ q[3]); p[3] ^= t; q[3] ^= t;
-    t = mask & (p[4] ^ q[4]); p[4] ^= t; q[4] ^= t;
+    /* Each limb's swap word passes a value barrier, which holds it in a
+     * general register.  Without it gcc SLP-vectorised this swap (PXOR/PAND
+     * on limb pairs) and moved the halves back with MOVHLPS/MOVHPS, outside
+     * Intel's DOIT list, on the ladder's secret state: 4 sites, 510 times
+     * per X25519 scalar multiplication on the MULX+ADX ladder (measured,
+     * gcc 13.3, tools/check_ct_operand.py --target x25519 --assume-adx). */
+    const uint64_t mask = ama_ct_value_barrier_u64((uint64_t)0 - b);
+    for (int i = 0; i < 5; i++) {
+        const uint64_t t = ama_ct_value_barrier_u64(mask & (p[i] ^ q[i]));
+        p[i] ^= t;
+        q[i] ^= t;
+    }
 }
 
 /**

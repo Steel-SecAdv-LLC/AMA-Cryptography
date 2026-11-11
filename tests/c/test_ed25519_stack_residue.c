@@ -53,6 +53,14 @@
  * each probe found 1 hit, limb 8 (bits 168..188, which the scalar and its
  * reduction share), and removing that one call restores exactly that.
  *
+ * SINCE 2026-11-10 the wipe these records name is issued by each entry
+ * point's exported half and no longer from inside the implementation
+ * (src/c/internal/ama_stack_wipe.h, AMA_STACK_WIPE_BELOW).  The records
+ * above describe the tree they were measured on.  What holds every entry
+ * point now, on any representation of the secret and not on these needles
+ * alone, is tests/c/test_stack_scrub.c; this file still passes, and still
+ * says which values were found where.
+ *
  * THE PROBE is `residue_probe.h`, shared with the AEAD harness: poison, run
  * the entry point below a GAP at the same depth, scan the poisoned bytes.
  * Its control, baseline and coverage checks are what make a verdict below

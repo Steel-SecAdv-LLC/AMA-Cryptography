@@ -54,6 +54,7 @@
  *   from every shipped library by construction.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "ama_sha256.h"
 #include "ama_platform_rand.h"
@@ -61,6 +62,7 @@
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_scrubbed_inner.h"
 #include "internal/ama_stack_wipe.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
  * was the §10.2 wrapper's whole-message calloc in the three external entry
@@ -519,7 +521,7 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
 /* shake_absorb_seg: one segment into ctx; an empty one is skipped, as the
  * sponge would skip it.  Nonzero on success. */
 static int shake_absorb_seg(ama_sha3_ctx *ctx, const uint8_t *seg, size_t len) {
-    return len == 0 || ama_shake256_inc_absorb(ctx, seg, len) == AMA_SUCCESS;
+    return len == 0 || ama_shake256_inc_absorb_inner(ctx, seg, len) == AMA_SUCCESS;
 }
 
 /* shake_finish: finalize and squeeze if every absorb succeeded (`ok`
@@ -528,8 +530,8 @@ static int shake_absorb_seg(ama_sha3_ctx *ctx, const uint8_t *seg, size_t len) {
  * without writing out; it needs a NULL segment with a nonzero length, which
  * every entry point refuses before any hashing starts. */
 static int shake_finish(ama_sha3_ctx *ctx, int ok, uint8_t *out, size_t outlen) {
-    ok = ok && ama_shake256_inc_finalize(ctx) == AMA_SUCCESS;
-    ok = ok && ama_shake256_inc_squeeze(ctx, out, outlen) == AMA_SUCCESS;
+    ok = ok && ama_shake256_inc_finalize_inner(ctx) == AMA_SUCCESS;
+    ok = ok && ama_shake256_inc_squeeze_inner(ctx, out, outlen) == AMA_SUCCESS;
     ok = ok && !SLH_HASH_FAULT();
     ama_secure_memzero(ctx, sizeof(*ctx));
     return ok ? 0 : -1;
@@ -1292,7 +1294,17 @@ static ama_error_t slh_keygen_internal(const slhdsa_params_t *p,
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_keygen_body(ama_slhdsa_param_set_t ps, uint8_t *pk, uint8_t *sk);
+
 AMA_API ama_error_t ama_slhdsa_keygen(ama_slhdsa_param_set_t ps,
+                                      uint8_t *pk, uint8_t *sk) {
+    ama_error_t rc = ama_slhdsa_keygen_body(ps, pk, sk);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_slhdsa_keygen(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_keygen_body(ama_slhdsa_param_set_t ps,
                                       uint8_t *pk, uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
     uint8_t seeds[3 * SLH_MAX_N];
@@ -1311,7 +1323,20 @@ AMA_API ama_error_t ama_slhdsa_keygen(ama_slhdsa_param_set_t ps,
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_keygen_from_seed_body(ama_slhdsa_param_set_t ps, const uint8_t *sk_seed, const uint8_t *sk_prf, const uint8_t *pk_seed, uint8_t *pk, uint8_t *sk);
+
 AMA_API ama_error_t ama_slhdsa_keygen_from_seed(ama_slhdsa_param_set_t ps,
+                                                const uint8_t *sk_seed,
+                                                const uint8_t *sk_prf,
+                                                const uint8_t *pk_seed,
+                                                uint8_t *pk, uint8_t *sk) {
+    ama_error_t rc = ama_slhdsa_keygen_from_seed_body(ps, sk_seed, sk_prf, pk_seed, pk, sk);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_slhdsa_keygen_from_seed(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_keygen_from_seed_body(ama_slhdsa_param_set_t ps,
                                                 const uint8_t *sk_seed,
                                                 const uint8_t *sk_prf,
                                                 const uint8_t *pk_seed,
@@ -1359,7 +1384,7 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     if (p->prf_msg(p, R, sk_prf, opt_rand, prefix, prefix_len,
                    message, message_len) != 0) {
         ama_secure_memzero(R, sizeof(R));
-        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
+        AMA_STACK_WIPE_BELOW(AMA_SCRUB_EXPORTED_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
     /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
@@ -1384,12 +1409,17 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
      * dead stack the failed hash left below this frame: its Keccak
      * permutation's lanes hold the state R or the digest was squeezed from,
      * and in an unoptimised build they stay there (measured, gcc 13.3.0
-     * CMAKE_BUILD_TYPE=None, tests/c/test_slhdsa_fault_residue.c). */
+     * CMAKE_BUILD_TYPE=None, tests/c/test_slhdsa_fault_residue.c).  Since
+     * 2026-11-10 every entry point that reaches this function clears the
+     * stack below itself on every exit, these two included, so the wipes
+     * here are the first of two: with both removed that test still passes,
+     * optimised and not (measured, gcc 13.3).  They are kept, and clear at
+     * the fault instead of at the return. */
     if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
                     message, message_len) != 0) {
         ama_secure_memzero(R, sizeof(R));
         ama_secure_memzero(fors_msg, sizeof(fors_msg));
-        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
+        AMA_STACK_WIPE_BELOW(AMA_SCRUB_EXPORTED_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
     memcpy(sig_ptr, R, p->n);
@@ -1458,7 +1488,20 @@ static int slh_msg_ptr_invalid(const uint8_t *message, size_t message_len) {
     return (message == NULL && message_len != 0);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_body(ama_slhdsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *sk);
+
 AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
+                                    uint8_t *signature, size_t *signature_len,
+                                    const uint8_t *message, size_t message_len,
+                                    const uint8_t *ctx, size_t ctx_len,
+                                    const uint8_t *sk) {
+    ama_error_t rc = ama_slhdsa_sign_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, sk);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_slhdsa_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_body(ama_slhdsa_param_set_t ps,
                                     uint8_t *signature, size_t *signature_len,
                                     const uint8_t *message, size_t message_len,
                                     const uint8_t *ctx, size_t ctx_len,
@@ -1569,6 +1612,8 @@ AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
                                prefix, prefix_len, message, message_len, pk);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_deterministic_body(ama_slhdsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *sk);
+
 /* ============================================================================
  * Internal "deterministic" + "internal interface" sign for KAT validation.
  *
@@ -1579,6 +1624,20 @@ AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
  * smuggling test-only code paths into the public hedged API.
  * ============================================================================ */
 AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
+                                                  uint8_t *signature,
+                                                  size_t *signature_len,
+                                                  const uint8_t *message,
+                                                  size_t message_len,
+                                                  const uint8_t *ctx,
+                                                  size_t ctx_len,
+                                                  const uint8_t *sk) {
+    ama_error_t rc = ama_slhdsa_sign_deterministic_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, sk);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_slhdsa_sign_deterministic(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_deterministic_body(ama_slhdsa_param_set_t ps,
                                                   uint8_t *signature,
                                                   size_t *signature_len,
                                                   const uint8_t *message,
@@ -1608,6 +1667,8 @@ AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
     if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
     return rc;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_addrnd_body(ama_slhdsa_param_set_t ps, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *ctx, size_t ctx_len, const uint8_t *addrnd, const uint8_t *sk);
 
 /* ============================================================================
  * FIPS 205 §10.2 hedged signing with a caller-supplied addrnd.
@@ -1644,6 +1705,20 @@ AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
  * an addrnd not from an approved RBG is not the approved hedged variant.
  * ============================================================================ */
 AMA_API ama_error_t ama_slhdsa_sign_addrnd(ama_slhdsa_param_set_t ps,
+                                           uint8_t *signature,
+                                           size_t *signature_len,
+                                           const uint8_t *message,
+                                           size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *addrnd,
+                                           const uint8_t *sk) {
+    ama_error_t rc = ama_slhdsa_sign_addrnd_body(ps, signature, signature_len, message, message_len, ctx, ctx_len, addrnd, sk);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_slhdsa_sign_addrnd(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_slhdsa_sign_addrnd_body(ama_slhdsa_param_set_t ps,
                                            uint8_t *signature,
                                            size_t *signature_len,
                                            const uint8_t *message,
@@ -1789,7 +1864,16 @@ static ama_error_t spx_compat_randombytes(uint8_t *buf, size_t len) {
     return slh_randombytes(buf, len);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sphincs_keypair_body(uint8_t *public_key, uint8_t *secret_key);
+
 AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
+    ama_error_t rc = ama_sphincs_keypair_body(public_key, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_sphincs_keypair(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sphincs_keypair_body(uint8_t *public_key, uint8_t *secret_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
     uint8_t seeds[3 * SLH_MAX_N];
     ama_error_t rc;
@@ -1810,7 +1894,18 @@ AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sphincs_sign_body(uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *secret_key);
+
 AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key) {
+    ama_error_t rc = ama_sphincs_sign_body(signature, signature_len, message, message_len, secret_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SLH_DSA_BYTES);
+    return rc;
+}
+
+/* ama_sphincs_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sphincs_sign_body(uint8_t *signature, size_t *signature_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *secret_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);

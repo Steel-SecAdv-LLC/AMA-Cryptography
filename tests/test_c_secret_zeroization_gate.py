@@ -1518,10 +1518,11 @@ class TestShippedTreeAnnotationRule:
 class TestScrubBarrierForm:
     """The second sanctioned shipped form: ``memset`` plus a real barrier.
 
-    ``ama_secure_stack_wipe()`` zeroes kilobytes of dead stack after every AEAD
-    call, where ``ama_secure_memzero``'s volatile word loop measured 90-127 ns
-    against 29 ns for ``memset`` plus a compiler barrier.  The annotation that
-    permits it is checked, not believed: the barrier must actually be there.
+    The stack wipe zeroes kilobytes of dead stack after every scrubbed entry
+    point, where ``ama_secure_memzero``'s volatile word loop measured 90-127 ns
+    for the exported 4 KiB wipe against 29 ns for ``memset`` plus a compiler
+    barrier.  The annotation that permits it is checked, not believed: the
+    barrier must actually be there.
     """
 
     SRC_OK = """
@@ -1596,16 +1597,39 @@ void wipe(const unsigned char *in) {
         assert [f.dst for f in self._shipped(self.SRC_BOTH_ARMS)] == ["frame"]
 
     def test_the_shipped_stack_wipe_passes_on_its_own_terms(self) -> None:
-        """``ama_stack_wipe_below``'s GNU branch satisfies the barrier rule, and
-        its MSVC branch is not a bare memset the rule would have to vouch for."""
+        """Every branch of the stack wipe's write is one the compiler must keep.
+
+        ``AMA_STACK_WIPE_ZERO`` (``src/c/ama_consttime.c``) is what each frame
+        function applies to its own array, and it has four renderings.  The
+        ``memset`` one satisfies the barrier rule; the MSVC one is not a bare
+        ``memset`` the rule would have to vouch for; the x86-64 and AArch64
+        ones are an asm statement that clobbers memory, which no compiler
+        deletes, and hold no ``memset`` at all.  The write was a helper
+        function every frame called until 2026-11-10, when an unoptimised
+        build was measured leaving that helper's own frame below what it
+        cleared."""
         path = REPO_ROOT / "src" / "c" / "ama_consttime.c"
         text = path.read_text(encoding="utf-8")
         assert "SCRUB-BARRIER" in text
         assert gate.scan_text(text, path) == []
-        body = text.split("void ama_stack_wipe_below(size_t bytes) {", 1)[1]
-        msvc_branch = body.split("#ifdef _MSC_VER", 1)[1].split("#else", 1)[0]
-        assert "ama_stack_wipe_memset(" in msvc_branch
-        assert not re.search(r"\bmemset\s*\(", msvc_branch)
+        ladder = text.split("#if defined(_MSC_VER)\nstatic void *(*const volatile", 1)[1]
+        ladder = ladder.split("/* One function per depth", 1)[0]
+        msvc_branch, rest = ladder.split("#elif defined(__x86_64__) && !defined(__ILP32__)", 1)
+        x86_branch, rest = rest.split("#elif defined(__aarch64__) && !defined(__ILP32__)", 1)
+        arm_branch, generic_branch = rest.split("#else", 1)
+        call = re.compile(r"\bmemset\s*\(")
+        assert "ama_stack_wipe_memset((frame), 0, sizeof(frame))" in msvc_branch
+        assert not call.search(msvc_branch)
+        for branch, store in ((x86_branch, "rep stosq"), (arm_branch, "stp xzr, xzr")):
+            assert "__asm__ __volatile__(" in branch and store in branch
+            assert '"memory")' in branch
+            assert not call.search(branch)
+        assert re.search(r"\bmemset\s*\(frame, 0, size\)", generic_branch)
+        assert '__asm__ __volatile__("" : : "r"(frame) : "memory");' in generic_branch
+        # ... and each frame function hands its own array to that one write.
+        frames = re.findall(r"^AMA_STACK_WIPE_FRAME\((\d+)\)$", text, re.MULTILINE)
+        assert len(frames) >= 2 and frames == sorted(frames, key=int), frames
+        assert "AMA_STACK_WIPE_ZERO(frame);" in text
 
     def test_the_msvc_barrier_alone_is_refused(self) -> None:
         """``_ReadWriteBarrier()`` does nothing for a gcc or clang build.
@@ -1739,7 +1763,7 @@ void wipe(const unsigned char *in) {
             ('"r"(frame) : "memory");', '"r"(frame));'),
             ('"r"(frame) : "memory");', '"r"(frame) : "cc");'),
             ('__asm__ __volatile__("" : : "r"(frame) : "memory");', '__asm__ volatile("");'),
-            ('    __asm__ __volatile__("" : : "r"(frame) : "memory");\n#endif', "#endif"),
+            ('    __asm__ __volatile__("" : : "r"(frame) : "memory");\n}', "}"),
         ],
     )
     def test_the_real_scrub_barrier_site_is_checked(self, old: str, new: str) -> None:
