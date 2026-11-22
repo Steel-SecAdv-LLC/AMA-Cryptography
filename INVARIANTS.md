@@ -736,7 +736,12 @@ attacker-observable.
 custom timing harnesses, static structural scans) and **must** fail on
 detection of secret-dependent variable-time constructs.  The project's
 `CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
-verification methodology.
+verification methodology.  `tools/check_ct_claims.py` holds every
+constant-time claim in the public headers to a dudect lane that calls the
+function (and a blocking deterministic target where every lane is
+info-only); `tools/check_ct_markers.py` holds every `AMA_CT_DECLASSIFY` point
+after its value's last write and pins the declassification and barrier
+inventories, so neither can move or vanish without a reviewed change.
 
 ### INVARIANT-12 Addendum — Per-Slot SIMD Constant-Time Verification
 

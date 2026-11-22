@@ -40,8 +40,8 @@ typedef enum {
  * until 5.0.0, which was wrong in a way a caller could act on: a reader on a
  * host where the AES-GCM ISA bundle gate fails sees `aes_gcm = AMA_IMPL_AVX2`
  * and concludes hardware AES is running, while the table holds the
- * constant-time bitsliced path.  Measured on one process with
- * `AMA_DISPATCH_ONLY=argon2-g-avx2` set: this struct reported
+ * masked-scan software AES path (ama_aes256_encrypt_block_consttime).
+ * Measured on one process with `AMA_DISPATCH_ONLY=argon2-g-avx2` set: this struct reported
  * `aes_gcm = AVX2` while `ama_aes_gcm_active_backend()` reported
  * `bitsliced-software`.
  *
@@ -328,7 +328,8 @@ AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
  *   "aes-ni-pclmul"        — x86-64 AES-NI + PCLMULQDQ (CT by HW spec)
  *   "vaes-avx2"            — x86-64 VAES + VPCLMULQDQ (CT by HW spec)
  *   "arm-aes-pmull"        — ARMv8 crypto extension AES + PMULL (CT by HW spec)
- *   "bitsliced-software"   — algebraic constant-time S-box (cache-timing safe)
+ *   "bitsliced-software"   — masked full-table-scan S-box (cache-timing safe;
+ *                            the label is historical, the scan is not bitsliced)
  *   "table-insecure"       — table-lookup S-box (NOT cache-timing safe;
  *                            only present when the build was explicitly
  *                            opted in via -DAMA_AES_TABLE_INSECURE=ON)

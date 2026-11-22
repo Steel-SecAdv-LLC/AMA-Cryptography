@@ -246,12 +246,28 @@ instruction count and was reported by the taint gate at the jump.
 `ecdsa`, `nistp-ecdsa`, `kyber-decaps`, `consttime`, `ghash`, `ascon-encrypt`,
 `agent-binding`, `argon2id-verify`, `slhdsa-sign`, `base64`,
 `secp256k1-seckey`, `ml-dsa-sign`, `ml-kem-keygen`, `hkdf`, `frost-sign`,
-`aead-bulk` and `aead-verify`.
-Four targets have a taint driver and no instruction-count driver, each for a
+`aead-bulk`, `api-surface` and `aead-verify`.
+Five targets have a taint driver and no instruction-count driver, each for a
 reason in `_TAINT_ONLY`: ML-DSA signing's rejection loop and ML-KEM key
-generation's SampleNTT do seed-dependent work by construction, and FROST's
+generation's SampleNTT do seed-dependent work by construction, FROST's
 binding factors hash the group public key into variable-time public-point
-arithmetic.  The oldest of them, `slhdsa-sign`, has no instruction-count
+arithmetic, and `api-surface` is a union of entry points (DER signers, ML-DSA
+key generation, PBKDF2) whose work follows published values.
+
+`api-surface` (added 2026-11-22) runs every public entry point that takes
+secret material and that no other taint driver reached, found by sweeping
+the parameter lists of `include/ama_cryptography.h` against the drivers'
+call sets.  Its first run reported 23 sites in seven entry-point families,
+every one a branch on a value the call publishes that nothing declassified:
+the Ascon-AEAD128 tag verdict (1), the DER encoders of three signing entry
+points -- P-256 hedged and `_ex`, secp256k1 -- (4 each), the ML-DSA and ML-KEM private-key checks
+(3 and 1 per entry point) and the agent-binding verdict inside
+`ama_agent_binding_context` and `ama_hkdf_agent_bound` (1 each).  Each is
+now declassified at the point it becomes public -- the ML-DSA check after its
+three predicates were folded into one branch-free verdict, so that its timing
+no longer separates a t0 mismatch from a tr mismatch that return the same
+code -- and removing any one of the six new points makes the target fail
+again (1 to 8 reports).  The oldest of them, `slhdsa-sign`, has no instruction-count
 driver because SLH-DSA signing does different work per key by construction (the
 WOTS+ chain lengths are digits of values derived from SK.seed), so a count
 target would fail a correct implementation, and the tool refuses to run it

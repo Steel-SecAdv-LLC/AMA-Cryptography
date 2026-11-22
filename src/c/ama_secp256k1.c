@@ -2453,8 +2453,16 @@ static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_ecdsa_sign_body(uint8_t *sign
         return AMA_ERROR_INVALID_PARAM;
 
     rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);
-    if (rc == AMA_SUCCESS)
+    if (rc == AMA_SUCCESS) {
+        /* r and s are final here (low-s applied) and are the signature this
+         * call emits: public by contract (internal/ama_ct_declassify.h).  DER
+         * strips their leading zero octets, so the encoder branches on them;
+         * that is a property of the published bytes, not of the key or the
+         * nonce, which stay secret. */
+        AMA_CT_DECLASSIFY(r_bytes, sizeof(r_bytes));
+        AMA_CT_DECLASSIFY(s_bytes, sizeof(s_bytes));
         *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    }
     secp256k1_scrub_scalars(r_bytes, s_bytes);
     return rc;
 }
@@ -2717,6 +2725,8 @@ static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_verify_body(const uint
         return AMA_ERROR_INVALID_PARAM;
     }
     int ok = secp256k1_seckey_ok(seckey);
+    /* The range verdict is the return code: public by contract
+     * (internal/ama_ct_declassify.h).  The key stays secret. */
     AMA_CT_DECLASSIFY(&ok, sizeof ok);
     return ok ? AMA_SUCCESS : AMA_ERROR_INVALID_PARAM;
 }
@@ -2760,6 +2770,9 @@ static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_tweak_add_body(uint8_t
     ama_secure_memzero(&k, sizeof k);
     ama_secure_memzero(&t, sizeof t);
     ama_secure_memzero(&r, sizeof r);
+    /* The combined verdict of the three range checks is the return code:
+     * public by contract (internal/ama_ct_declassify.h).  It is taken after
+     * the sum's last write; the key, the tweak and the sum stay secret. */
     AMA_CT_DECLASSIFY(&ok, sizeof ok);
     if (!ok) {
         ama_secure_memzero(out, 32);

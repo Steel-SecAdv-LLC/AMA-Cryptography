@@ -2274,8 +2274,17 @@ static AMA_SCRUBBED_BODY ama_error_t ama_nistp_ecdsa_sign_ex_body(ama_nist_curve
         return AMA_ERROR_INVALID_PARAM;
 
     rc = nistp_sign_dispatch(c, digest, digest_len, private_key, flags, r, s);
-    if (rc == AMA_SUCCESS)
+    if (rc == AMA_SUCCESS) {
+        /* r and s are final here (low-s normalised when the caller's flags
+         * ask for it) and are the signature this call emits: public by
+         * contract (internal/ama_ct_declassify.h).  DER
+         * strips their leading zero octets, so the encoder branches on them;
+         * that is a property of the published bytes, not of the key or the
+         * nonce, which stay secret. */
+        AMA_CT_DECLASSIFY(r, c->nbytes);
+        AMA_CT_DECLASSIFY(s, c->nbytes);
         *signature_len = nistp_der_encode(signature, r, s, c->nbytes);
+    }
 
     ama_secure_memzero(r, sizeof(r));
     ama_secure_memzero(s, sizeof(s));

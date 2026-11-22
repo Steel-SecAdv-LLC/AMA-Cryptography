@@ -27,6 +27,7 @@
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "internal/ama_scrubbed_inner.h"
 #include "internal/ama_stack_wipe.h"
+#include "internal/ama_ct_declassify.h"
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
@@ -486,15 +487,24 @@ static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_context_body(
     uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]
 ) {
     uint8_t msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + AMA_AGENT_BINDER_BYTES];
+    ama_error_t verdict;
     ama_error_t rc;
 
     if (!b || !out_ctx) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    rc = ama_agent_binding_check_inner(b, authority_key, key_len);
-    if (rc != AMA_SUCCESS) {
-        return rc;
+    verdict = ama_agent_binding_check_inner(b, authority_key, key_len);
+    /* The binding verdict is the code this returns on refusal, exactly what
+     * ama_agent_binding_check() returns for the same arguments: public by
+     * contract (internal/ama_ct_declassify.h).  It is selected
+     * arithmetically from the constant-time tag comparison, which is its
+     * last use of the authority key; the key and the tag stay secret.  It
+     * has its own variable so that the declassified object is never reused
+     * for a later, secret-derived value (tools/check_ct_markers.py). */
+    AMA_CT_DECLASSIFY(&verdict, sizeof(verdict));
+    if (verdict != AMA_SUCCESS) {
+        return verdict;
     }
 
     msg[0] = (uint8_t)AMA_AGENT_SUBDOMAIN_SIG_CTX;
@@ -564,6 +574,7 @@ static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_agent_bound_body(
     uint8_t* joined = NULL;
     int joined_on_heap = 0;
     size_t joined_len;
+    ama_error_t verdict;
     ama_error_t rc;
 
     if (!b || !okm) {
@@ -577,9 +588,17 @@ static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_agent_bound_body(
         return AMA_ERROR_OVERFLOW;
     }
 
-    rc = ama_agent_binding_check_inner(b, authority_key, key_len);
-    if (rc != AMA_SUCCESS) {
-        return rc;
+    verdict = ama_agent_binding_check_inner(b, authority_key, key_len);
+    /* The binding verdict is the code this returns on refusal, exactly what
+     * ama_agent_binding_check() returns for the same arguments: public by
+     * contract (internal/ama_ct_declassify.h).  It is selected
+     * arithmetically from the constant-time tag comparison, which is its
+     * last use of the authority key; the key and the tag stay secret.  It
+     * has its own variable so that the declassified object is never reused
+     * for a later, secret-derived value (tools/check_ct_markers.py). */
+    AMA_CT_DECLASSIFY(&verdict, sizeof(verdict));
+    if (verdict != AMA_SUCCESS) {
+        return verdict;
     }
 
     encode_unchecked(b, prefix);

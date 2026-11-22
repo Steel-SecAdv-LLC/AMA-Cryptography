@@ -2207,13 +2207,32 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
 
     /* Precedence matches the pre-row-wise implementation: an out-of-range
      * coefficient is a malformed key (INVALID_PARAM), and only a well-formed
-     * key can go on to disagree with itself (VERIFY_FAILED). */
-    if (sk_bad) {
-        rc = AMA_ERROR_INVALID_PARAM;
-    } else if (diff != 0 || ama_consttime_memcmp(tr, tr_stored, DIL_TRBYTES) != 0) {
-        rc = AMA_ERROR_VERIFY_FAILED;
-    } else if (public_key) {
-        memcpy(public_key, pk, P->pk_bytes);
+     * key can go on to disagree with itself (VERIFY_FAILED).
+     *
+     * The three predicates are functions of the secret vectors -- `sk_bad` of
+     * s1 and s2, `diff` of t0, and `tr` of the recomputed t1 -- so they are
+     * folded into ONE verdict without a branch and only that verdict is
+     * declassified.  It carries exactly what the return code below
+     * publishes and nothing more.  The earlier
+     * `if (sk_bad) ... else if (diff != 0 || memcmp(tr, ...) != 0)` chain
+     * branched on each predicate separately, so its timing also told a t0
+     * mismatch from a tr mismatch, which both return VERIFY_FAILED, and it
+     * left the whole function out of reach of the secret-taint gate. */
+    {
+        const uint32_t sb = (uint32_t)sk_bad;
+        const uint32_t d = (uint32_t)diff;
+        const uint32_t inval = ((sb | (~sb + 1u)) >> 31) & 1u;
+        const uint32_t t0_ne = ((d | (~d + 1u)) >> 31) & 1u;
+        const uint32_t tr_ne = (uint32_t)ama_consttime_memcmp(tr, tr_stored, DIL_TRBYTES);
+        uint32_t verdict = inval | (((t0_ne | tr_ne) & (inval ^ 1u)) << 1);
+        AMA_CT_DECLASSIFY(&verdict, sizeof(verdict));
+        if (verdict & 1u) {
+            rc = AMA_ERROR_INVALID_PARAM;
+        } else if (verdict & 2u) {
+            rc = AMA_ERROR_VERIFY_FAILED;
+        } else if (public_key) {
+            memcpy(public_key, pk, P->pk_bytes);
+        }
     }
 
     ama_secure_memzero(&s1hat, sizeof(s1hat));

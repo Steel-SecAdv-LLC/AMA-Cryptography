@@ -29,8 +29,8 @@ owns, or holds no secret despite its name.
 |---|---|---|
 | `ama_cryptography/_module_state.py:563` | `secure_token_bytearray` | `work` |
 | `ama_cryptography/_self_test.py:2410` | `native_ml_kem_decapsulate` | `ss` |
-| `ama_cryptography/crypto_api.py:2324` | `generate_keypair` | `keypair` |
-| `ama_cryptography/crypto_api.py:2366` | `generate_keypair` | `keypair` |
+| `ama_cryptography/crypto_api.py:2327` | `generate_keypair` | `keypair` |
+| `ama_cryptography/crypto_api.py:2369` | `generate_keypair` | `keypair` |
 | `ama_cryptography/crypto_api.py:434` | `generate_dilithium_keypair` | `kp` |
 | `ama_cryptography/crypto_api.py:866` | `generate_kyber_keypair` | `keypair` |
 | `ama_cryptography/crypto_api.py:973` | `generate_sphincs_keypair` | `keypair` |

@@ -1014,6 +1014,9 @@ TAINT_ONLY_ENTRY_POINTS: dict[str, str] = {
     # Binding factors hash the group public key, the image of the secret, and
     # feed the variable-time public-point multiply.
     "frost-sign": "ama_frost_round2_sign",
+    # A union of the secret-taking entry points no other driver reached; the
+    # private-key check is the one its sweep found branching on a secret.
+    "api-surface": "ama_ml_kem_privkey_check",
 }
 
 
@@ -1242,6 +1245,9 @@ class TestTheKernelATargetNamesMustHaveRun:
             lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
         )
         monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+        # The canary (TestTheTaintCanary) is the instrument's own precondition;
+        # this test is about the replay, so the instrument is taken as working.
+        monkeypatch.setattr(tool, "taint_canary_reports", lambda *a, **k: 1)
         monkeypatch.setattr(tool, "_run_taint", lambda *a, **k: (0, ""))
         replays: list[Path] = []
 
@@ -1298,3 +1304,74 @@ class TestTheInventoryCountLivesInTheToolOnly:
             "the count lives in THRESHOLDS / _DOCUMENTED_TARGET_COUNT only:\n  "
             + "\n  ".join(offenders)
         )
+
+
+class TestTheTaintCanary:
+    """The Memcheck lane's positive control.
+
+    A clean taint run is a zero count, and a zero count is also what a broken
+    instrument produces -- a TAINT macro that marks nothing, a Valgrind that
+    tracks no definedness.  The lane therefore refuses a clean verdict unless
+    the canary, a branch on a value the library derived from a tainted byte,
+    was reported first.  Measured on this tree (2026-11-22): with TAINT
+    redefined as a no-op the canary reports 0 and the run exits 2; restored,
+    it reports 1 and the run proceeds.
+    """
+
+    def test_the_canary_branches_on_a_library_value_derived_from_a_tainted_byte(
+        self, tool: ModuleType
+    ) -> None:
+        body = _strip_c_comments(tool._TAINT_CANARY[len(tool._TAINT_PRELUDE) :])
+        assert tool._TAINT_CANARY.startswith(tool._TAINT_PRELUDE)
+        assert "TAINT(secret, sizeof secret);" in body
+        assert re.search(r"if \(ama_consttime_memcmp\(secret,", body)
+
+    @pytest.mark.parametrize("reports", [0, None])
+    def test_a_silent_canary_is_inconclusive_not_passing(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reports: Optional[int],
+    ) -> None:
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+        monkeypatch.setattr(tool, "taint_canary_reports", lambda *a, **k: reports)
+        ran: list[Path] = []
+
+        def _clean_run(driver: Path, workdir: Path) -> tuple[int, str]:
+            ran.append(driver)
+            return 0, ""
+
+        monkeypatch.setattr(tool, "_run_taint", _clean_run)
+        rc = tool.main(
+            ["--lib", str(lib), "--include", str(tmp_path), "--target", "consttime", "--taint"]
+        )
+        assert rc == 2
+        assert ran == [], "the driver was run as if the instrument could see"
+
+    def test_a_reported_canary_lets_a_clean_run_pass(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+        monkeypatch.setattr(tool, "taint_canary_reports", lambda *a, **k: 1)
+        monkeypatch.setattr(tool, "_run_taint", lambda d, w: (0, ""))
+        rc = tool.main(
+            ["--lib", str(lib), "--include", str(tmp_path), "--target", "consttime", "--taint"]
+        )
+        assert rc == 0

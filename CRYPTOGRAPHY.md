@@ -219,18 +219,26 @@ HKDF is used for key derivation from master secrets.
 AMA Cryptography supports hybrid signatures combining Ed25519 and ML-DSA-65:
 
 ```
+D = "AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"
+
 HybridSign(message, sk_ed25519, sk_dilithium):
-    sig_ed25519 = Ed25519.Sign(message, sk_ed25519)
-    sig_dilithium = ML-DSA-65.Sign(message, sk_dilithium)
+    sig_ed25519   = Ed25519.Sign(0x00 || len(D) || D || message, sk_ed25519)
+    sig_dilithium = ML-DSA-65.Sign(message, sk_dilithium, ctx = D)
     return sig_ed25519 || sig_dilithium
 
 HybridVerify(message, signature, pk_ed25519, pk_dilithium):
-    sig_ed25519, sig_dilithium = Split(signature)
-    return Ed25519.Verify(message, sig_ed25519, pk_ed25519) AND
-           ML-DSA-65.Verify(message, sig_dilithium, pk_dilithium)
+    sig_ed, sig_dil = Split(signature)
+    return Ed25519.Verify(0x00 || len(D) || D || message, sig_ed, pk_ed25519) AND
+           ML-DSA-65.Verify(message, sig_dil, pk_dilithium, ctx = D)
 ```
 
-**Security:** Secure against both classical and quantum adversaries. Both signatures must verify for acceptance.
+**Security:** EUF-CMA if *either* component is; against a quantum adversary
+only the ML-DSA-65 half counts.  Both halves must verify.  An informal,
+self-attested argument -- the exact claim and where it stops are in
+[docs/DESIGN_NOTES.md §5.1](docs/DESIGN_NOTES.md#51-hybrid-signature-ed25519--ml-dsa-65-format-v2).
+*(Corrected 2026-11-22: the pseudo-code showed the pre-5.0.0 v1 format, which
+signed the raw message with both keys, and the claim read "secure against
+both classical and quantum adversaries" without its condition.)*
 
 ### Hybrid KEM Combiner
 
@@ -238,13 +246,21 @@ AMA Cryptography supports hybrid key encapsulation combining a classical KEM wit
 
 ```
 combined_ss = HKDF-SHA3-256(
-    salt = classical_ct || pqc_ct,         # Ciphertext binding
-    ikm  = classical_ss || pqc_ss,         # Combined key material
-    info = label || classical_pk || pqc_pk  # Context binding
-)
+    salt = I32(|classical_ct|) || classical_ct || I32(|pqc_ct|) || pqc_ct,
+    ikm  = classical_ss || pqc_ss,
+    info = "ama-hybrid-kem-v2" || 0x02
+           || I32(|classical_pk|) || classical_pk || I32(|pqc_pk|) || pqc_pk,
+    L    = 32
+)        # I32 = 4-byte big-endian length
 ```
 
-**Security:** IND-CCA2 secure if **either** component KEM remains unbroken. Ciphertext binding prevents mix-and-match attacks.
+**Security:** IND-CCA2 if at least one component KEM is IND-CCA2, under the
+assumption that HMAC-SHA3-256 is a dual PRF (Bindel et al., PQCrypto 2019),
+applied informally to this encoding.  The exact claim and where it stops are
+in [docs/DESIGN_NOTES.md §5.2](docs/DESIGN_NOTES.md#52-hybrid-kem-combiner-x25519--ml-kem-1024).
+*(Corrected 2026-11-22: the formula omitted the length prefixes, the label's
+component count and the output length the code uses, and the claim omitted
+its assumption.)*
 
 **Implementation:** `ama_cryptography/hybrid_combiner.py` — INVARIANT-7 requires native C HKDF-SHA3-256 (`ama_hkdf`). The `combine()` method refuses to fall back to Python HKDF; the pure-Python `_hkdf_python` static method is retained solely for direct unit testing of the HKDF construction (`TestHKDFEdgeCases`) and is NEVER reached from a production code path.
 

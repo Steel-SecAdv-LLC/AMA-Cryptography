@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 5.0.0 |
-| Last Updated | 2026-08-24 |
+| Last Updated | 2026-11-22 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -141,6 +141,148 @@ every call, only the verdict declassified. `--target secp256k1-seckey`:
 2,327,341 / 2,384,075 instructions (gcc / clang), identical across classes
 whose sums fall on both sides of n; taint clean; a planted branch on the
 tweak fails both lanes.
+
+## Claim Registry, Repairs and Review (2026-11-22)
+
+Measured on the `steel/ctoperand-gate` tree based on `8effc43`, on an Intel
+Xeon @ 2.10 GHz (x86-64, AVX2/AVX-512, gcc 13.3.0, clang 18.1.3), Release,
+LTO off, `AMA_TESTING_MODE` archive for the deterministic instruments; dudect
+at 100,000 measurements pinned to one core.
+
+### Every header claim is registered and measured
+
+`tools/check_ct_claims.py` reads every documentation comment in
+`include/*.h`, attributes each sentence that claims constant time to a public
+function, and requires for each one a dudect lane in `tests/c/test_dudect.c`
+that calls it -- under the calibrated rule above -- plus a blocking count or
+taint target wherever every lane is info-only.  A new claim without an entry,
+an entry without a claim, a renamed lane, a lane or driver that never calls
+the function, and a withdrawn claim that returns all fail it
+(`tests/test_ct_claims_gate.py`, by mutation).  On the tree before this pass
+it reported 25 errors; it now reports none: **19 claims registered and
+measured, 3 withdrawn**.
+
+| Function | dudect lane | Count | Taint |
+|---|---|---|---|
+| `ama_consttime_memcmp` / `_swap` / `_lookup` / `_copy` | own lane each | `consttime`, `consttime-swap`, `-lookup`, `-copy` | `consttime` |
+| `ama_base64_encode`, `ama_base64_decode` | **new** | `base64` | `base64` |
+| `ama_hmac_sha3_256` | HMAC-SHA3-256 verify | `hkdf` | `hkdf` |
+| `ama_agent_binding_check` | Agent binding check | `agent-binding` | `agent-binding` |
+| `ama_secp256k1_point_mul` | secp256k1 scalar multiplication (info) | `secp256k1-scalarmult` | same |
+| `ama_secp256k1_pubkey_from_privkey` | **new** (info) | `ecdsa` | `api-surface` |
+| `ama_secp256k1_seckey_verify`, `_tweak_add` | **new** | `secp256k1-seckey` | same |
+| `ama_secp256k1_ecdsa_sign` | secp256k1 ECDSA sign (info) | -- | `api-surface` |
+| `ama_x25519_key_exchange` | X25519 scalarmult (info) | `x25519` | `x25519` |
+| `ama_argon2id_legacy_verify` | Argon2id legacy verify | `argon2id-verify` | same |
+| `ama_ml_kem_decapsulate` (via `ama_kyber_decapsulate`) | Kyber-1024 decaps | `kyber-decaps` | `kyber-decaps`, `api-surface` |
+| `ama_aes_sbox_consttime`, `ama_aes256_key_expansion_consttime`, `ama_aes256_encrypt_block_consttime` | **new** | -- (the scalar AES inner functions are counted by `ghash`) | `api-surface` |
+
+The eight new lanes, first run (round 1 of 1, run PASS): `ama_base64_encode`
+t = +1.79, `ama_base64_decode` -1.72, `ama_aes_sbox_consttime` -2.07,
+`ama_aes256_key_expansion_consttime` +2.53, `ama_aes256_encrypt_block_consttime`
++2.01, `ama_secp256k1_seckey_verify` +1.72, `ama_secp256k1_seckey_tweak_add`
++1.78, `ama_secp256k1_pubkey_from_privkey` -1.66 (info).  Each is
+fixed-versus-random over a staged buffer (`dudect_stage_select`).  The lanes
+can fail: with `if (x == 0) return 0x63;` planted at the top of
+`ama_aes_sbox_consttime`, its lane read |t| = 1042, 1560 and 1536 in three of
+three rounds at -113 ns and the run failed; nothing else changed.
+
+**Withdrawn.**  `ama_keypair_generate`, `ama_sign` and `ama_verify` were
+headed "(constant-time)".  `ama_sign` dispatches to ML-DSA-65, INVARIANT-12's
+rejection-loop carve-out; `ama_verify` dispatches to Ed25519 verification,
+variable-time by design over public inputs; `ama_keypair_generate` dispatches
+to ML-DSA and ML-KEM key generation, which rejection-sample seed-derived
+output.  The headers now say what holds for each algorithm and that the
+heading was withdrawn; the gate refuses its return.  The header description
+of `ama_aes_sbox_consttime` as a GF((2^4)^2) tower-field circuit "with no
+lookup tables" was also wrong -- the code is a masked full-table scan, as this
+document already said -- and is corrected in the header, `ama_dispatch.h`,
+`ama_aes_gcm.c` and the wiki.
+
+### Secret-dependent paths found and repaired
+
+The sweep compared the parameter lists of `include/ama_cryptography.h`
+against the call sets of the taint drivers: public entry points that take
+secret material were reached by no driver (21 of them; a 22nd, ML-KEM
+encapsulation, rides along).  A driver over them (now the
+`api-surface` taint target, blocking in `dudect.yml` and run by the operand
+gate under gcc, clang and AArch64) reported 23 sites.  Every one was a branch
+on a value the function publishes, with no declassification point, so the
+property held only by argument and no instrument could cover the entry
+point.  Each is now declassified at the point it becomes public, and removing
+any one of the new points makes the target fail again:
+
+| Entry point | Before (reports) | Repair | After | Point removed |
+|---|---|---|---|---|
+| `ama_ascon_aead128_decrypt` | 1 | declassify the tag verdict after the CT compare | 0 | 1 |
+| `ama_nistp_ecdsa_sign_hedged`, `_sign_ex` | 4 + 4 | declassify final r, s before DER encoding | 0 | 8 |
+| `ama_secp256k1_ecdsa_sign` | 4 | same | 0 | 4 |
+| `ama_ml_dsa_pubkey_from_privkey`, `_privkey_check` | 3 + 3 | three predicates folded into one branch-free verdict, then declassified | 0 | 2 |
+| `ama_ml_kem_pubkey_from_privkey`, `_privkey_check` | 1 + 1 | declassify the pairwise verdict | 0 | 1 |
+| `ama_agent_binding_context`, `ama_hkdf_agent_bound` | 1 + 1 | declassify the binding verdict (own variable) | 0 | 2 |
+
+The ML-DSA repair is more than a marker: the old chain
+`if (sk_bad) ... else if (diff != 0 || memcmp(tr) != 0)` branched on each
+predicate separately, so its timing also told a t0 mismatch from a tr
+mismatch, which return the same code.  Return values are unchanged; ctest
+and the Python suite pass on the repaired tree.
+
+### Declassification points and barriers that cannot silently fail
+
+- `tools/check_ct_markers.py` pins the 54 declassification points and 72
+  optimizer barriers per file, fails any write to a declassified object later
+  in its block (the parameter's own `const` decides whether a call writes),
+  and requires the argument comment the header asks for.  A point moved
+  above its value's last write is the case the taint gate cannot see --
+  Memcheck re-taints bytes a later secret write touches -- and this gate
+  fails it (`tests/test_ct_markers_gate.py`, five mutations).
+- `tests/test_ct_barrier_opacity.py` compiles a probe under gcc and clang at
+  `-O2`, `-O3` and `-O3 -flto`: without the barrier the compiler folds "is
+  this mask 0 or ~0" to `return 1` (the control), through it it cannot.  With
+  the barrier's `asm` removed the probe folds in all six configurations and
+  the test fails.
+- The Memcheck taint lane had no positive control: with `TAINT` redefined as
+  a no-op, `--target consttime --taint` printed PASSED.  It now runs a canary
+  -- a branch on a value the library derived from a tainted byte -- before
+  trusting a clean run, and the same mutation reports INCONCLUSIVE (exit 2).
+
+### Review of AI-assisted code that handles secret material
+
+Attribution, from commit authors and co-author trailers: every line of the 34
+C files that process keys, nonces or intermediate secrets (34,482 lines;
+`git blame` at `8effc43`) traces to a commit authored or co-authored by an AI
+agent (344 of the repository's 416 commits).  There is no AI-free remainder to
+set aside, so the review applies to the whole secret-handling surface.
+**This review was itself performed by an AI agent.**  It is a mechanical and
+targeted review, not the line-by-line human review the phrase "rewritten by
+hand" asks for, and it does not stand in for one.
+
+What was checked for each file is the two contracts the code must meet:
+
+| Files | Official vectors | Constant-time contract | Outcome |
+|---|---|---|---|
+| AES-256 consttime, AES-GCM (scalar, AES-NI, VAES, NEON) | SP 800-38D JSON, Wycheproof `aes_gcm` | `ghash`, `aead-verify`, `aead-bulk` (+ `--dispatch-only aes-gcm-aesni`), `api-surface`; 5 lanes | holds; header claim corrected |
+| ChaCha20-Poly1305 (scalar, AVX2) | RFC 8439, Wycheproof | `aead-verify`, `aead-bulk`; 2 lanes | holds |
+| Ascon-AEAD128 / Hash256 | SP 800-232 KATs | `ascon-*`, `api-surface`; 3 lanes | **decrypt repaired** |
+| HKDF, HMAC-SHA-2/-3, SHA-512, PBKDF2 | RFC 5869, Wycheproof HKDF/HMAC, PBKDF2 vectors | `hkdf`, `api-surface` | holds |
+| Argon2id | RFC 9106 | `argon2id-verify`; operand-only `argon2id` | holds (data-dependent addressing is RFC 9106's) |
+| Ed25519 (ge, fe51/fe64, safegcd) | RFC 8032, Wycheproof, frozen oracle | `ed25519-sign*` count and taint; lane | holds |
+| X25519 (scalar, AVX2) | RFC 7748, Wycheproof | `x25519`, `x25519-batch`; lanes | holds |
+| secp256k1 | Wycheproof ECDSA secp256k1 | `ecdsa`, `secp256k1-*`, `api-surface`; 5 lanes | **DER signer repaired** |
+| P-256/384/521 | Wycheproof ECDSA | `nistp-ecdsa`, `api-surface` | **DER signers repaired** |
+| ML-KEM (scalar, AVX2) | FIPS 203 KATs, ACVP | `kyber-decaps`, `ml-kem-keygen`, `api-surface`; lane | **key checks repaired** |
+| ML-DSA (scalar, AVX2) | FIPS 204 KATs, ACVP | `ml-dsa-sign`, `api-surface` | **key checks repaired**; signing is the carve-out |
+| SLH-DSA | FIPS 205 KATs, ACVP | `slhdsa-sign`, `api-surface` | holds |
+| FROST | **none apply**: RFC 9591-style, not ciphersuite-interoperable (README, CSRC_STANDARDS.md) | `frost-sign`; 2 lanes | outside the vector-verified surface, as already stated; no document claims vector conformance |
+| Agent binding, hybrid core | none (original constructions); their primitives are covered above | `agent-binding`, `api-surface` | **context/HKDF verdict repaired**; claims bounded in docs/DESIGN_NOTES.md section 5 |
+| `ama_consttime.c`, `ama_base64.c`, SHA-3 | RFC 4648 (Base64), FIPS 202 KATs | `consttime*`, `base64`, `sha3-256`; lanes | holds; `ct_eq`'s comment in `ama_aes_bitsliced.c` (a self-correcting draft left in the source) rewritten |
+
+**What is missing, stated exactly.**  A line-by-line review by a human
+cryptographer of the 34,482 lines above.  The instruments bound what such a
+review would most likely find in the classes they measure (a branch, an
+address or an unlisted instruction on a secret on the paths the drivers run;
+a 2 ns or larger timing difference on the measured lanes; disagreement with
+the official vectors), and nothing beyond those classes or paths.
 
 ## Verification Methodology
 

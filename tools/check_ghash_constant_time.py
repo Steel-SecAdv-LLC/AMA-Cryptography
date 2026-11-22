@@ -2752,6 +2752,177 @@ int main(void) {
     return 0;
 }
 """,
+    "api-surface": _TAINT_PRELUDE
+    + r"""
+/* Every public entry point that takes secret material and that no other
+ * taint driver reached (2026-11-22 sweep of include/ama_cryptography.h).
+ * Before the declassification points this driver relies on existed, six of
+ * these sections failed: Ascon-AEAD128 decrypt (1 report), the DER-encoding
+ * ECDSA signers -- P-256 hedged and _ex, secp256k1 -- (4 each), ML-DSA and
+ * ML-KEM pubkey_from_privkey / privkey_check (3 and 1 each), every one a
+ * branch on a value the call publishes (a returned verdict, or the r and s it
+ * encodes) that nothing declassified.  Each section taints only the secret
+ * half of its input; a public half (an ML-DSA rho or tr, an ML-KEM ek and
+ * H(ek)) is left defined because the library may branch on it. */
+#define RC(x)                                                     \
+    do {                                                          \
+        ama_error_t rc_ = (x);                                    \
+        UNTAINT(&rc_, sizeof rc_);                                \
+        if (rc_ != AMA_SUCCESS) return 1;                         \
+    } while (0)
+int main(void) {
+    static volatile uint8_t sink;
+    uint8_t key[64], out[256], salt[16], msg[48];
+    for (unsigned i = 0; i < (unsigned)sizeof key; i++) key[i] = (uint8_t)(0x31u + 7u * i);
+    memset(salt, 0x5A, sizeof salt);
+    memset(msg, 0x17, sizeof msg);
+
+    /* HMAC over a split message; PBKDF2 over both hashes (password secret). */
+    uint8_t pw[40];
+    memcpy(pw, key, sizeof pw);
+    TAINT(pw, sizeof pw);
+    ama_hmac_sha256_2(pw, sizeof pw, msg, 20, msg + 20, 28, out);
+    RC(ama_pbkdf2_hmac_sha256(pw, sizeof pw, salt, sizeof salt, 3, out, 70));
+    RC(ama_pbkdf2_hmac_sha512(pw, sizeof pw, salt, sizeof salt, 3, out, 130));
+    sink = (uint8_t)(sink ^ out[0]);
+
+    /* Ed25519 fixed-base multiple of a secret scalar. */
+    {
+        uint8_t sc[32];
+        memcpy(sc, key, 32);
+        sc[31] &= 0x0F;
+        TAINT(sc, sizeof sc);
+        RC(ama_ed25519_point_from_scalar(out, sc));
+        sink = (uint8_t)(sink ^ out[0]);
+    }
+
+    /* Ascon-AEAD128 decrypt under a secret key (verify-then-decrypt). */
+    {
+        uint8_t k[AMA_ASCON_AEAD128_KEY_LEN], n[AMA_ASCON_AEAD128_NONCE_LEN];
+        uint8_t ct[48], tag[AMA_ASCON_AEAD128_TAG_LEN], pt[48];
+        memcpy(k, key, sizeof k);
+        memset(n, 1, sizeof n);
+        RC(ama_ascon_aead128_encrypt(k, n, msg, sizeof msg, salt, sizeof salt, ct, tag));
+        TAINT(k, sizeof k);
+        RC(ama_ascon_aead128_decrypt(k, n, ct, sizeof ct, salt, sizeof salt, tag, pt));
+        sink = (uint8_t)(sink ^ pt[0]);
+    }
+
+    /* P-256: public key, and the three signers not reached elsewhere. */
+    {
+        uint8_t d[32], pk[AMA_NISTP_MAX_PUBKEY_BYTES + 1], sig[80], raw[64];
+        size_t sl = sizeof sig;
+        memcpy(d, key, 32);
+        d[0] &= 0x7F;
+        TAINT(d, sizeof d);
+        RC(ama_nistp_pubkey_from_privkey(AMA_NIST_CURVE_P256, d, pk));
+        RC(ama_nistp_ecdsa_sign_hedged(AMA_NIST_CURVE_P256, msg, 32, d, sig, &sl));
+        sl = sizeof sig;
+        RC(ama_nistp_ecdsa_sign_ex(AMA_NIST_CURVE_P256, msg, 32, d, sig, &sl, 0));
+        RC(ama_nistp_ecdsa_sign_raw_ex(AMA_NIST_CURVE_P256, msg, 32, d, raw, 0));
+        sink = (uint8_t)(sink ^ sig[0] ^ raw[0]);
+    }
+
+    /* secp256k1: compressed public key, and the DER signer. */
+    {
+        uint8_t d[32], pub[33], sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        size_t sl = sizeof sig;
+        memcpy(d, key, 32);
+        d[0] &= 0x7F;
+        TAINT(d, sizeof d);
+        RC(ama_secp256k1_pubkey_from_privkey(d, pub));
+        RC(ama_secp256k1_ecdsa_sign(sig, &sl, msg, d));
+        sink = (uint8_t)(sink ^ sig[0] ^ pub[0]);
+    }
+
+    /* AES-256 constant-time S-box, key schedule and block cipher. */
+    {
+        uint8_t k[32], rk[240], blk[16], x = key[3];
+        memcpy(k, key, sizeof k);
+        TAINT(k, sizeof k);
+        TAINT(&x, 1);
+        ama_aes256_key_expansion_consttime(k, rk);
+        ama_aes256_encrypt_block_consttime(rk, msg, blk);
+        sink = (uint8_t)(sink ^ blk[0] ^ ama_aes_sbox_consttime(x));
+    }
+
+    /* Agent binding: context derivation and the bound HKDF, authority key
+     * secret. */
+    {
+        ama_agent_binding_t b;
+        uint8_t id[AMA_AGENT_INSTANCE_ID_BYTES], prof[AMA_ETHICAL_PROFILE_BYTES];
+        uint8_t ak[32], ctx[AMA_AGENT_BINDING_CONTEXT_BYTES], okm[48];
+        memset(id, 0x5A, sizeof id);
+        memset(prof, 0xA5, sizeof prof);
+        memcpy(ak, key + 8, sizeof ak);
+        RC(ama_agent_binding_init(&b, AMA_AGENT_LIFETIME_PERSISTENT,
+                                  (uint8_t)AMA_AGENT_CAP_DATA_SIGN, id, prof));
+        RC(ama_agent_binding_authorize(&b, ak, sizeof ak));
+        TAINT(ak, sizeof ak);
+        RC(ama_agent_binding_context(&b, ak, sizeof ak, ctx));
+        RC(ama_hkdf_agent_bound(&b, ak, sizeof ak, salt, sizeof salt, key, 32, msg, 16, okm,
+                                sizeof okm));
+        sink = (uint8_t)(sink ^ ctx[0] ^ okm[0]);
+    }
+
+    /* ML-DSA-65: hedged signing, then the two private-key checks.  sk =
+     * rho || K || tr || s1 || s2 || t0; rho and tr are public. */
+    {
+        static uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES], sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+        static uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
+        size_t sl = sizeof sig;
+        uint8_t xi[32];
+        memcpy(xi, key, sizeof xi);
+        TAINT(xi, sizeof xi);
+        RC(ama_ml_dsa_keypair_from_seed(AMA_ML_DSA_65, xi, pk, sk));
+        UNTAINT(pk, sizeof pk);
+        RC(ama_ml_dsa_sign_hedged(AMA_ML_DSA_65, sig, &sl, msg, sizeof msg, NULL, 0, sk));
+        UNTAINT(sig, sizeof sig);
+        UNTAINT(sk, 32);
+        UNTAINT(sk + 64, 64);
+        RC(ama_ml_dsa_pubkey_from_privkey(AMA_ML_DSA_65, sk, pk));
+        RC(ama_ml_dsa_privkey_check(AMA_ML_DSA_65, sk));
+        sink = (uint8_t)(sink ^ pk[40] ^ sig[0]);
+    }
+
+    /* ML-KEM-1024 through the ml_kem_* API: keygen from seed, the two
+     * private-key checks, and decapsulation of a rejected ciphertext.
+     * dk = s || ek || H(ek) || z; s and z are secret. */
+    {
+        static uint8_t pk[AMA_ML_KEM_1024_PUBLIC_KEY_BYTES], sk[AMA_ML_KEM_1024_SECRET_KEY_BYTES];
+        static uint8_t ct[AMA_ML_KEM_1024_CIPHERTEXT_BYTES];
+        uint8_t ss[32], d[32], z[32];
+        size_t cl = sizeof ct;
+        memcpy(d, key, 32);
+        memcpy(z, key + 32, 32);
+        TAINT(d, sizeof d);
+        TAINT(z, sizeof z);
+        RC(ama_ml_kem_keypair_from_seed(AMA_ML_KEM_1024, d, z, pk, sizeof pk, sk, sizeof sk));
+        UNTAINT(pk, sizeof pk);
+        UNTAINT(sk + 1536, sizeof sk - 1536 - 32);
+        RC(ama_ml_kem_pubkey_from_privkey(AMA_ML_KEM_1024, sk, sizeof sk, pk, sizeof pk));
+        RC(ama_ml_kem_privkey_check(AMA_ML_KEM_1024, sk, sizeof sk));
+        RC(ama_ml_kem_encapsulate(AMA_ML_KEM_1024, pk, sizeof pk, ct, &cl, ss, sizeof ss));
+        UNTAINT(ct, sizeof ct);
+        ct[5] ^= 1u;
+        RC(ama_ml_kem_decapsulate(AMA_ML_KEM_1024, ct, cl, sk, sizeof sk, ss, sizeof ss));
+        sink = (uint8_t)(sink ^ ss[0]);
+    }
+
+    /* SLH-DSA-SHA2-256f key generation from a secret SK.seed and SK.prf. */
+    {
+        uint8_t pk[64], sk[128], sks[32], skp[32], pks[32];
+        memcpy(sks, key, 32);
+        memcpy(skp, key + 32, 32);
+        memset(pks, 3, sizeof pks);
+        TAINT(sks, sizeof sks);
+        TAINT(skp, sizeof skp);
+        RC(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, sks, skp, pks, pk, sk));
+        sink = (uint8_t)(sink ^ pk[40]);
+    }
+    return 0;
+}
+""",
 }
 
 #: Targets that have a taint driver and NO instruction-count driver, each with
@@ -2763,6 +2934,14 @@ int main(void) {
 #: published -- and answers it without a threshold.  ``main`` refuses to run
 #: one of these without ``--taint`` rather than falling back to anything.
 _TAINT_ONLY: dict[str, str] = {
+    "api-surface": (
+        "A union of entry points that do different work on published values by "
+        "construction: ML-DSA key generation (RejBoundedPoly and ExpandA consume "
+        "a seed-dependent number of XOF bytes), DER signature encoding (its "
+        "length follows the leading zero octets of r and s), and PBKDF2, HMAC "
+        "and HKDF over lengths a count would conflate with the key. The taint "
+        "driver checks that nothing unpublished decides a branch or an address."
+    ),
     "ml-dsa-sign": (
         "ML-DSA signing is a rejection-sampling loop (FIPS 204 Algorithm 7): the "
         "number of attempts, and so the instruction count, varies with the key "
@@ -3081,6 +3260,37 @@ def _run_taint(driver: Path, workdir: Path) -> Optional[tuple[int, str]]:
         # the log rather than a false clean.
         reports = 1
     return reports, log
+
+
+#: The taint lane's positive control.  A clean Memcheck run is evidence only
+#: if Memcheck would have reported a branch on the secret had there been one,
+#: and a zero count is exactly what a broken instrument produces: a TAINT
+#: macro that marks nothing, a Valgrind that tracks no definedness, a log that
+#: is written somewhere else.  So before a driver's clean run is accepted, this
+#: program -- the same prelude, the same compiler, the same library, the same
+#: Memcheck command line -- branches on a value the library derived from a
+#: tainted byte, and must be reported.  If it is not, the run is
+#: INCONCLUSIVE, never a pass.
+_TAINT_CANARY = _TAINT_PRELUDE + r"""
+int main(void) {
+    uint8_t secret[4] = {1, 2, 3, 4}, known[4] = {1, 2, 3, 4};
+    static volatile int sink;
+    TAINT(secret, sizeof secret);
+    if (ama_consttime_memcmp(secret, known, sizeof secret) != 0) sink++;
+    return 0;
+}
+"""
+
+
+def taint_canary_reports(lib: Path, include: Path, cc: str, workdir: Path) -> Optional[int]:
+    """Reports Memcheck makes on :data:`_TAINT_CANARY`, or None if it could not run."""
+    canary_dir = workdir / "canary"
+    canary_dir.mkdir(exist_ok=True)
+    driver, _ = build_driver(_TAINT_CANARY, lib, include, cc, canary_dir)
+    if driver is None:
+        return None
+    result = _run_taint(driver, canary_dir)
+    return None if result is None else result[0]
 
 
 _HKDF_DRIVER = r"""
@@ -3723,6 +3933,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 2
 
         if args.taint:
+            canary = taint_canary_reports(args.lib, args.include, args.cc, workdir)
+            if not canary:
+                print(
+                    "CONSTANT-TIME CHECK INCONCLUSIVE — the taint canary, which "
+                    "branches on a value the library derived from a tainted byte, "
+                    + (
+                        "could not be built or run"
+                        if canary is None
+                        else "was NOT reported by Memcheck"
+                    )
+                    + ". A clean run from an instrument that cannot see a planted "
+                    "branch clears nothing.",
+                    file=sys.stderr,
+                )
+                return 2
             taint = _run_taint(driver, workdir)
             if taint is None:
                 print(

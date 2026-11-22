@@ -1797,8 +1797,11 @@ class HybridSignatureProvider(CryptoProvider):
     post-quantum ML-DSA-65 (Dilithium). Both signatures must verify
     for the combined signature to be valid.
 
-    Security: Secure against both classical and quantum adversaries
-    Transition: Safe during classical-to-quantum migration period
+    Security: EUF-CMA if either component is; against a quantum adversary
+    only the ML-DSA-65 half counts.  An informal argument, not independently
+    reviewed; the exact claim and where it stops are in docs/DESIGN_NOTES.md
+    section 5.1.  Signing does not run in fixed time (ML-DSA-65's rejection
+    loop, INVARIANT-12's carve-out).
 
     Raises:
         PQCUnavailableError: If Dilithium backend is not available

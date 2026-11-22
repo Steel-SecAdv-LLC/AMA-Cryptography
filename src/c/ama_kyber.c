@@ -924,8 +924,8 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
         }
         rho = buf;
         sigma = buf + 32;
-        /* rho is the encapsulation key's trailing 32 bytes (FIPS 203
-         * Algorithm 13, ek = ByteEncode(t) || rho), and SampleNTT
+        /* rho is public: it is the encapsulation key's trailing 32 bytes
+         * (FIPS 203 Algorithm 13, ek = ByteEncode(t) || rho), and SampleNTT
          * rejection-samples A from it by specification.  sigma stays
          * secret. */
         AMA_CT_DECLASSIFY(rho, 32);
@@ -2346,6 +2346,11 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     }
 
     mismatch = ama_consttime_memcmp(ss_enc, ss_dec, sizeof(ss_enc));
+    /* The pairwise verdict is the AMA_ERROR_VERIFY_FAILED this returns:
+     * public by contract (internal/ama_ct_declassify.h).  Declassified after
+     * the constant-time comparison, its last secret input; both shared
+     * secrets and the decapsulation key stay secret. */
+    AMA_CT_DECLASSIFY(&mismatch, sizeof(mismatch));
     ama_secure_memzero(ss_enc, sizeof(ss_enc));
     ama_secure_memzero(ss_dec, sizeof(ss_dec));
     /* The pairwise-check ciphertext as well: the doc comment above this

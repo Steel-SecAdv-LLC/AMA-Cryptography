@@ -19,7 +19,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 - Declared / exported entry points: **199**
 - Referenced by C tests: **198**
 - Referenced by Fuzz: **78**
-- Referenced by CT gate: **57**
+- Referenced by CT gate: **78**
 - Referenced by Python layer: **140**
 - Reached by neither a C test nor a fuzz harness: **0**
 
@@ -27,25 +27,25 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 
 | Entry point | C tests | Fuzz | CT gate | Python layer |
 |---|---|---|---|---|
-| `ama_aes256_encrypt_block_consttime` | 3 | — | — | — |
+| `ama_aes256_encrypt_block_consttime` | 4 | — | 1 | — |
 | `ama_aes256_gcm_decrypt` | 8 | 1 | 2 | 1 |
 | `ama_aes256_gcm_encrypt` | 9 | 1 | 2 | 1 |
-| `ama_aes256_key_expansion_consttime` | 3 | — | — | — |
+| `ama_aes256_key_expansion_consttime` | 4 | — | 1 | — |
 | `ama_aes_gcm_active_backend` | 2 | — | — | — |
-| `ama_aes_sbox_consttime` | 2 | — | — | — |
+| `ama_aes_sbox_consttime` | 3 | — | 1 | — |
 | `ama_agent_binding_authorize` | 3 | 1 | 1 | 1 |
 | `ama_agent_binding_check` | 4 | 1 | 1 | 1 |
-| `ama_agent_binding_context` | 2 | 1 | — | 1 |
+| `ama_agent_binding_context` | 2 | 1 | 1 | 1 |
 | `ama_agent_binding_encode` | 1 | 1 | — | 1 |
 | `ama_agent_binding_init` | 3 | 1 | 1 | 1 |
 | `ama_argon2id` | 4 | 1 | — | 1 |
 | `ama_argon2id_legacy` | 3 | — | 1 | 1 |
 | `ama_argon2id_legacy_verify` | 3 | — | 1 | 1 |
-| `ama_ascon_aead128_decrypt` | 5 | 1 | 1 | 1 |
+| `ama_ascon_aead128_decrypt` | 5 | 1 | 2 | 1 |
 | `ama_ascon_aead128_encrypt` | 6 | 1 | 2 | 1 |
 | `ama_ascon_hash256` | 3 | 1 | 2 | 1 |
-| `ama_base64_decode` | 2 | — | 1 | 1 |
-| `ama_base64_encode` | 2 | — | 1 | 1 |
+| `ama_base64_decode` | 3 | — | 1 | 1 |
+| `ama_base64_encode` | 3 | — | 1 | 1 |
 | `ama_base64_encoded_len` | 1 | — | — | 1 |
 | `ama_chacha20poly1305_decrypt` | 5 | 1 | 1 | 1 |
 | `ama_chacha20poly1305_encrypt` | 5 | 1 | 1 | 1 |
@@ -80,7 +80,7 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_ed25519_expand_secret_key` | 3 | — | 1 | 1 |
 | `ama_ed25519_keypair` | 15 | 1 | 2 | 3 |
 | `ama_ed25519_point_add` | 7 | — | — | — |
-| `ama_ed25519_point_from_scalar` | 8 | — | — | — |
+| `ama_ed25519_point_from_scalar` | 8 | — | 1 | — |
 | `ama_ed25519_sc_muladd` | 4 | — | — | — |
 | `ama_ed25519_sc_reduce` | 8 | — | — | — |
 | `ama_ed25519_scalarmult_public` | 9 | — | 1 | — |
@@ -98,12 +98,12 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_get_dispatch_info` | 2 | — | — | — |
 | `ama_get_dispatch_table` | 17 | — | — | — |
 | `ama_hkdf` | 6 | 1 | 2 | 3 |
-| `ama_hkdf_agent_bound` | 2 | 1 | — | 1 |
+| `ama_hkdf_agent_bound` | 2 | 1 | 1 | 1 |
 | `ama_hkdf_sha256` | 3 | — | 1 | 1 |
 | `ama_hkdf_sha384` | 2 | — | 1 | 1 |
 | `ama_hkdf_sha512` | 2 | — | 1 | 1 |
 | `ama_hmac_sha256` | 2 | 2 | 1 | 2 |
-| `ama_hmac_sha256_2` | 2 | — | — | 1 |
+| `ama_hmac_sha256_2` | 2 | — | 1 | 1 |
 | `ama_hmac_sha384` | 3 | — | 1 | 1 |
 | `ama_hmac_sha3_256` | 4 | — | 1 | 2 |
 | `ama_hmac_sha512` | 4 | — | 1 | 1 |
@@ -125,32 +125,32 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_ml_dsa_keypair` | 5 | — | — | 1 |
 | `ama_ml_dsa_keypair_from_seed` | 5 | — | 1 | 1 |
 | `ama_ml_dsa_param_set_name` | 4 | — | — | 1 |
-| `ama_ml_dsa_privkey_check` | 4 | — | — | 1 |
-| `ama_ml_dsa_pubkey_from_privkey` | 5 | — | — | 1 |
+| `ama_ml_dsa_privkey_check` | 4 | — | 1 | 1 |
+| `ama_ml_dsa_pubkey_from_privkey` | 5 | — | 1 | 1 |
 | `ama_ml_dsa_public_key_bytes` | 4 | — | — | 1 |
 | `ama_ml_dsa_secret_key_bytes` | 2 | — | — | 1 |
 | `ama_ml_dsa_sign_ctx` | 5 | — | 1 | 1 |
-| `ama_ml_dsa_sign_hedged` | 2 | — | — | 1 |
+| `ama_ml_dsa_sign_hedged` | 2 | — | 1 | 1 |
 | `ama_ml_dsa_signature_bytes` | 3 | — | — | 1 |
 | `ama_ml_dsa_verify_ctx` | 4 | — | — | 1 |
 | `ama_ml_kem_ciphertext_bytes` | 3 | — | — | 1 |
-| `ama_ml_kem_decapsulate` | 4 | — | — | 1 |
-| `ama_ml_kem_encapsulate` | 5 | — | — | 1 |
+| `ama_ml_kem_decapsulate` | 4 | — | 1 | 1 |
+| `ama_ml_kem_encapsulate` | 5 | — | 1 | 1 |
 | `ama_ml_kem_keypair` | 5 | — | — | 1 |
-| `ama_ml_kem_keypair_from_seed` | 6 | — | — | 1 |
+| `ama_ml_kem_keypair_from_seed` | 6 | — | 1 | 1 |
 | `ama_ml_kem_param_set_name` | 3 | — | — | 1 |
-| `ama_ml_kem_privkey_check` | 4 | — | — | 1 |
+| `ama_ml_kem_privkey_check` | 4 | — | 1 | 1 |
 | `ama_ml_kem_pubkey_check` | 1 | — | — | 1 |
-| `ama_ml_kem_pubkey_from_privkey` | 4 | — | — | 1 |
+| `ama_ml_kem_pubkey_from_privkey` | 4 | — | 1 | 1 |
 | `ama_ml_kem_public_key_bytes` | 6 | — | — | 1 |
 | `ama_ml_kem_secret_key_bytes` | 6 | — | — | 1 |
 | `ama_nistp_curve_name` | 2 | — | — | 1 |
 | `ama_nistp_ecdh` | 2 | 1 | 1 | 1 |
 | `ama_nistp_ecdsa_sign` | 3 | — | 1 | 1 |
-| `ama_nistp_ecdsa_sign_ex` | 2 | — | — | 1 |
-| `ama_nistp_ecdsa_sign_hedged` | 3 | — | — | 1 |
+| `ama_nistp_ecdsa_sign_ex` | 2 | — | 1 | 1 |
+| `ama_nistp_ecdsa_sign_hedged` | 3 | — | 1 | 1 |
 | `ama_nistp_ecdsa_sign_raw` | 3 | — | 1 | 1 |
-| `ama_nistp_ecdsa_sign_raw_ex` | 2 | — | — | 1 |
+| `ama_nistp_ecdsa_sign_raw_ex` | 2 | — | 1 | 1 |
 | `ama_nistp_ecdsa_verify` | 2 | 1 | — | — |
 | `ama_nistp_ecdsa_verify_ex` | 1 | — | — | 1 |
 | `ama_nistp_ecdsa_verify_raw` | 2 | 1 | — | — |
@@ -165,19 +165,19 @@ it; execution is `tools/measure_branch_coverage.py`'s subject.
 | `ama_nistp_sig_der_max_len` | 2 | — | — | 1 |
 | `ama_nistp_sig_der_to_raw` | 2 | 1 | — | 1 |
 | `ama_nistp_sig_raw_to_der` | 2 | 1 | — | 1 |
-| `ama_pbkdf2_hmac_sha256` | 2 | — | — | 1 |
-| `ama_pbkdf2_hmac_sha512` | 3 | — | — | 1 |
+| `ama_pbkdf2_hmac_sha256` | 2 | — | 1 | 1 |
+| `ama_pbkdf2_hmac_sha512` | 3 | — | 1 | 1 |
 | `ama_print_dispatch_info` | 1 | — | — | — |
 | `ama_random_bytes` | 1 | — | — | 3 |
-| `ama_secp256k1_ecdsa_sign` | 3 | 1 | — | 1 |
+| `ama_secp256k1_ecdsa_sign` | 3 | 1 | 1 | 1 |
 | `ama_secp256k1_ecdsa_sign_raw` | 2 | — | 1 | — |
 | `ama_secp256k1_ecdsa_verify` | 1 | 1 | — | 1 |
 | `ama_secp256k1_ecdsa_verify_ex` | — | 1 | — | 1 |
 | `ama_secp256k1_point_mul` | 3 | 1 | 1 | — |
 | `ama_secp256k1_pubkey_decompress` | 1 | — | — | 1 |
-| `ama_secp256k1_pubkey_from_privkey` | 3 | 1 | 1 | 1 |
-| `ama_secp256k1_seckey_tweak_add` | 2 | — | 1 | 2 |
-| `ama_secp256k1_seckey_verify` | 2 | — | 1 | 1 |
+| `ama_secp256k1_pubkey_from_privkey` | 4 | 1 | 1 | 1 |
+| `ama_secp256k1_seckey_tweak_add` | 3 | — | 1 | 2 |
+| `ama_secp256k1_seckey_verify` | 3 | — | 1 | 1 |
 | `ama_secure_alloc` | 2 | 1 | — | — |
 | `ama_secure_free` | 2 | — | — | — |
 | `ama_secure_memzero` | 17 | 1 | 2 | 5 |

@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-11-11 |
+| Last Updated | 2026-11-22 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -28,6 +28,66 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > them to 5.0.0 was a claim that does not resolve against the published
 > artifact. `pyproject.toml` still declares 5.0.0; the next version number
 > is the maintainer's decision, not this entry's.
+
+### Every constant-time claim measured or withdrawn; declassification points and barriers that cannot move unseen — 2026-11-22
+
+Measured on an Intel Xeon @ 2.10 GHz (x86-64), gcc 13.3.0 and clang 18.1.3,
+Release, LTO off; dudect at 100,000 measurements on one core.  Details and
+every figure: CONSTANT_TIME_VERIFICATION.md, "Claim Registry, Repairs and
+Review (2026-11-22)".
+
+**Claims.**  `tools/check_ct_claims.py` (new, CI `ci.yml`) attributes every
+sentence in `include/*.h` that claims constant time to a public function and
+requires a dudect lane that calls it, plus a blocking count or taint target
+where every lane is info-only.  25 errors on the prior tree, 0 now: 19 claims
+registered and measured, 3 withdrawn.  Eight lanes added to
+`tests/c/test_dudect.c` (Base64 encode/decode, the three AES-256 consttime
+entry points, secp256k1 seckey verify/tweak-add, and pubkey-from-privkey
+info-only); first run |t| <= 2.53, run PASS.  A planted early exit in
+`ama_aes_sbox_consttime` failed its lane at |t| = 1560 in 3 of 3 rounds.
+`ama_keypair_generate`, `ama_sign` and `ama_verify` lose the "(constant-time)"
+they carried (ML-DSA signing is the INVARIANT-12 carve-out, ML-DSA/ML-KEM key
+generation rejection-samples, verification has no secret); the AES S-box's
+header described a tower-field circuit the code never contained.
+`DUDECT_MAX_LANES` and `DUDECT_ROUNDS_MAX_LANES` go to 48, tied by a
+`_Static_assert` -- raising the first alone aborted a run after a full round.
+
+**Secret-dependent paths.**  21 public entry points taking secret material
+were reached by no taint driver; the new `api-surface` taint target reaches
+them and reported 23 sites, every one a branch on a value the function
+publishes with no declassification point.  Repaired in `ama_ascon.c`
+(decrypt verdict), `ama_nistp.c` and `ama_secp256k1.c` (r, s before DER),
+`ama_dilithium.c` (private-key check: three predicates folded into one
+branch-free verdict, so its timing no longer separates a t0 mismatch from a tr
+mismatch), `ama_kyber.c` (pairwise verdict) and `ama_agent_binding.c`
+(binding verdict in context derivation and the bound HKDF).  0 reports after,
+under gcc and clang; the secret-operand gate passes on both; removing any of
+the six new points fails the target again (1 to 8 reports).
+
+**Markers.**  `tools/check_ct_markers.py` (new, CI) pins 54 declassification
+points and 72 optimizer barriers per file, fails a write to a declassified
+object later in its block, and requires each point's argument comment.
+`tests/test_ct_barrier_opacity.py` shows the barrier hides a mask's range
+from gcc and clang at -O2, -O3 and -O3 -flto, and fails in all six with the
+barrier's `asm` removed.  The Memcheck taint lane gains a positive control: a
+no-op `TAINT` used to print PASSED, and now reports INCONCLUSIVE.
+
+**Composition claims.**  docs/DESIGN_NOTES.md section 5 states, in one place,
+what the hybrid signature, the KEM combiner, the adaptive posture and the
+composed package claim and where each claim stops, pinned by
+`tests/test_composition_claim_boundaries.py`.  Corrected on the way: the
+package's quantum bound (category 2 -- SHA3-256 collision -- not "2^128 via
+Grover"), "all layer keys are HKDF-derived" (the HMAC key never was),
+"pending actions require acknowledgement" (they execute when the grace period
+expires), CRYPTOGRAPHY.md's v1 hybrid pseudo-code and unprefixed combiner,
+and the combiner docstring's "formal IND-CCA2 security proofs".  No claim was
+added.
+
+**AI-assisted code.**  Every line of the 34 secret-handling C files traces to
+an AI-authored or AI-co-authored commit.  The review recorded in
+CONSTANT_TIME_VERIFICATION.md maps each to its official vectors and its
+constant-time instruments; it was performed by an AI agent and is not a
+substitute for human review, which remains outstanding.
 
 ### Dead stack cleared at every secret-handling entry point, once per call, on three platforms; the review notes left open on #434 — 2026-11-10
 

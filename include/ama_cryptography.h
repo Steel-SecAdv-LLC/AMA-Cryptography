@@ -286,11 +286,24 @@ AMA_API void ama_context_free(ama_context_t* ctx);
  * ============================================================================ */
 
 /**
- * @brief Generate a new keypair (constant-time)
+ * @brief Generate a new keypair
  *
  * Generates a cryptographic keypair for the algorithm specified in the context.
  * Supports ML-DSA-65, Kyber-1024, SPHINCS+-256f, Ed25519, and hybrid modes.
  * All algorithms use native implementations (no external PQC dependencies).
+ *
+ * **Timing.** This dispatcher adds no secret-dependent step of its own; what
+ * holds is each algorithm's key generation, measured on the seeded form it
+ * reaches by the Memcheck secret-taint gate
+ * (`tools/check_ghash_constant_time.py --taint`): Ed25519 by `ed25519-sign`,
+ * ML-DSA-65 by `ml-dsa-sign`, ML-KEM-1024 by `ml-kem-keygen` and SLH-DSA by
+ * `slhdsa-sign` and `api-surface`.  ML-DSA and ML-KEM key generation do not
+ * run in fixed time: FIPS 204 RejBoundedPoly and ExpandA and FIPS 203
+ * SampleNTT rejection-sample seed-derived XOF output by construction, and the
+ * taint gate holds that nothing but the published rho and the discarded
+ * candidates decides a branch or an address.  The "(constant-time)" this
+ * brief used to carry was withdrawn on 2026-11-22 for that reason
+ * (INVARIANT-16); tools/check_ct_claims.py records the change.
  *
  * @param ctx Initialized context
  * @param public_key Output buffer for public key
@@ -312,10 +325,21 @@ AMA_API ama_error_t ama_keypair_generate(
  * ============================================================================ */
 
 /**
- * @brief Sign a message (constant-time)
+ * @brief Sign a message
  *
  * Signs a message using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
+ *
+ * **Timing.** Not every algorithm this dispatches to signs in fixed time, so
+ * the function claims nothing of the kind for itself.  ML-DSA-65 signing is
+ * INVARIANT-12's one carve-out: the FIPS 204 rejection loop makes the attempt
+ * count, and so the running time, a function of the key and the message
+ * (CONSTANT_TIME_VERIFICATION.md, "Rejection sampling and what these gates
+ * cannot cover"); the `ml-dsa-sign` taint gate holds that nothing else
+ * derived from the key decides a branch or an address.  Ed25519 signing is
+ * held by the `ed25519-sign` count and taint gates and SLH-DSA signing by the
+ * `slhdsa-sign` taint gate.  The "(constant-time)" this brief used to carry
+ * was false for ML-DSA-65 and was withdrawn on 2026-11-22 (INVARIANT-16).
  *
  * ML-DSA-65 and SPHINCS+-256f sign under the EMPTY FIPS 204 / FIPS 205
  * context: the signature is the one ama_dilithium_sign() / ama_sphincs_sign()
@@ -342,10 +366,18 @@ AMA_API ama_error_t ama_sign(
 );
 
 /**
- * @brief Verify a signature (constant-time)
+ * @brief Verify a signature
  *
  * Verifies a signature using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
+ *
+ * **Timing.** Every input -- message, signature, public key -- is public, so
+ * verification carries no timing obligation and is not constant time:
+ * Ed25519 verification is variable-time by design (RFC 8032 sec. 5.1.7; its
+ * dudect lane is info-only), as ama_ed25519_batch_verify and
+ * ama_secp256k1_ecdsa_verify already state.  The "(constant-time)" this brief
+ * used to carry described no property of the code and was withdrawn on
+ * 2026-11-22 (INVARIANT-16).
  *
  * ML-DSA-65 and SPHINCS+-256f verify under the EMPTY FIPS 204 / FIPS 205
  * context, as ama_dilithium_verify() / ama_sphincs_verify() do; a signature
@@ -4421,15 +4453,19 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(
 );
 
 /* ============================================================================
- * CONSTANT-TIME AES S-BOX (bitsliced / algebraic decomposition)
+ * CONSTANT-TIME AES S-BOX (masked full-table scan)
  * ============================================================================ */
 
 /**
  * @brief Constant-time AES S-box substitution
  *
- * Computes the AES SubBytes transformation using algebraic decomposition
- * in GF((2^4)^2) tower field arithmetic. No lookup tables are used —
- * all operations are bitwise, eliminating cache-timing side channels.
+ * Reads all 256 entries of the FIPS 197 S-box on every call and keeps the
+ * one whose index equals @p x under an arithmetic equality mask, so neither
+ * a branch nor a memory address depends on @p x.  This text used to describe
+ * a GF((2^4)^2) tower-field circuit "with no lookup tables"; the
+ * implementation has never contained one (src/c/ama_aes_bitsliced.c), and
+ * the description is corrected (INVARIANT-53).  Both constructions are
+ * constant-time, but a side-channel reviewer assesses them differently.
  *
  * When AMA_AES_CONSTTIME is defined, the AES-GCM implementation uses
  * this function instead of the standard 256-byte S-box table.

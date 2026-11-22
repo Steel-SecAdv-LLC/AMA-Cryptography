@@ -197,7 +197,9 @@ jobs:
           # 600 s, not 300.  The verdict rule may demand up to MAX_ROUNDS
           # rounds (it refuses the early exit once any lane has tripped), and
           # a round of 100,000 measurements over 27 lanes takes about 100 s on
-          # a hosted runner — so a 300 s budget could not cover the schedule
+          # a hosted runner (36 lanes since 2026-11-22: 122 s per round on a
+          # 2.1 GHz Xeon under load, so three rounds still fit in 600 s)
+          # — so a 300 s budget could not cover the schedule
           # the rule can ask for.  It did not: a run that tripped one lane in
           # round 1 was cut short in round 3 and recorded NINE lanes as
           # harness faults, which is not a result anyone can act on.  This is
@@ -1101,7 +1103,7 @@ jobs:
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
-                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk; do
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk api-surface; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done
@@ -1254,7 +1256,7 @@ jobs:
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
-                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id api-surface; do
             python tools/check_ct_operand.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" \
               || failed="$failed $target"
@@ -1294,7 +1296,7 @@ jobs:
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
-                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id api-surface; do
             python tools/check_ct_operand.py --cc clang \
               --lib build-clang/lib/libama_cryptography_test.a --target "$target" \
               || failed="$failed $target"
@@ -1459,7 +1461,7 @@ jobs:
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding argon2id-verify \
                         aead-verify base64 secp256k1-seckey slhdsa-sign \
-                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id; do
+                        ml-dsa-sign ml-kem-keygen hkdf frost-sign aead-bulk argon2id api-surface; do
             python tools/check_ct_operand.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" \
               || failed="$failed $target"

@@ -891,6 +891,36 @@ jobs:
       run: |
         python tools/check_dudect_class_staging.py
 
+    - name: "Every constant-time claim in the public headers is measured"
+      # INVARIANT-16: a header that says a function runs in constant time is
+      # a claim, and a claim nothing measures is the overstatement the
+      # invariant forbids.  Until 2026-11-22 three public briefs carried
+      # "(constant-time)" over code that is not (ama_sign covers ML-DSA-65's
+      # rejection loop; ama_verify covers vartime Ed25519 verification), and
+      # eight true claims had no wall-clock lane.  The gate attributes every
+      # claiming sentence in include/*.h to a public function and requires a
+      # dudect lane in tests/c/test_dudect.c that calls it, plus a blocking
+      # count or taint target wherever every lane is info-only; a withdrawn
+      # claim must say so in the header and cannot quietly return.
+      # tests/test_ct_claims_gate.py fails the gate on each defect by
+      # mutation.
+      run: |
+        python tools/check_ct_claims.py
+
+    - name: "Declassification points and optimizer barriers cannot move or vanish"
+      # An AMA_CT_DECLASSIFY placed before its value's last secret-dependent
+      # write declassifies an intermediate secret, and the taint gate cannot
+      # see it: Memcheck re-taints bytes a later secret write touches.  An
+      # ama_ct_value_barrier_* removed changes no result and often no
+      # instruction on today's compilers.  The gate pins both inventories per
+      # file, fails any write to a declassified object later in its block,
+      # and requires the argument comment at each point;
+      # tests/test_ct_markers_gate.py proves each by mutation, and
+      # tests/test_ct_barrier_opacity.py checks the barrier against both
+      # compilers.
+      run: |
+        python tools/check_ct_markers.py
+
     - name: "Every apt call goes through the bounded-retry helper"
       # apt-get hangs on hosted runners.  When it does the step consumes its
       # job's whole timeout-minutes and the job is CANCELLED — and a cancelled

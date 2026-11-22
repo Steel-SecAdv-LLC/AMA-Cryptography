@@ -65,6 +65,7 @@
 #include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 #include "internal/ama_stack_wipe.h"
 #include <stdint.h>
 #include <string.h>
@@ -584,6 +585,13 @@ static AMA_SCRUBBED_BODY ama_error_t ascon_aead128_decrypt_frame(
 
     mismatch = ama_consttime_memcmp(computed_tag, tag,
                                     AMA_ASCON_AEAD128_TAG_LEN);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it decides
+     * whether the second pass runs: public by contract, exactly as the
+     * ChaCha20-Poly1305 and AES-GCM verdicts are
+     * (internal/ama_ct_declassify.h).  It is declassified after the last
+     * use of the secret state that produced it -- the comparison above is
+     * constant time -- and the key, the state and both tags stay secret. */
+    AMA_CT_DECLASSIFY(&mismatch, sizeof(mismatch));
 
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
     ama_secure_memzero(&s, sizeof(s));

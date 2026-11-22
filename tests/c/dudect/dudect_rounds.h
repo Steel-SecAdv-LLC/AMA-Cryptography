@@ -84,7 +84,7 @@
  * with more lanes can raise it at its own include site rather than silently
  * truncating. */
 #ifndef DUDECT_ROUNDS_MAX_LANES
-#define DUDECT_ROUNDS_MAX_LANES 32
+#define DUDECT_ROUNDS_MAX_LANES 48
 #endif
 
 /* ============================================================================

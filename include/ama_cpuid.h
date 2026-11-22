@@ -71,9 +71,9 @@ int ama_has_vaes(void);
  * (_mm256_clmulepi64_epi128) — emitted by the 4-block GHASH fold in
  * src/c/avx2/ama_aes_gcm_vaes_avx2.c (8 YMM CLMULs per 4-block
  * iteration, replacing the 16 XMM CLMULs of a per-lane Karatsuba).
- * GHASH must remain constant-time (INVARIANT-12), so this is paired
- * with a carry-less-multiply implementation rather than a table
- * lookup.  Returns 1 only when CPUID reports VPCLMULQDQ *and* the OS
+ * GHASH is held to INVARIANT-12 (no secret-dependent table index),
+ * so this is paired with a carry-less-multiply implementation rather
+ * than a table lookup.  Returns 1 only when CPUID reports VPCLMULQDQ *and* the OS
  * has enabled AVX state in XCR0.
  */
 int ama_has_vpclmulqdq(void);

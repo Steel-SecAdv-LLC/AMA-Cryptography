@@ -90,10 +90,11 @@ _Static_assert(
  * ============================================================================ */
 
 /* When AMA_AES_CONSTTIME is defined, the S-box lookup and block encryption
- * are replaced by the algebraic constant-time implementation from
- * ama_aes_bitsliced.c. This eliminates cache-timing side channels. */
+ * are replaced by the masked full-table-scan implementation in
+ * ama_aes_bitsliced.c, whose memory access pattern does not depend on the
+ * state or the key. */
 #ifdef AMA_AES_CONSTTIME
-/* Constant-time S-box provided by ama_aes_bitsliced.c (tower field GF((2^4)^2)) */
+/* Constant-time S-box provided by ama_aes_bitsliced.c (masked full-table scan) */
 /* The inner functions (internal/ama_scrubbed_inner.h): the AES-GCM entry
  * points clear the stack once, not once for every block. */
 #define aes256_key_expansion(key, rk) ama_aes256_key_expansion_consttime_inner(key, rk)
