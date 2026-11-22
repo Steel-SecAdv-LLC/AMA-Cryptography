@@ -2082,11 +2082,19 @@ jobs:
       # what runs — the same supply-chain discipline as the SHA-pinned actions.
       # A download or checksum failure fails the job (fail-closed), it does not
       # silently drop the lane the way the old /proc/cpuinfo probe did.
+      #
+      # 9.48.0 (downloadmirror.intel.com/843185/...) stopped being served: on
+      # 2026-11-22 the URL answered 403 from Intel's origin (server AmazonS3,
+      # "Error from cloudfront"), from the CI runner and from a second network
+      # alike, so the lane failed before building anything.  10.13.1 is the
+      # version Intel's SDE download page lists; the SHA-256 below is the one
+      # that page publishes for the Linux tarball, and the 38,529,716 bytes
+      # served at this URL on that date hash to it.
       run: |
-        SDE_VER="9.48.0-2024-11-25"
+        SDE_VER="10.13.1-2026-07-28"
         SDE_TARBALL="sde-external-${SDE_VER}-lin.tar.xz"
-        SDE_URL="https://downloadmirror.intel.com/843185/${SDE_TARBALL}"
-        SDE_SHA256="3173d2a5369e3385226b488d8b75403951bc14af601435fe707d9f83e0b533e6"
+        SDE_URL="https://downloadmirror.intel.com/924984/${SDE_TARBALL}"
+        SDE_SHA256="94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50"
         curl -fsSL -o "$SDE_TARBALL" "$SDE_URL"
         echo "${SDE_SHA256}  ${SDE_TARBALL}" | sha256sum -c -
         tar xf "$SDE_TARBALL"
