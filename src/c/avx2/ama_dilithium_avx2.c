@@ -15,6 +15,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 #include <immintrin.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* MSVC needs <intrin.h> for __popcnt; GCC/Clang expose __builtin_popcount
  * unconditionally once <immintrin.h> is included. */
@@ -144,9 +146,33 @@ static inline void ntt_butterfly_dil_avx2(__m256i *a, __m256i *b, int32_t zeta) 
  * Scalar 64-bit Montgomery reduction for Dilithium
  * Used for len=1 scalar fallback in NTT/invNTT.
  * ============================================================================ */
+/* A secret 32-bit value sign-extended to 64 bits without a sign-extension
+ * instruction.  gcc 15.2 emitted CDQE for `(int64_t)x` on the coefficients
+ * (9,408 and 16,576 executions, forward and inverse NTT, in one CI ml-dsa-sign
+ * run), and CDQE is
+ * not on Intel's Data Operand Independent Timing list (MOVSXD is, but which
+ * of the two the compiler picks is its choice).  Zero-extended through a
+ * value barrier, the upper half is opaque to the compiler, so
+ * `(z ^ 2^31) - 2^31` cannot be folded back into a sign extension: it stays
+ * an XOR and a SUB.  Exact for every int32 (for z < 2^31 it is z; otherwise
+ * z - 2^32 modulo 2^64). */
+static inline int64_t dil_sext32(int32_t x) {
+    const uint64_t z = ama_ct_value_barrier_u64((uint64_t)(uint32_t)x);
+    return (int64_t)((z ^ 0x80000000u) - 0x80000000u);
+}
+
 static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
+    /* The operand in a general-purpose register, so this sub-register
+     * fallback stays scalar: clang 18 auto-vectorised the len 4/2/1 layer
+     * loops and gathered the products' high dwords with VSHUFPS, which
+     * Intel's Data Operand Independent Timing list does not include
+     * (tools/check_ct_operand.py --target ml-dsa-sign). */
+    a = (int64_t)ama_ct_value_barrier_u64((uint64_t)a);
     int32_t t = (int32_t)((int64_t)(int32_t)a * DILITHIUM_QINV);
-    return (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
+    /* And the result: with only the input pinned, clang packed four
+     * iterations' reductions back into a vector after the barrier. */
+    return (int32_t)ama_ct_value_barrier_u32(
+        (uint32_t)(int32_t)((a - dil_sext32(t) * DILITHIUM_Q) >> 32));
 }
 
 /* ============================================================================
@@ -173,9 +199,12 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
                              const int32_t zetas[256]) {
     __m256i f[32]; /* 32 vectors of 8 int32 = 256 coefficients */
 
-    for (int i = 0; i < 32; i++) {
-        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 8));
-    }
+    /* The staging copy is a memcpy, not a loop of unaligned loads: clang
+     * compiled the loop as a 1 KiB block copy through VMOVAPS (FP domain,
+     * not on Intel's DOIT list) once its loop-idiom pass stopped turning it
+     * into a glibc call; ama_string_ops.h makes this REP MOVSB under clang
+     * and GCC's pinned expansion under GCC. */
+    memcpy(f, poly, sizeof(f));
 
     int k = 0;
 
@@ -261,9 +290,7 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
      * scalar.  A shuffle-based AVX2 path is feasible but deferred — these
      * three layers are ~7% of NTT time on x86-64; the merged inter-register
      * block above is the larger win. */
-    for (int i = 0; i < 32; i++) {
-        _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
-    }
+    memcpy(poly, f, sizeof(f)); /* see the staging copy above */
 
     /* SECRET SCRATCH (INVARIANT-6/12): f staged the complete polynomial —
      * s1/s2 and the signing mask y on the ML-DSA signing path.  1 KiB is
@@ -278,7 +305,7 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
             int32_t zeta = zetas[++k];
             for (int j = start; j < start + len; ++j) {
                 int32_t t = dil_montgomery_reduce_scalar(
-                    (int64_t)zeta * poly[j + len]);
+                    (int64_t)zeta * dil_sext32(poly[j + len]));
                 poly[j + len] = poly[j] - t;
                 poly[j] = poly[j] + t;
             }
@@ -330,15 +357,18 @@ void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
                 poly[j] = t + poly[j + len];
                 poly[j + len] = t - poly[j + len];
                 poly[j + len] = dil_montgomery_reduce_scalar(
-                    (int64_t)zeta * poly[j + len]);
+                    (int64_t)zeta * dil_sext32(poly[j + len]));
             }
         }
     }
 
     __m256i f[32];
-    for (int i = 0; i < 32; i++) {
-        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 8));
-    }
+    /* The staging copy is a memcpy, not a loop of unaligned loads: clang
+     * compiled the loop as a 1 KiB block copy through VMOVAPS (FP domain,
+     * not on Intel's DOIT list) once its loop-idiom pass stopped turning it
+     * into a glibc call; ama_string_ops.h makes this REP MOVSB under clang
+     * and GCC's pinned expansion under GCC. */
+    memcpy(f, poly, sizeof(f));
 
     /* ====== Layer 4: len=8 (inter-register, single pass) ======
      * 16 butterfly pairs.  The generic inverse walk iterates starts in
@@ -433,9 +463,7 @@ void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
         f[i] = montgomery_mul_dil_avx2(finv, f[i]);
     }
 
-    for (int i = 0; i < 32; i++) {
-        _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
-    }
+    memcpy(poly, f, sizeof(f)); /* see the staging copy above */
 
     /* SECRET SCRATCH (INVARIANT-6/12): same staging buffer as the forward
      * NTT above — erase before returning. */

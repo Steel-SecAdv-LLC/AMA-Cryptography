@@ -213,7 +213,7 @@ concurrency:
 jobs:
   preflight:
     name: Preflight (tag + version + SBOM coherence)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -508,7 +508,7 @@ jobs:
         # architectures need their own runner because CIBW_ARCHS_MACOS=auto64
         # builds for the host architecture only.
         # tools/check_workflow_commands.py fails the build on retired labels.
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
+        os: [ubuntu-26.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-2025-vs2026]
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -821,7 +821,7 @@ jobs:
   build-sdist:
     name: Build sdist
     needs: [preflight]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -908,7 +908,7 @@ jobs:
   # `build-wheels` actually uploaded.  `publish-pypi` and `github-release`
   # both depend on it, so a wheel that does not reproduce cannot be published.
   #
-  # Scope, stated rather than implied: ubuntu-latest (manylinux x86-64) only.
+  # Scope, stated rather than implied: ubuntu-26.04 (manylinux x86-64) only.
   # The other four rows of the `build-wheels` matrix are NOT covered — macOS
   # and Windows have no pinned-container equivalent, and claiming more than
   # one platform's worth of evidence is the exact failure this gate exists to
@@ -920,7 +920,7 @@ jobs:
       !cancelled()
       && needs.preflight.result == 'success'
       && needs['build-wheels'].result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The rebuild is a second full cibuildwheel pass over five interpreters,
     # so it costs roughly what build-wheels costs on this row.
     timeout-minutes: 60
@@ -936,7 +936,7 @@ jobs:
       - name: Download the wheels this release actually built
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: wheels-ubuntu-latest
+          name: wheels-ubuntu-26.04
           path: shipped
 
       - name: Rebuild the same commit with the same toolchain
@@ -954,7 +954,7 @@ jobs:
         # CIBW_BEFORE_BUILD_LINUX installing the same hashed bytes, the same
         # CIBW_BUILD_FRONTEND with isolation off.  Keep the two blocks in
         # step; only the Linux before-build is needed here because this job
-        # runs the ubuntu-latest row alone.
+        # runs the ubuntu-26.04 row alone.
         #
         # The one deliberate divergence is CIBW_TEST_COMMAND: the smoke test
         # runs after a wheel is built and cannot change its contents, so
@@ -1013,7 +1013,7 @@ jobs:
       !cancelled()
       && needs['build-wheels'].result == 'success'
       && needs['build-sdist'].result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       subjects: ${{ steps.hash.outputs.subjects }}
@@ -1106,7 +1106,7 @@ jobs:
       !cancelled()
       && needs['build-wheels'].result == 'success'
       && needs['build-sdist'].result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       id-token: write
@@ -1194,7 +1194,7 @@ jobs:
       && needs.sign.result == 'success'
       && needs.provenance.result == 'success'
       && needs['verify-reproducible-wheel'].result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment:
       name: pypi
@@ -1284,7 +1284,7 @@ jobs:
       && needs.provenance.result == 'success'
       && needs['verify-reproducible-wheel'].result == 'success'
       && needs['publish-pypi'].result != 'failure'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # The release narrative has always said publication happens "under the
     # protected `release` environment", and until this block existed the
@@ -1373,8 +1373,8 @@ jobs:
           # CLASS is present, in the expected quantity, before the freeze.
           #
           # EXPECTED_WHEELS is the build-wheels matrix size: 5 CPython
-          # (cp310-cp314) x 5 platform-arches (ubuntu-latest, ubuntu-24.04-arm,
-          # macos-15-intel, macos-15, windows-latest). Update it here, under
+          # (cp310-cp314) x 5 platform-arches (ubuntu-26.04, ubuntu-24.04-arm,
+          # macos-15-intel, macos-15, windows-2025-vs2026). Update it here, under
           # review, whenever that matrix changes.
           EXPECTED_WHEELS=25
           n_whl=$(find release-assets -name '*.whl' | wc -l)

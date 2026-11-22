@@ -37,7 +37,7 @@ concurrency:
 jobs:
   fuzz-core:
     name: Fuzz Core Primitives (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The nightly schedule fuzzes each target for 900 s; the per-PR budget
     # stays at 20 minutes for the 60 s run plus the build.
     timeout-minutes: ${{ github.event_name == 'schedule' && 40 || 20 }}
@@ -239,7 +239,7 @@ jobs:
   # fuzzing quality without failing the build.
   validate-fuzz-dictionaries:
     name: Validate fuzz dictionaries (fail-closed)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       APT_TOTAL_BUDGET: "450"  # half the job's timeout, at most; see .github/scripts/apt-install.sh
@@ -342,7 +342,7 @@ jobs:
 
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: ${{ github.event_name == 'schedule' && 50 || 30 }}
     strategy:
       fail-fast: false
@@ -536,7 +536,7 @@ jobs:
   # whitespace and RFC 7468 does not.
   fuzz-python-parsers:
     name: Fuzz Python key parsers (DER / CBOR / JSON / PEM)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - name: Checkout code
@@ -634,7 +634,7 @@ jobs:
   # push and pull request so the integration cannot rot before it is used.
   oss-fuzz-build:
     name: OSS-Fuzz integration (base-builder build + check_build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - name: Checkout code
@@ -667,7 +667,7 @@ jobs:
       - fuzz-python-parsers
       - validate-fuzz-dictionaries
       - oss-fuzz-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
     - name: Fail if any required job did not succeed

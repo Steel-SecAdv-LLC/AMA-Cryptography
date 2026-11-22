@@ -26,6 +26,13 @@ endmacro()
 # AMA_TESTING_MODE hooks must link the test archive, and it must still be
 # built under exactly these flags -- residue_probe.h records how a second
 # hand-copied set of them drifted from the first.
+# AppleClang is named beside Clang because CMake gives Apple's compiler an
+# identifier of its own, and until 2026-11-10 it was not named: the macOS
+# lane compiled every probe with the directory's flags (-O3 and
+# -fstack-protector-strong), the opposite of both, and the comments that say
+# a probe is always -O2 were untrue there.  The first probe that could tell
+# was test_stack_scrub.c (tests/c/residue_frame.h, THE CALLING FRAME'S STACK
+# POINTER).
 macro(add_ama_residue_probe test_name test_source)
     add_executable(${test_name} ${test_source})
     if(${ARGC} GREATER 2)
@@ -38,7 +45,7 @@ macro(add_ama_residue_probe test_name test_source)
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES SKIP_RETURN_CODE 77)
     target_compile_options(${test_name} PRIVATE
-        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-O2 -fno-stack-protector>)
 endmacro()
 
 # Core tests
@@ -96,6 +103,10 @@ add_ama_test(test_sha512_kat test_sha512_kat.c)
 # rather than passing silently (Copilot review #322 follow-up).
 add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
 set_tests_properties(test_aes_gcm_backend_introspect PROPERTIES SKIP_RETURN_CODE 77)
+# Hardware data-independent-timing mode (Intel DOITM / Arm PSTATE.DIT): the
+# runtime half of tools/check_ct_operand.py, checked against probes the test
+# makes itself (CPUID on x86-64, HWCAP_DIT and a direct MRS on AArch64).
+add_ama_test(test_ct_hw_mode test_ct_hw_mode.c)
 
 # Audit Issue 3 close-out (2026-05): per-slot AMA_DISPATCH_ONLY contract
 # test.  Single executable, one CTest case per known slot.  Each case
@@ -349,6 +360,42 @@ endif()
 # `ama_ed25519_sign` or `ama_ed25519_point_from_scalar` (the secret-scalar
 # primitive FROST calls with its nonces and shares).  Links in both PQC lanes.
 add_ama_residue_probe(test_ed25519_stack_residue test_ed25519_stack_residue.c)
+# Register residue (INVARIANT-6): no secret a public entry point produces --
+# the KDF, hash, X25519, ML-KEM and AEAD rows of the file -- is left in a
+# call-clobbered register when the call returns, where the next lazy-binding
+# trampoline or signal frame would save it to an unscrubbed stack.  x86-64
+# (%xmm0-15, %ymm0-15, %zmm16-31) and AArch64 (x0-x18, q0-q31, z0-z31 under
+# SVE); every other target skips (77).
+add_ama_residue_probe(test_register_residue test_register_residue.c)
+if(AMA_USE_NATIVE_PQC)
+    target_compile_definitions(test_register_residue PRIVATE AMA_REGISTER_RESIDUE_PQC_GROUP=1)
+endif()
+# Scrubbed entry points (INVARIANT-6): every secret-handling export returns
+# with the stack it used cleared, and with nothing input-dependent in its own
+# frame.  The harness names no secret: it reads what a call leaves below its
+# caller on two different sets of inputs (test_stack_scrub.c).  The library's
+# own flags decide which depths apply, and the probe is always -O2, so they
+# reach it as data from an object compiled with the directory's flags
+# (stack_scrub_build.c).  x86-64 and AArch64; every other target skips (77).
+add_library(ama_stack_scrub_build OBJECT stack_scrub_build.c)
+add_ama_residue_probe(test_stack_scrub test_stack_scrub.c)
+target_sources(test_stack_scrub PRIVATE $<TARGET_OBJECTS:ama_stack_scrub_build>)
+# The frame pointer stays a frame pointer in the harness's own functions, so
+# that what an entry point saves of it is a stack address in both passes
+# (test_stack_scrub.c, SCRUB_NORMALISE_REGISTERS).
+target_compile_options(test_stack_scrub PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-fno-omit-frame-pointer>)
+if(AMA_USE_NATIVE_PQC)
+    target_compile_definitions(test_stack_scrub PRIVATE AMA_STACK_SCRUB_PQC_GROUP=1)
+endif()
+if(AMA_AES_CONSTTIME)
+    target_compile_definitions(test_stack_scrub PRIVATE AMA_STACK_SCRUB_AES_CONSTTIME=1)
+endif()
+# The wipe those entry points use, measured alone: it writes every byte of
+# the depth it is asked for, no more, and leaves nothing of its own below
+# (test_stack_wipe_coverage.c).  The test archive, because the wipe's parts
+# are not exported from the shared library.
+add_ama_residue_probe(test_stack_wipe_coverage test_stack_wipe_coverage.c ama_cryptography_test)
 
 # The two in-house Ed25519 instantiations (fe51 and fe64-mulx) must be
 # byte-identical.  Drives both through the public API under
@@ -702,6 +749,15 @@ if(AMA_USE_NATIVE_PQC)
     # unconditional; the argument for the reciprocal multiply otherwise lives
     # only in a comment.
     add_ama_test(test_kyber_compress test_kyber_compress.c)
+    # montgomery_reduce's unsigned-residue form (no CWDE on the secret
+    # residue) held bit-identical to FIPS 203's signed form over every input
+    # domain the library calls it with.  Fails on a dropped correction term.
+    add_ama_test(test_kyber_montgomery test_kyber_montgomery.c)
+    # AMA_TESTING_ASSUME_ADX=1 (testing-mode only) selects the MULX+ADX
+    # kernels exactly when CPUID reports BMI2, so the constant-time gates can
+    # measure what production runs on ADX-capable CPUs under Valgrind, whose
+    # CPUID hides ADX.  Fails if the override is removed or ignores BMI2.
+    add_ama_test(test_cpuid_assume_adx test_cpuid_assume_adx.c)
     # FIPS 203 Sec 7.3 decapsulation input check 3 (the hash check) is
     # performed by every decapsulation entry point, for all three parameter
     # sets; implicit rejection and a dk_PKE-only mutation stay on the

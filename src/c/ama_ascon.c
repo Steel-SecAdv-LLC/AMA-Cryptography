@@ -62,7 +62,11 @@
  * specification, and introduces no third-party cryptographic dependency.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
+#include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -259,11 +263,23 @@ static inline uint64_t ama_ascon_low_mask(size_t n) {
     return (1ULL << (8u * n)) - 1ULL;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_ascon_hash256_body(const uint8_t *message, size_t message_len, uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN]);
+
 /* ============================================================================
  * ASCON-HASH256 (SP 800-232 Sec. 5.1, Algorithm 5)
  * ============================================================================ */
 
 AMA_API ama_error_t ama_ascon_hash256(
+    const uint8_t *message, size_t message_len,
+    uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN]
+) {
+    ama_error_t rc = ama_ascon_hash256_body(message, message_len, digest);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_ASCON_BYTES);
+    return rc;
+}
+
+/* ama_ascon_hash256(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_ascon_hash256_body(
     const uint8_t *message, size_t message_len,
     uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN]
 ) {
@@ -321,8 +337,11 @@ static void ama_ascon_aead_init(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN]
 ) {
-    const uint64_t k0 = ama_ascon_load64(key);
-    const uint64_t k1 = ama_ascon_load64(key + 8);
+    /* Each key word from its own general-purpose load: gcc merged the two
+     * adjacent loads into one 16-byte load and split it with MOVHLPS, which
+     * is not on Intel's Data Operand Independent Timing list. */
+    const uint64_t k0 = ama_ct_value_barrier_u64(ama_ascon_load64(key));
+    const uint64_t k1 = ama_ct_value_barrier_u64(ama_ascon_load64(key + 8));
 
     s->x[0] = AMA_ASCON_IV_AEAD128;
     s->x[1] = k0;
@@ -379,8 +398,11 @@ static void ama_ascon_aead_final(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN]
 ) {
-    const uint64_t k0 = ama_ascon_load64(key);
-    const uint64_t k1 = ama_ascon_load64(key + 8);
+    /* Each key word from its own general-purpose load: gcc merged the two
+     * adjacent loads into one 16-byte load and split it with MOVHLPS, which
+     * is not on Intel's Data Operand Independent Timing list. */
+    const uint64_t k0 = ama_ct_value_barrier_u64(ama_ascon_load64(key));
+    const uint64_t k1 = ama_ct_value_barrier_u64(ama_ascon_load64(key + 8));
 
     s->x[2] ^= k0;
     s->x[3] ^= k1;
@@ -393,13 +415,10 @@ static void ama_ascon_aead_final(
  * below can wipe it after return.  Measured with a dead-stack probe: with the
  * body in the entry point itself, gcc -O2 left a key word in that frame after
  * every encrypt and after a rejected decrypt, where a wipe issued from the
- * same frame cannot reach it. */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#elif defined(_MSC_VER)
-__declspec(noinline)
-#endif
-static ama_error_t ascon_aead128_encrypt_frame(
+ * same frame cannot reach it.  This was the first pair of scrubbed entry
+ * points; every other one now has the same shape
+ * (internal/ama_stack_wipe.h). */
+static AMA_SCRUBBED_BODY ama_error_t ascon_aead128_encrypt_frame(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
     const uint8_t *plaintext, size_t pt_len,
@@ -517,12 +536,7 @@ static void ama_ascon_aead_absorb_ct(
     }
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#elif defined(_MSC_VER)
-__declspec(noinline)
-#endif
-static ama_error_t ascon_aead128_decrypt_frame(
+static AMA_SCRUBBED_BODY ama_error_t ascon_aead128_decrypt_frame(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
     const uint8_t *ciphertext, size_t ct_len,
@@ -571,6 +585,13 @@ static ama_error_t ascon_aead128_decrypt_frame(
 
     mismatch = ama_consttime_memcmp(computed_tag, tag,
                                     AMA_ASCON_AEAD128_TAG_LEN);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it decides
+     * whether the second pass runs: public by contract, exactly as the
+     * ChaCha20-Poly1305 and AES-GCM verdicts are
+     * (internal/ama_ct_declassify.h).  It is declassified after the last
+     * use of the secret state that produced it -- the comparison above is
+     * constant time -- and the key, the state and both tags stay secret. */
+    AMA_CT_DECLASSIFY(&mismatch, sizeof(mismatch));
 
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
     ama_secure_memzero(&s, sizeof(s));
@@ -598,7 +619,7 @@ AMA_API ama_error_t ama_ascon_aead128_encrypt(
 ) {
     const ama_error_t rc = ascon_aead128_encrypt_frame(
         key, nonce, plaintext, pt_len, aad, aad_len, ciphertext, tag);
-    ama_secure_stack_wipe();
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
     return rc;
 }
 
@@ -612,7 +633,7 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
 ) {
     const ama_error_t rc = ascon_aead128_decrypt_frame(
         key, nonce, ciphertext, ct_len, aad, aad_len, tag, plaintext);
-    ama_secure_stack_wipe();
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AEAD_BYTES);
     return rc;
 }
 

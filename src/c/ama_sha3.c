@@ -16,10 +16,14 @@
  * - No table lookups that could leak timing information
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_keccak_round.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -191,6 +195,7 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
     }
 
     AMA_KECCAK_STORE_A(state);
+    AMA_KECCAK_WIPE_LOCALS;
 }
 
 /**
@@ -223,14 +228,27 @@ static inline uint64_t load64_le(const uint8_t *p) {
  * Store 64-bit little-endian value
  */
 static inline void store64_le(uint8_t *p, uint64_t x) {
-    p[0] = (uint8_t)(x);
-    p[1] = (uint8_t)(x >> 8);
-    p[2] = (uint8_t)(x >> 16);
-    p[3] = (uint8_t)(x >> 24);
-    p[4] = (uint8_t)(x >> 32);
-    p[5] = (uint8_t)(x >> 40);
-    p[6] = (uint8_t)(x >> 48);
-    p[7] = (uint8_t)(x >> 56);
+    /* One 64-bit store from a general register, byte-swapped first on a
+     * big-endian host.  The byte-at-a-time form was auto-vectorised across
+     * lanes by gcc into SHUFPS lane shuffles of the (secret) squeezed state,
+     * and SHUFPS is not on Intel's Data Operand Independent Timing list; a
+     * whole-word store is a plain MOV.
+     *
+     * The barrier is for INVARIANT-6, not for timing.  Without it gcc 13
+     * merges the digest words into two MOVDQU copies through %xmm8/%xmm9,
+     * call-clobbered registers that nothing on the return path overwrites;
+     * the next lazily bound PLT call's _dl_runtime_resolve_xsavec then saved
+     * them, adjacent, onto the stack, where tools/measure_secret_residue.py
+     * found a whole live copy of the HKDF-SHA3-256 output (Python 3.12, CI
+     * job 128658717231).  It is the second of two guards: AMA_API's
+     * zero_call_used_regs("all") clears those registers at the public
+     * return, and tests/c/test_register_residue.c fails only with both
+     * removed (measured; the barrier alone is SMOKE). */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    x = __builtin_bswap64(x);
+#endif
+    x = ama_ct_value_barrier_u64(x);
+    memcpy(p, &x, sizeof(x));
 }
 
 /**
@@ -255,6 +273,8 @@ static void keccak_absorb(
     }
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_256_body(const uint8_t* input, size_t input_len, uint8_t* output);
+
 /**
  * SHA3-256 hash function
  *
@@ -267,6 +287,19 @@ static void keccak_absorb(
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_sha3_256(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    ama_error_t rc = ama_sha3_256_body(input, input_len, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_256() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_sha3_256_inner(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -317,6 +350,13 @@ ama_error_t ama_sha3_256(
     return AMA_SUCCESS;
 }
 
+/* ama_sha3_256_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_256_body(const uint8_t* input, size_t input_len, uint8_t* output) {
+    return ama_sha3_256_inner(input, input_len, output);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_body(const uint8_t* input, size_t input_len, uint8_t* output);
+
 /**
  * SHA3-512 hash function
  *
@@ -330,6 +370,19 @@ ama_error_t ama_sha3_256(
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_sha3_512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    ama_error_t rc = ama_sha3_512_body(input, input_len, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_512() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_sha3_512_inner(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -380,6 +433,13 @@ ama_error_t ama_sha3_512(
     return AMA_SUCCESS;
 }
 
+/* ama_sha3_512_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_body(const uint8_t* input, size_t input_len, uint8_t* output) {
+    return ama_sha3_512_inner(input, input_len, output);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_384_body(const uint8_t* input, size_t input_len, uint8_t* output);
+
 /**
  * SHA3-384 hash function
  *
@@ -396,6 +456,17 @@ ama_error_t ama_sha3_512(
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_sha3_384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    ama_error_t rc = ama_sha3_384_body(input, input_len, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_384(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_384_body(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -446,6 +517,8 @@ AMA_API ama_error_t ama_sha3_384(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_body(const uint8_t* input, size_t input_len, uint8_t* output, size_t output_len);
+
 /**
  * SHAKE128 XOF (extendable output function)
  *
@@ -458,6 +531,18 @@ AMA_API ama_error_t ama_sha3_384(
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_shake128(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+) {
+    ama_error_t rc = ama_shake128_body(input, input_len, output, output_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake128(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_body(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,
@@ -524,6 +609,8 @@ AMA_API ama_error_t ama_shake128(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_body(const uint8_t* input, size_t input_len, uint8_t* output, size_t output_len);
+
 /**
  * SHAKE256 XOF (extendable output function)
  *
@@ -536,6 +623,20 @@ AMA_API ama_error_t ama_shake128(
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_shake256(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+) {
+    ama_error_t rc = ama_shake256_body(input, input_len, output, output_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake256() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake256_inner(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,
@@ -599,6 +700,11 @@ AMA_API ama_error_t ama_shake256(
     return AMA_SUCCESS;
 }
 
+/* ama_shake256_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_body(const uint8_t* input, size_t input_len, uint8_t* output, size_t output_len) {
+    return ama_shake256_inner(input, input_len, output, output_len);
+}
+
 /* ============================================================================
  * STREAMING SHA3-256 API
  * Enables incremental hashing for large data or streaming scenarios
@@ -620,10 +726,21 @@ ama_error_t ama_sha3_init(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_update_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
 /**
  * Update SHA3-256 with additional data
  */
 ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    ama_error_t rc = ama_sha3_update_body(ctx, data, len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_update() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_sha3_update_inner(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
 
     if (!ctx) {
@@ -682,10 +799,26 @@ ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) 
     return AMA_SUCCESS;
 }
 
+/* ama_sha3_update_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_update_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    return ama_sha3_update_inner(ctx, data, len);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_final_body(ama_sha3_ctx* ctx, uint8_t* output);
+
 /**
  * Finalize SHA3-256 and output digest
  */
 ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
+    ama_error_t rc = ama_sha3_final_body(ctx, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_final() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_sha3_final_inner(ama_sha3_ctx* ctx, uint8_t* output) {
     uint8_t block[SHA3_256_RATE];
     size_t i;
 
@@ -735,6 +868,11 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
     return AMA_SUCCESS;
 }
 
+/* ama_sha3_final_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_final_body(ama_sha3_ctx* ctx, uint8_t* output) {
+    return ama_sha3_final_inner(ctx, output);
+}
+
 /* ============================================================================
  * STREAMING SHA3-512 API
  * SHA3-512 rate = 72 bytes (fits inside the ama_sha3_ctx::buffer[168]),
@@ -753,7 +891,16 @@ ama_error_t ama_sha3_512_init(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_update_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
 ama_error_t ama_sha3_512_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    ama_error_t rc = ama_sha3_512_update_body(ctx, data, len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_512_update(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_update_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
 
     if (!ctx) {
@@ -806,7 +953,16 @@ ama_error_t ama_sha3_512_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t l
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_final_body(ama_sha3_ctx* ctx, uint8_t* output);
+
 ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
+    ama_error_t rc = ama_sha3_512_final_body(ctx, output);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_sha3_512_final(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_sha3_512_final_body(ama_sha3_ctx* ctx, uint8_t* output) {
     uint8_t block[SHA3_512_RATE];
     size_t i;
 
@@ -866,7 +1022,18 @@ ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_absorb_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
 ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    ama_error_t rc = ama_shake256_inc_absorb_body(ctx, data, len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake256_inc_absorb() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake256_inc_absorb_inner(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
@@ -912,7 +1079,23 @@ ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size
     return AMA_SUCCESS;
 }
 
+/* ama_shake256_inc_absorb_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_absorb_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    return ama_shake256_inc_absorb_inner(ctx, data, len);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_finalize_body(ama_sha3_ctx* ctx);
+
 ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
+    ama_error_t rc = ama_shake256_inc_finalize_body(ctx);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake256_inc_finalize() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake256_inc_finalize_inner(ama_sha3_ctx* ctx) {
     uint8_t block[SHAKE256_RATE];
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
@@ -951,7 +1134,23 @@ ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+/* ama_shake256_inc_finalize_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_finalize_body(ama_sha3_ctx* ctx) {
+    return ama_shake256_inc_finalize_inner(ctx);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_squeeze_body(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+
 ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    ama_error_t rc = ama_shake256_inc_squeeze_body(ctx, output, outlen);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake256_inc_squeeze() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake256_inc_squeeze_inner(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
     size_t i, available, tocopy;
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
@@ -999,6 +1198,11 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     return AMA_SUCCESS;
 }
 
+/* ama_shake256_inc_squeeze_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake256_inc_squeeze_body(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    return ama_shake256_inc_squeeze_inner(ctx, output, outlen);
+}
+
 /* ============================================================================
  * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
  * SHAKE128 rate = 168 bytes, padding = 0x1F
@@ -1015,7 +1219,18 @@ ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_absorb_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
 ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    ama_error_t rc = ama_shake128_inc_absorb_body(ctx, data, len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake128_inc_absorb() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake128_inc_absorb_inner(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
@@ -1057,7 +1272,23 @@ ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size
     return AMA_SUCCESS;
 }
 
+/* ama_shake128_inc_absorb_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_absorb_body(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    return ama_shake128_inc_absorb_inner(ctx, data, len);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_finalize_body(ama_sha3_ctx* ctx);
+
 ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
+    ama_error_t rc = ama_shake128_inc_finalize_body(ctx);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake128_inc_finalize() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake128_inc_finalize_inner(ama_sha3_ctx* ctx) {
     uint8_t block[SHAKE128_RATE];
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
@@ -1091,7 +1322,23 @@ ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
     return AMA_SUCCESS;
 }
 
+/* ama_shake128_inc_finalize_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_finalize_body(ama_sha3_ctx* ctx) {
+    return ama_shake128_inc_finalize_inner(ctx);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_squeeze_body(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+
 ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    ama_error_t rc = ama_shake128_inc_squeeze_body(ctx, output, outlen);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SHA3_BYTES);
+    return rc;
+}
+
+/* ama_shake128_inc_squeeze() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+ama_error_t ama_shake128_inc_squeeze_inner(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
     size_t i, available, tocopy;
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
@@ -1143,6 +1390,11 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
         }
     }
     return AMA_SUCCESS;
+}
+
+/* ama_shake128_inc_squeeze_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_shake128_inc_squeeze_body(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    return ama_shake128_inc_squeeze_inner(ctx, output, outlen);
 }
 
 /* ============================================================================

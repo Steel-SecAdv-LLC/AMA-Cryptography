@@ -158,6 +158,10 @@ int ama_kyber_debug_cpa_roundtrip(void);
  */
 uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
 
+/* montgomery_reduce (a * 2^-16 mod q, centred), the shipped translation unit's
+ * definition; see tests/c/test_kyber_montgomery.c. */
+int16_t ama_kyber_montgomery_reduce_for_test(int32_t a);
+
 /**
  * Shrink SampleNTT's INITIAL XOF window, so the continuation path can be
  * reached deterministically.

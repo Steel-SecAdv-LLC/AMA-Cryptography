@@ -135,6 +135,20 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat=2 -Wformat-security")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
+    # No sibling calls: AMA_API's zero_call_used_regs("all")
+    # (include/ama_cryptography.h) clears registers at the function's own
+    # return.  A public function that ends in a tail call never executes that
+    # return, because the internal callee, which has no such attribute,
+    # returns straight to the caller with whatever it left in registers.
+    # Measured 2026-11-08: 32 of the 199 exports left by a tail call under
+    # gcc 13.3 x86-64, 47 under aarch64 gcc 13.3 with LTO and 41 under
+    # clang 18 with LTO, among them ama_ml_kem_decapsulate ->
+    # kyber_decapsulate_internal and ama_ml_dsa_keypair ->
+    # dil_keygen_internal.  Under clang, ama_kyber_encapsulate returned one
+    # word of the shared secret in x10 (tests/c/test_register_residue.c).
+    # tests/test_public_exits_clear_registers.py reads every export of the
+    # built image for a tail call.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-optimize-sibling-calls")
 
     # x86-64 ISA baseline, pinned -- not inherited from the compiler.
     #
@@ -177,6 +191,47 @@ else()
             message(STATUS "x86-64 baseline: compiler default is ABOVE baseline; pinned -march=x86-64 -mtune=generic (overrides it)")
         endif()
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=x86-64 -mtune=generic")
+
+        # String-operation expansion: no REP MOVSQ / REP STOSQ.
+        #
+        # GCC expands bounded memcpy/memset inline, and on x86-64 its default
+        # strategy is REP MOVSQ / REP STOSQ.  Those copy secrets here (the
+        # SHA-2/SHA-3 buffer and state copies, measured by
+        # tools/check_ct_operand.py) and neither is on Intel's
+        # Data Operand Independent Timing list, which names the REP forms only
+        # at byte, word and doubleword width.  This pins the expansion to
+        # unrolled MOV loops up to 256 bytes and REP MOVSB / REP STOSB above
+        # that -- both listed, with latency that varies only with the count,
+        # which is public at every call site.  Measured on src/c/ama_sha3.c
+        # (gcc 13.3 and 14.2, Release): 13 REP MOVSQ and 24 REP STOSQ before,
+        # none after, every memcpy/memset call inlined, object 19.7 KB ->
+        # 26.6 KB.  Clang does not accept these flags and does not emit
+        # REP MOVSQ for these copies (measured, clang 18.1.3).
+        # Clang has no strategy flag, and its loop-idiom pass turns copy and
+        # clear loops into calls to glibc's memcpy/memset, whose EVEX forms
+        # leave the bytes in %ymm16-31 on every AVX-512 CPU, out of reach of
+        # AMA_API's register clearing (measured 2026-11-08, clang 18.1:
+        # tests/c/test_register_residue.c).  -fno-builtin-* stops the pass;
+        # the library's own copies go through src/c/internal/ama_string_ops.h,
+        # whose __builtin_ forms are unaffected, and
+        # tests/test_no_libc_string_calls.py requires the built library to
+        # import none of these routines.
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove")
+        endif()
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            include(CheckCCompilerFlag)
+            set(_ama_stringop
+                "-mmemcpy-strategy=unrolled_loop:256:noalign,rep_byte:-1:noalign -mmemset-strategy=unrolled_loop:256:noalign,rep_byte:-1:noalign")
+            check_c_compiler_flag("${_ama_stringop}" AMA_HAVE_STRINGOP_STRATEGY)
+            if(AMA_HAVE_STRINGOP_STRATEGY)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${_ama_stringop}")
+            else()
+                message(FATAL_ERROR
+                    "GCC rejected ${_ama_stringop}: without it, secret buffers are "
+                    "copied with REP MOVSQ/REP STOSQ, which are not on Intel's DOIT list")
+            endif()
+        endif()
     endif()
 
     # ELF link-time hardening.
@@ -473,6 +528,24 @@ set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
 set(AMA_DISPATCH_SOURCES src/c/dispatch/ama_dispatch.c)
 
+# Flags for the two kernels the secret-operand gate checks statically
+# (the VAES AES-GCM and AVX-512 SHA-3 objects, which Valgrind cannot run;
+# tools/check_ct_operand.py --static).  No auto-vectoriser: their only
+# vector code is their own intrinsics (see the VAES block below).
+#
+# Under GCC they also never leave through LEAVE, which is not on
+# the DOIT list.  A kernel that spills __m256i realigns its frame
+# to 32 bytes, and GCC's generic tuning then ends the function
+# with LEAVE: gcc 15.2 did so in the AVX-512 SHA-3 kernel (CI job
+# 128727474601).  With use_leave off, the same epilogue is
+# MOV RSP,RBP / POP RBP, both listed.  Measured on gcc 13.3 and
+# 14.2 with a realigning probe: LEAVE by default, MOV/POP with the
+# flag; clang emits MOV/POP already.
+set(AMA_STATIC_CT_KERNEL_FLAGS "-fno-tree-vectorize -fno-tree-slp-vectorize")
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    string(APPEND AMA_STATIC_CT_KERNEL_FLAGS " -mtune-ctrl=^use_leave")
+endif()
+
 # AVX2 hand-written intrinsics (x86-64 only)
 if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
@@ -497,9 +570,19 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             # gating in ama_cpuid_has_vaes_aesgcm() prevents these
             # opcodes from ever executing on a host without the
             # corresponding feature bits.
+            #
+            # No auto-vectoriser here, nor in the AVX-512 SHA3 kernel below:
+            # these two objects are the ones Valgrind cannot execute, so the
+            # secret-operand gate checks every instruction in them statically
+            # (tools/check_ct_operand.py --static), and their only vector
+            # code is their own intrinsics.  gcc 15.2 SLP-vectorised scalar
+            # byte assembly in this file into 36 VSHUFPS (FP domain, not on
+            # Intel's DOIT list; CI job 128704139405, gcc 14 already
+            # vectorised the GCM length block).  The same rule the NEON
+            # kernels follow.
             set_source_files_properties(src/c/avx2/ama_aes_gcm_vaes_avx2.c
                 PROPERTIES COMPILE_FLAGS
-                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul")
+                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul ${AMA_STATIC_CT_KERNEL_FLAGS}")
         endif()
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (9 algorithms incl. VAES AES-GCM and the Ed25519 comb select)")
         # Tell dispatch code that AVX2 implementations are linked in
@@ -533,7 +616,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
                 src/c/avx512/ama_sha3_x4_avx512.c
             )
             set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
-                COMPILE_FLAGS "-mavx512f -mavx512vl")
+                COMPILE_FLAGS "-mavx512f -mavx512vl ${AMA_STATIC_CT_KERNEL_FLAGS}")
             add_compile_definitions(AMA_HAVE_AVX512_IMPL)
             message(STATUS "SIMD: AVX-512 SHA3 4-way kernel enabled (in-house, AVX-512F + AVX-512VL)")
         else()
@@ -740,8 +823,18 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
             src/c/sve2/ama_argon2_sve2.c
         )
         if(NOT MSVC)
+            # No auto-vectoriser in the SVE2 kernels, for the reason the
+            # AVX-512 and VAES kernels have none (AMA_STATIC_CT_KERNEL_FLAGS
+            # above): Valgrind cannot execute SVE, so these objects are held
+            # to Arm's DIT list by reading them (tools/check_ct_operand.py
+            # --static, the secret-operand-check-arm64 job), and a listing
+            # admits only what the source wrote.  Measured 2026-11-10 with
+            # the vectoriser on: gcc 13.3 turned the scalar Keccak and the
+            # scalar reductions into WHILELO, UQDECD and FMOV, and clang 18.1
+            # computed a trip count with UDIV; none is on the list.  The
+            # x86-only -mtune-ctrl of that variable is not wanted here.
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
-                COMPILE_FLAGS "-march=armv9-a+sve2")
+                COMPILE_FLAGS "-march=armv9-a+sve2 -fno-tree-vectorize -fno-tree-slp-vectorize")
             # AMA_HAVE_SVE2_IMPL says "the SVE2 kernels exist in this build", so
             # src/c/dispatch/ama_dispatch.c may take the addresses of the nine
             # SVE2 kernel symbols src/c/sve2/ama_sve2_internal.h declares.  It
@@ -987,6 +1080,84 @@ endif()
 # CMake's Threads package resolves to -lpthread on Linux, nothing extra on
 # macOS (pthreads are in libSystem), and is a no-op on Windows (MSVC path
 # uses InitOnceExecuteOnce from synchapi.h, linked automatically).
+# AArch64: the portable C sources never use a SIMD/FP register.
+#
+# gcc 13 on AArch64 auto-vectorised and register-allocated the portable
+# (non-NEON) C into the SIMD file, moving secret words across with FMOV
+# (general <-> SIMD), which Arm's DIT list does not name: 514 such FMOVs over
+# the library, among them the X25519 ladder's output, P-256 signing, ML-DSA
+# signing, SHA-256 and bitsliced AES (static census, 2026-11-08), and the
+# secret-operand gate's first AArch64 run failed on them.  -mgeneral-regs-only
+# makes that impossible in these files: every portable source compiles under
+# it and then contains no SIMD instruction at all.  The NEON and SVE2 kernels
+# keep their own flags and are held to the DIT list by the same gate.  MSVC
+# has no equivalent switch and is not analysed (docs/constant-time-testing.md).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND
+   CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag(-mgeneral-regs-only AMA_HAVE_GENERAL_REGS_ONLY)
+    if(NOT AMA_HAVE_GENERAL_REGS_ONLY)
+        message(FATAL_ERROR
+            "${CMAKE_C_COMPILER_ID} rejected -mgeneral-regs-only: without it the "
+            "portable C moves secrets through SIMD registers with FMOV, which is "
+            "not on Arm's DIT list")
+    endif()
+    set(_ama_general_regs_sources ${AMA_SOURCES})
+    if(AMA_NEON_SOURCES)
+        list(REMOVE_ITEM _ama_general_regs_sources ${AMA_NEON_SOURCES})
+    endif()
+    if(AMA_SVE2_SOURCES)
+        list(REMOVE_ITEM _ama_general_regs_sources ${AMA_SVE2_SOURCES})
+    endif()
+    set_property(SOURCE ${_ama_general_regs_sources}
+                 APPEND PROPERTY COMPILE_OPTIONS -mgeneral-regs-only)
+    # The NEON kernels need the SIMD file, so they cannot take the flag above;
+    # what they must not have is the auto-vectoriser rewriting their scalar
+    # parts (it added FMOVs to the Kyber and ML-DSA NTT bodies on top of what
+    # the intrinsics ask for).  Their explicit intrinsics are unaffected, and
+    # the lane moves the intrinsics themselves lowered to FMOV are pinned to
+    # UMOV/DUP/INS in src/c/neon/ama_neon_dit.h.
+    if(AMA_NEON_SOURCES)
+        set_property(SOURCE ${AMA_NEON_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+                     -fno-tree-vectorize -fno-tree-slp-vectorize)
+    endif()
+    # Register residue.  Under -mgeneral-regs-only, AMA_API's
+    # zero_call_used_regs("all") clears x0-x18 and no SIMD register, so the
+    # kernels clear their own: every NEON and SVE2 entry point is declared
+    # with AMA_SIMD_CLEAR_REGS (src/c/internal/ama_simd_clear_regs.h).  It is
+    # a function attribute because a per-file -fzero-call-used-regs is
+    # applied by GCC at LTO link time, not per function, and was measured to
+    # have no effect in the default LTO build.  A compiler that does not know
+    # the attribute is refused here: the header defines the macro empty for it
+    # (so a static analyser's front end can still parse the declarations), and
+    # this check keeps that from ever reaching a built library.
+    include(CheckCSourceCompiles)
+    check_c_source_compiles("
+        #if !defined(__has_attribute) || !__has_attribute(zero_call_used_regs)
+        #error zero_call_used_regs unknown
+        #endif
+        static __attribute__((zero_call_used_regs(\"all\"))) int ama_probe(void) { return 0; }
+        int main(void) { return ama_probe(); }" AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
+    if(NOT AMA_HAVE_ZERO_CALL_USED_REGS_ATTR)
+        message(FATAL_ERROR
+            "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION} lacks "
+            "__attribute__((zero_call_used_regs)) (GCC 11+, Clang 15+): without it "
+            "the NEON and SVE2 kernels return with secrets in SIMD registers "
+            "(src/c/internal/ama_simd_clear_regs.h)")
+    endif()
+    # Both compilers would turn copy loops back into libc memcpy calls, which
+    # copy through q0-q3: clang's loop-idiom pass (as on x86-64, above), and
+    # GCC's loop distribution, which made ten such calls in six functions
+    # (DER encoding, secp256k1 signing, the ML-DSA NEON NTT staging, SLH-DSA
+    # WOTS; gcc 13.3, read from the disassembly).  On x86-64 the string-op
+    # strategy pin expands those copies inline; AArch64 GCC has no such pin.
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-builtin-memcpy -fno-builtin-memmove")
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-tree-loop-distribute-patterns")
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 
 # OpenSSL: deliberately NOT probed.  Every cryptographic operation is a
@@ -1037,7 +1208,8 @@ if(AMA_BUILD_SHARED)
 
     # Export only the ama_* ABI from the shared library (audit B2).
     #
-    # Off-Windows AMA_API expands to nothing, so the linked .so exported all of
+    # Off-Windows AMA_API carries no visibility attribute (while the library
+    # builds it carries only zero_call_used_regs), so the linked .so exported all of
     # its ~246 defined symbols -- at the time including six un-prefixed names
     # from the since-removed vendored Ed25519 tree and one mutable data symbol,
     # any of which a process loading a second copy of that code could have
@@ -1321,6 +1493,15 @@ if(AMA_BUILD_TESTS)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)
+        # A consumer that defines nothing is taken for a user of the DLL and
+        # given __declspec(dllimport) (include/ama_cryptography.h), which an
+        # archive cannot satisfy.  Every test then referenced __imp_ama_* and
+        # linked only where -flto happened to resolve it: measured 2026-11-10
+        # with MinGW gcc 13.2, CMAKE_BUILD_TYPE=None, Debug, MinSizeRel and
+        # AMA_ENABLE_LTO=OFF all failed with "undefined reference to
+        # `__imp_ama_kem_decapsulate'".  The macro is the header's own name
+        # for "not the DLL"; it changes nothing else in a consumer.
+        target_compile_definitions(ama_cryptography_test INTERFACE AMA_BUILDING_STATIC)
     endif()
 
     add_subdirectory(tests/c)

@@ -49,6 +49,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 
 typedef int ama_sphincs_avx2_not_available;

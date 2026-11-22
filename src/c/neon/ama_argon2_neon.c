@@ -41,12 +41,14 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "../internal/ama_ct_barrier.h"
 #include "ama_neon_internal.h"  /* includes ama_cryptography.h, which
                                   * declares ama_secure_memzero */
 
@@ -111,11 +113,17 @@ void ama_argon2_g_neon(uint64_t out[128],
     uint64_t R[128];
     uint64_t Z[128];
 
-    /* R = X XOR Y (NEON 2-wide). */
+    /* R = X XOR Y (NEON 2-wide).  y is the reference block, whose address
+     * is password-derived by RFC 9106 sec. 3.4's design.  The offset goes
+     * through a value barrier so the loop exits on its counter, not on a
+     * pointer derived from y: gcc 13.3 compiled this exit as a pointer
+     * compare, and gcc 15.2 made the same shape a password-derived branch in
+     * the AVX2 kernel (src/c/avx2/ama_argon2_avx2.c). */
     for (int i = 0; i < 128; i += 2) {
-        uint64x2_t vx = vld1q_u64(x + i);
-        uint64x2_t vy = vld1q_u64(y + i);
-        vst1q_u64(R + i, veorq_u64(vx, vy));
+        const int o = (int)ama_ct_value_barrier_u32((uint32_t)i);
+        uint64x2_t vx = vld1q_u64(x + o);
+        uint64x2_t vy = vld1q_u64(y + o);
+        vst1q_u64(R + o, veorq_u64(vx, vy));
     }
 
     memcpy(Z, R, sizeof(Z));

@@ -95,6 +95,7 @@
  * nil.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>

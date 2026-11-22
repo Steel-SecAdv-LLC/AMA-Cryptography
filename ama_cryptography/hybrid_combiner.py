@@ -13,10 +13,11 @@ Follows the dual-PRF combiner approach from:
     "Hybrid Key Encapsulation Mechanisms and Authenticated Key Exchange"
     (PQCrypto 2019 / IACR ePrint 2018/903)
 
-The binding construction ensures that the combined shared secret is
-secure if EITHER the classical or PQC component remains unbroken.
-This is the standard IND-CCA2 secure combiner used in TLS 1.3
-hybrid key agreement drafts.
+The claim is that the combined KEM is IND-CCA2 if EITHER component is,
+under the assumption that HMAC-SHA3-256 is a dual PRF -- the published
+argument, applied informally to this encoding and not independently
+reviewed.  The exact claim and where it stops are in docs/DESIGN_NOTES.md
+section 5.2.
 
 Construction (length-prefixed encoding for domain separation)::
 
@@ -32,11 +33,13 @@ Construction (length-prefixed encoding for domain separation)::
 The length-prefixed ciphertext binding in the salt prevents
 mix-and-match and component stripping attacks.
 
-Design decision: This module uses the established HKDF-SHA3-256 combiner
-(RFC 5869) rather than the experimental Double-Helix KDF. The standard
-combiner has formal IND-CCA2 security proofs and is auditable against
-published specifications. Double-Helix KDF may be evaluated in a
-dedicated research module once peer-reviewed analysis is available.
+Design decision: This module uses an HKDF-SHA3-256 (RFC 5869) combiner
+rather than the experimental Double-Helix KDF, because its security argument
+is a published one (Bindel et al.) and it is auditable against published
+specifications.  That argument is not a proof of this module's exact
+encoding (docs/DESIGN_NOTES.md section 5.2).  Double-Helix KDF may be
+evaluated in a dedicated research module once peer-reviewed analysis is
+available.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.

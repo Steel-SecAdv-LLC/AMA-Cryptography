@@ -29,8 +29,11 @@
  * Each limb fits in 64 bits with headroom for lazy reduction.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include "../include/ama_cryptography.h"
 #include "internal/ama_once.h"
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ct_barrier.h"
 #include "internal/ama_ct_declassify.h"
 #include <string.h>
@@ -1449,7 +1452,20 @@ static int secp256k1_aff_from_bytes_checked(secp256k1_aff *P,
     return memcmp(a, b, 32) == 0;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_point_mul_body(const uint8_t scalar[32], const uint8_t point_x[32], const uint8_t point_y[32], uint8_t out_x[32], uint8_t out_y[32]);
+
 ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
+                                     const uint8_t point_x[32],
+                                     const uint8_t point_y[32],
+                                     uint8_t out_x[32],
+                                     uint8_t out_y[32]) {
+    ama_error_t rc = ama_secp256k1_point_mul_body(scalar, point_x, point_y, out_x, out_y);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_point_mul(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_point_mul_body(const uint8_t scalar[32],
                                      const uint8_t point_x[32],
                                      const uint8_t point_y[32],
                                      uint8_t out_x[32],
@@ -1530,6 +1546,8 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
     }
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_pubkey_from_privkey_body(const uint8_t privkey[32], uint8_t compressed_pubkey[33]);
+
 /**
  * Derive a SEC1 compressed public key from a private key.
  *
@@ -1543,6 +1561,14 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
  * @return AMA_SUCCESS or error code
  */
 ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
+                                               uint8_t compressed_pubkey[33]) {
+    ama_error_t rc = ama_secp256k1_pubkey_from_privkey_body(privkey, compressed_pubkey);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_pubkey_from_privkey(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_pubkey_from_privkey_body(const uint8_t privkey[32],
                                                uint8_t compressed_pubkey[33]) {
     uint8_t pub_x[32], pub_y[32];
     ama_error_t err;
@@ -1755,8 +1781,12 @@ static void sc_zero(secp256k1_sc *r) {
 static int sc_is_zero(const secp256k1_sc *a) {
     uint64_t acc = 0;
     int i;
+    /* Limb by limb in general-purpose registers.  Vectorised, this OR
+     * reduction of a secret scalar was emitted with MOVHLPS (gcc 14) and
+     * MOVMSKPS (clang 18) -- neither is on Intel's Data Operand Independent
+     * Timing list (tools/check_ct_operand.py). */
     for (i = 0; i < SC_LIMBS; i++)
-        acc |= a->v[i];
+        acc |= ama_ct_value_barrier_u64(a->v[i]);
     return acc == 0;
 }
 
@@ -2101,23 +2131,23 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     buf[32] = 0x00;
     memcpy(buf + 33, privkey, 32);
     memcpy(buf + 65, h1oct, 32);
-    ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
-    ama_hmac_sha256(K, 32, V, 32, V);
+    ama_hmac_sha256_inner(K, 32, buf, sizeof(buf), K);
+    ama_hmac_sha256_inner(K, 32, V, 32, V);
 
     /* K = HMAC_K(V || 0x01 || int2octets(x) || bits2octets(h1)) */
     memcpy(buf, V, 32);
     buf[32] = 0x01;
     memcpy(buf + 33, privkey, 32);
     memcpy(buf + 65, h1oct, 32);
-    ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
-    ama_hmac_sha256(K, 32, V, 32, V);
+    ama_hmac_sha256_inner(K, 32, buf, sizeof(buf), K);
+    ama_hmac_sha256_inner(K, 32, V, 32, V);
 
     /* Generate candidates until one lands in [1, n-1].  RFC 6979 §3.2 step h;
      * the loop bound is a belt-and-braces guard — the probability of even one
      * retry is about 2^-128. */
     for (attempt = 0; attempt < 1024; attempt++) {
         secp256k1_sc cand;
-        ama_hmac_sha256(K, 32, V, 32, V);
+        ama_hmac_sha256_inner(K, 32, V, 32, V);
         /* RFC 6979 Sec 3.2 step h.3: accept iff the candidate is in
          * [1, n-1].  The verdict is declassified: every conforming signer
          * shares this branch, and it exposes only that one discarded DRBG
@@ -2136,8 +2166,8 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
         /* K = HMAC_K(V || 0x00); V = HMAC_K(V) */
         memcpy(buf, V, 32);
         buf[32] = 0x00;
-        ama_hmac_sha256(K, 32, buf, 33, K);
-        ama_hmac_sha256(K, 32, V, 32, V);
+        ama_hmac_sha256_inner(K, 32, buf, 33, K);
+        ama_hmac_sha256_inner(K, 32, V, 32, V);
     }
 
     ama_secure_memzero(V, sizeof(V));
@@ -2402,7 +2432,18 @@ static void secp256k1_scrub_scalars(uint8_t r_bytes[32], uint8_t s_bytes[32]) {
     ama_secure_memzero(s_bytes, 32);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_ecdsa_sign_body(uint8_t *signature, size_t *signature_len, const uint8_t message[32], const uint8_t private_key[32]);
+
 AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
+                                             const uint8_t message[32],
+                                             const uint8_t private_key[32]) {
+    ama_error_t rc = ama_secp256k1_ecdsa_sign_body(signature, signature_len, message, private_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_ecdsa_sign(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_ecdsa_sign_body(uint8_t *signature, size_t *signature_len,
                                              const uint8_t message[32],
                                              const uint8_t private_key[32]) {
     uint8_t r_bytes[32], s_bytes[32];
@@ -2412,11 +2453,21 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
         return AMA_ERROR_INVALID_PARAM;
 
     rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);
-    if (rc == AMA_SUCCESS)
+    if (rc == AMA_SUCCESS) {
+        /* r and s are final here (low-s applied) and are the signature this
+         * call emits: public by contract (internal/ama_ct_declassify.h).  DER
+         * strips their leading zero octets, so the encoder branches on them;
+         * that is a property of the published bytes, not of the key or the
+         * nonce, which stay secret. */
+        AMA_CT_DECLASSIFY(r_bytes, sizeof(r_bytes));
+        AMA_CT_DECLASSIFY(s_bytes, sizeof(s_bytes));
         *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    }
     secp256k1_scrub_scalars(r_bytes, s_bytes);
     return rc;
 }
+
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_ecdsa_sign_raw_body(uint8_t signature[64], const uint8_t message[32], const uint8_t private_key[32]);
 
 /* Fixed-width `r || s`, 64 octets.
  *
@@ -2444,6 +2495,15 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
  * tests/test_ghash_constant_time_gate.py keeps a count out of these two.)
  */
 AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(uint8_t signature[64],
+                                                 const uint8_t message[32],
+                                                 const uint8_t private_key[32]) {
+    ama_error_t rc = ama_secp256k1_ecdsa_sign_raw_body(signature, message, private_key);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_ecdsa_sign_raw(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_ecdsa_sign_raw_body(uint8_t signature[64],
                                                  const uint8_t message[32],
                                                  const uint8_t private_key[32]) {
     if (!signature)
@@ -2651,16 +2711,38 @@ static int secp256k1_seckey_ok(const uint8_t s[32]) {
     return (1 ^ secp256k1_scalar_is_zero(s)) & secp256k1_scalar_below_n(s);
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_verify_body(const uint8_t seckey[32]);
+
 AMA_API ama_error_t ama_secp256k1_seckey_verify(const uint8_t seckey[32]) {
+    ama_error_t rc = ama_secp256k1_seckey_verify_body(seckey);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_seckey_verify(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_verify_body(const uint8_t seckey[32]) {
     if (!seckey) {
         return AMA_ERROR_INVALID_PARAM;
     }
     int ok = secp256k1_seckey_ok(seckey);
+    /* The range verdict is the return code: public by contract
+     * (internal/ama_ct_declassify.h).  The key stays secret. */
     AMA_CT_DECLASSIFY(&ok, sizeof ok);
     return ok ? AMA_SUCCESS : AMA_ERROR_INVALID_PARAM;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_tweak_add_body(uint8_t out[32], const uint8_t seckey[32], const uint8_t tweak[32]);
+
 AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(uint8_t out[32],
+                                                   const uint8_t seckey[32],
+                                                   const uint8_t tweak[32]) {
+    ama_error_t rc = ama_secp256k1_seckey_tweak_add_body(out, seckey, tweak);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_SECP256K1_BYTES);
+    return rc;
+}
+
+/* ama_secp256k1_seckey_tweak_add(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_secp256k1_seckey_tweak_add_body(uint8_t out[32],
                                                    const uint8_t seckey[32],
                                                    const uint8_t tweak[32]) {
     secp256k1_sc k, t, r;
@@ -2688,6 +2770,9 @@ AMA_API ama_error_t ama_secp256k1_seckey_tweak_add(uint8_t out[32],
     ama_secure_memzero(&k, sizeof k);
     ama_secure_memzero(&t, sizeof t);
     ama_secure_memzero(&r, sizeof r);
+    /* The combined verdict of the three range checks is the return code:
+     * public by contract (internal/ama_ct_declassify.h).  It is taken after
+     * the sum's last write; the key, the tweak and the sum stay secret. */
     AMA_CT_DECLASSIFY(&ok, sizeof ok);
     if (!ok) {
         ama_secure_memzero(out, 32);

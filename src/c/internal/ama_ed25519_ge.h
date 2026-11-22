@@ -108,6 +108,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "ama_ct_barrier.h"
 #include "ama_ed25519_canonical.h"
 #include "ama_fe25519_safegcd.h"
 
@@ -167,7 +168,11 @@ GE_INLINE void GE_SYM(fe_cmov)(uint64_t *r, const uint64_t *f, uint64_t mask) {
 GE_INLINE void GE_SYM(fe_cswap)(uint64_t *f, uint64_t *g, uint64_t mask) {
     int i;
     for (i = 0; i < GE_FE_LIMBS; i++) {
-        uint64_t t = mask & (f[i] ^ g[i]);
+        /* Per limb in a general-purpose register: clang 18 vectorised this
+         * swap of secret limbs with SHUFPS (lane swap), which is not on
+         * Intel's Data Operand Independent Timing list
+         * (tools/check_ct_operand.py). */
+        uint64_t t = ama_ct_value_barrier_u64(mask & (f[i] ^ g[i]));
         f[i] ^= t;
         g[i] ^= t;
     }

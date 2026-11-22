@@ -10,6 +10,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -18,6 +19,8 @@
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 #include "ama_neon_internal.h"
+#include "ama_neon_dit.h"
+#include "../internal/ama_ct_declassify.h"
 
 #if defined(__ARM_FEATURE_AES)
 
@@ -102,22 +105,49 @@ static inline uint8x16_t sll128_1_neon(uint8x16_t v) {
     return vreinterpretq_u8_u64(vorrq_u64(shifted, carry_shifted));
 }
 
+/* Low and high 64 x 64 -> 128 carry-less products of two vectors' lanes:
+ * PMULL (lane 0) and PMULL2 (lane 1), both on Arm's DIT list.  Inline
+ * assembly on GNU C so the operands cannot be routed through general
+ * registers; the intrinsic forms elsewhere. */
+static inline uint8x16_t ghash_pmull_lo_neon(uint8x16_t a, uint8x16_t b) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint8x16_t r;
+    __asm__("pmull %0.1q, %1.1d, %2.1d" : "=w"(r) : "w"(a), "w"(b));
+    return r;
+#else
+    return vreinterpretq_u8_p128(vmull_p64(
+        (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(a), 0),
+        (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(b), 0)));
+#endif
+}
+
+static inline uint8x16_t ghash_pmull_hi_neon(uint8x16_t a, uint8x16_t b) {
+#if defined(__GNUC__) || defined(__clang__)
+    uint8x16_t r;
+    __asm__("pmull2 %0.1q, %1.2d, %2.2d" : "=w"(r) : "w"(a), "w"(b));
+    return r;
+#else
+    return vreinterpretq_u8_p128(vmull_high_p64(vreinterpretq_p64_u8(a),
+                                                vreinterpretq_p64_u8(b)));
+#endif
+}
+
 static inline uint8x16_t ghash_mul_neon(uint8x16_t a_gcm, uint8x16_t b_gcm) {
     /* Byte-reverse into PMULL natural order. */
     uint8x16_t a = bswap128_neon(a_gcm);
     uint8x16_t b = bswap128_neon(b_gcm);
 
-    poly64_t a_lo = (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(a), 0);
-    poly64_t a_hi = (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(a), 1);
-    poly64_t b_lo = (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(b), 0);
-    poly64_t b_hi = (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(b), 1);
-
-    /* 128 x 128 -> 256 via Karatsuba (3 mults). */
-    uint8x16_t lo  = vreinterpretq_u8_p128(vmull_p64(a_lo, b_lo));
-    uint8x16_t hi  = vreinterpretq_u8_p128(vmull_p64(a_hi, b_hi));
-    uint8x16_t mid = vreinterpretq_u8_p128(
-        vmull_p64((poly64_t)((uint64_t)a_lo ^ (uint64_t)a_hi),
-                  (poly64_t)((uint64_t)b_lo ^ (uint64_t)b_hi)));
+    /* 128 x 128 -> 256 via Karatsuba (3 mults), every operand left in its
+     * vector register.  Extracting the halves as poly64_t scalars made clang
+     * move H and the accumulator through general registers with FMOV (both
+     * directions), which Arm's DIT list does not name; PMULL and PMULL2 read
+     * the lanes in place, and the cross term's operand is formed by XOR with
+     * the swapped halves (lane 0 = lo ^ hi). */
+    const uint8x16_t ax = veorq_u8(a, vextq_u8(a, a, 8));
+    const uint8x16_t bx = veorq_u8(b, vextq_u8(b, b, 8));
+    uint8x16_t lo  = ghash_pmull_lo_neon(a, b);
+    uint8x16_t hi  = ghash_pmull_hi_neon(a, b);
+    uint8x16_t mid = ghash_pmull_lo_neon(ax, bx);
 
     /* mid -= lo + hi  (Karatsuba correction). */
     mid = veorq_u8(mid, veorq_u8(lo, hi));
@@ -236,7 +266,8 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a_gcm, uint8x16_t b_gcm) {
 static inline uint32_t aes_subword_neon(uint32_t word) {
     const uint8x16_t bcast = vreinterpretq_u8_u32(vdupq_n_u32(word));
     const uint8x16_t subbed = vaeseq_u8(bcast, vdupq_n_u8(0));
-    return vgetq_lane_u32(vreinterpretq_u32_u8(subbed), 0);
+    /* By UMOV, not FMOV (ama_neon_dit.h): the word is round-key material. */
+    return ama_neon_lane0_u32(vreinterpretq_u32_u8(subbed));
 }
 
 /** The AES-256 key-schedule XOR cascade, in-register.
@@ -264,7 +295,7 @@ static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
      * key half), not prev_even.  This matches the x86 reference where
      * _mm_aeskeygenassist_si128 operates on rk[odd] while the XOR cascade
      * runs on rk[even]. */
-    const uint32_t w3 = vgetq_lane_u32(vreinterpretq_u32_u8(prev_odd), 3);
+    const uint32_t w3 = ama_neon_lane3_u32(vreinterpretq_u32_u8(prev_odd));
     const uint32_t subbed = aes_subword_neon(w3);
     /* RotWord on a little-endian word is a rotate-right by 8: byte 0 of the
      * result is the old byte 1, and the old byte 0 wraps to byte 3 — exactly
@@ -277,7 +308,7 @@ static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
 static inline uint8x16_t aes_key_assist2_neon(uint8x16_t prev_even, uint8x16_t prev_odd) {
     /* For AES-256 odd-numbered round keys (rk[3], rk[5], ...):
      * SubWord(prev_even[3]) without RotWord, no rcon. */
-    const uint32_t w3 = vgetq_lane_u32(vreinterpretq_u32_u8(prev_even), 3);
+    const uint32_t w3 = ama_neon_lane3_u32(vreinterpretq_u32_u8(prev_even));
     return aes_key_cascade_neon(prev_odd, aes_subword_neon(w3));
 }
 
@@ -534,6 +565,11 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
      * See ama_aes_gcm_avx2.c for the rationale; closes the dudect
      * leak at test_dudect.c::test_aes_gcm_tag_verify. */
     int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it bounds
+     * the decryption below so a forgery writes no plaintext: public by
+     * contract (internal/ama_ct_declassify.h).  The comparison above is
+     * constant time; the tags and the key stay secret. */
+    AMA_CT_DECLASSIFY(&tag_match, sizeof(tag_match));
     size_t bound_mask = (size_t)0 - (size_t)tag_match;
     size_t bounded_full      = full_blocks & bound_mask;
     size_t bounded_remaining = remaining   & bound_mask;

@@ -22,6 +22,7 @@
  * equivalence KAT fails hard on any divergence from the scalar core.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 
 #include <immintrin.h>

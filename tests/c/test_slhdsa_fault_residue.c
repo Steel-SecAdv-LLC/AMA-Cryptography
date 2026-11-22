@@ -65,6 +65,13 @@
  * therefore also wipe the dead stack below their frame
  * (ama_stack_wipe_below), as the Ed25519 and AEAD entry points do.
  *
+ * SINCE 2026-11-10 that is one of two things that hold these verdicts.  Every
+ * secret-handling entry point now clears the stack below itself on every
+ * exit (src/c/internal/ama_stack_wipe.h, AMA_STACK_WIPE_BELOW, which is what
+ * ama_stack_wipe_below became), the signing entry points among them, and with
+ * the two error-exit wipes removed this test still passes, optimised and not
+ * (measured, gcc 13.3).  It holds the property, not either wipe.
+ *
  * MUTATION RECORD (AGENTS.md section 6.2; gcc 13.3.0, x86-64, 2026-09-28,
  * both in Release and in the unoptimised build).  Each change was made, the
  * testing archive rebuilt and this test run.

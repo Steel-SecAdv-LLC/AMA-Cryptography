@@ -66,6 +66,7 @@
  * gating contract. (Copilot Review 2026-04-27.)
  */
 
+#include "ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #if (defined(__x86_64__) || defined(_M_X64)) \
     && (defined(__GNUC__) || defined(__clang__)) \
     && !defined(_MSC_VER)

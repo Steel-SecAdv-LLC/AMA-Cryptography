@@ -10,7 +10,8 @@ built library pulls IN (no ``EVP_``, ``sodium_``, ``wc_``, ... symbols).  This
 one checks what it sends OUT: the shared object must export ONLY AMA's own
 ``ama_*`` ABI.
 
-Off-Windows ``AMA_API`` expands to nothing, so before ``cmake/ama_exports.map``
+Off-Windows ``AMA_API`` carries no visibility attribute (only
+``zero_call_used_regs`` while the library builds), so before ``cmake/ama_exports.map``
 the linked ``.so`` exported all ~246 of its defined symbols -- at the time six
 of them un-prefixed names from the since-removed vendored Ed25519 tree plus one
 mutable data symbol.  A process that loaded AMA alongside a second copy of that

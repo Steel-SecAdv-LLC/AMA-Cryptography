@@ -758,8 +758,9 @@ class TestTheBackendAcrossBuildConfigurations:
         # __declspec(dllimport) for a Windows consumer that has not said it is
         # linking the STATIC library, so without it every entry point resolves
         # to `__imp_<name>` and the probe fails to link — measured, against a
-        # MinGW-w64 cross-build of this tree.  On POSIX `AMA_API` is empty, so
-        # passing it unconditionally keeps one code path instead of two.
+        # MinGW-w64 cross-build of this tree.  On POSIX it adds only the
+        # register-clearing attribute to the declarations, which a caller does
+        # not see, so passing it unconditionally keeps one code path instead of two.
         #
         # The library list is platform-split for the same reason CMakeLists.txt
         # splits it: Windows needs bcrypt for BCryptGenRandom (ama_platform_rand

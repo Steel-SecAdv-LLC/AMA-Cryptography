@@ -796,7 +796,7 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(r"ClusterFuzzLite[^.\n]{0,80}\bOSS-Fuzz'?s infrastructure", re.IGNORECASE),
-        "ClusterFuzzLite runs on GitHub-hosted runners (runs-on: ubuntu-latest in "
+        "ClusterFuzzLite runs on GitHub-hosted runners (runs-on: ubuntu-26.04 in "
         ".github/workflows/clusterfuzzlite.yml), building in OSS-Fuzz's base-builder "
         "image; the project is not onboarded to OSS-Fuzz.",
     ),

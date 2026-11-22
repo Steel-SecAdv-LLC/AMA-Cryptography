@@ -147,7 +147,12 @@ Implementation notes for the wired SVE2 surface:
 - Variable-length SIMD using SVE2 predicated operations
 - `svint16_t` / `svint32_t` for hardware-adaptive vector widths
   (VL=128/256/512 are all covered by the same binary)
-- VL-agnostic loops via `svwhilelt_b16`/`svwhilelt_b32` + `svcntw()`
+- VL-agnostic loops stepping one whole vector under a constant `svptrue`
+  predicate; a vector length that is not a power of two takes the scalar
+  path. No `WHILE*` or `CNTP` (neither is on Arm's DIT list), and no
+  auto-vectoriser in these files: `tools/check_ct_operand.py --static`
+  reads the objects against the list in CI, because Valgrind cannot execute
+  SVE
 
 #### Runtime Dispatch — `src/c/dispatch/ama_dispatch.c`
 
@@ -479,7 +484,7 @@ Location: `fuzz/`
 
 The OSS-Fuzz submission files in `oss-fuzz/` are built and checked by
 OSS-Fuzz's own driver on every push (`tools/test_oss_fuzz_build.sh`), and
-ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-latest`,
+ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-26.04`,
 `.github/workflows/clusterfuzzlite.yml`), building the fuzzers in OSS-Fuzz's
 `base-builder` image, with the corpus persisted between runs as workflow
 artifacts. The project is not onboarded to OSS-Fuzz itself, so nothing runs on

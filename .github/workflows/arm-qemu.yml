@@ -48,7 +48,7 @@ jobs:
   # failed detection is a failure, never "not relevant".
   changes:
     name: Relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.match.outputs.relevant }}
@@ -74,8 +74,9 @@ jobs:
             tools/pr_touches_watched_paths.py
         run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
 
-# qemu-user-binfmt, not qemu-user-static: on Ubuntu 26.04 (ubuntu-latest from
-# 2026-11) `qemu-user-static` is a virtual package provided by qemu-user-binfmt
+# qemu-user-binfmt, not qemu-user-static: on Ubuntu 26.04 (the ubuntu-26.04
+# image these jobs pin; ubuntu-latest served it from 2026-11) `qemu-user-static`
+# is a virtual package provided by qemu-user-binfmt
 # and qemu-user-binfmt-hwe, and apt refuses to choose a provider ("has no
 # installation candidate"; measured 2026-11-06, every lane).  On 24.04
 # qemu-user-binfmt is a real package that depends on qemu-user-static, so the
@@ -84,7 +85,7 @@ jobs:
     name: AArch64 cross-compile + QEMU ctest
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -139,7 +140,7 @@ jobs:
     name: AArch64 without ARM Crypto Extensions (the MSVC ARM64 condition)
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Bounded like its siblings: without this a hang runs to the 360-minute
     # default and leaves the ARM QEMU Gate pending for six hours.
     timeout-minutes: 30
@@ -241,7 +242,7 @@ jobs:
     name: AArch64 SVE2 kernels (VL=128 and VL=256)
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # AMA_ENABLE_SVE2 defaults OFF and no workflow turned it on, so the SVE2
     # kernels were never compiled in CI, let alone run — the equivalence and
@@ -345,14 +346,14 @@ jobs:
     name: AArch64 UBSan (ARM SIMD kernels sanitized under QEMU)
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # UBSan-instrumented ctest under QEMU is slow: the full 68-case suite
     # measured ~17.5 min locally (SPHINCS-256f KATs dominate), plus the
     # cross-build.  45 leaves headroom on a cold runner without masking a hang.
     timeout-minutes: 45
     # WHY THIS JOB EXISTS
     #
-    # Every sanitizer job in static-analysis.yml runs on ubuntu-latest — x86-64,
+    # Every sanitizer job in static-analysis.yml runs on ubuntu-26.04 — x86-64,
     # where src/c/neon/*.c and src/c/sve2/*.c compile to a bare
     # `typedef int ama_..._not_available;` and are linked out entirely.  So the
     # hand-written ARM SIMD kernels had ZERO ASan/UBSan/MSan coverage on any
@@ -420,7 +421,7 @@ jobs:
       - arm-qemu-sve2
       - arm-qemu-no-crypto-ext
       - arm-qemu-ubsan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
       - name: Fail unless every lane reached the state this change requires

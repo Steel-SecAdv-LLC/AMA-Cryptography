@@ -2544,7 +2544,355 @@ typedef struct {
  * headroom for future additions without silently overflowing the
  * fixed-size results array.  Bumping this constant is the only place
  * a lane addition needs to be capacity-checked. */
-#define DUDECT_MAX_LANES 32
+/* -----------------------------------------------------------------------
+ * Claim-registry lanes (tools/check_ct_claims.py).
+ *
+ * Each public function whose header documentation claims constant time is
+ * measured here under the same calibrated rule as every other lane: |t| at
+ * DUDECT_T_THRESHOLD in a strict majority of rounds, one sign, and a
+ * per-class difference of at least DUDECT_MIN_EFFECT_NS.  Until these lanes
+ * existed the eight claims below were held by deterministic instruments
+ * (callgrind counts, Memcheck taint) and by NO wall-clock lane, so a
+ * latency-only difference of 2 ns or more in them -- the one class only the
+ * wall clock can see (CONSTANT_TIME_VERIFICATION.md) -- had no instrument.
+ *
+ * Construction, for every lane below: class 0 is a FIXED secret, class 1 is
+ * a fresh random secret drawn every iteration (the fixed-vs-random contrast
+ * of Reparaz et al. sec. 2), both sources are regenerated or re-read every
+ * iteration whatever the class, and the selected one is staged through ONE
+ * aligned buffer by dudect_stage_select before the timer opens.  The timed
+ * region holds exactly one call.
+ * ----------------------------------------------------------------------- */
+
+/* Shared body for the lanes whose secret is a flat byte buffer and whose
+ * call needs no per-class precomputation. */
+typedef void (*claim_call_fn)(const uint8_t *secret, size_t len, volatile uint8_t *sink);
+
+static dudect_measurement_t claim_lane_fixed_vs_random(const char *name, size_t len,
+                                                       claim_call_fn call,
+                                                       int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, name, (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n", name);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    _Alignas(64) uint8_t fixed[64];
+    _Alignas(64) uint8_t fresh[64];
+    _Alignas(64) uint8_t stage[64];
+    volatile uint8_t sink = 0;
+    if (len > sizeof stage) {
+        dudect_ctx_free(&ctx);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    memset(fixed, 0, sizeof fixed);
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        random_bytes(fresh, len);
+        const uint8_t *in = dudect_stage_select(stage, fixed, fresh, len, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        call(in, len, &sink);
+        uint64_t end = dudect_get_time_ns();
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    (void)sink;
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+
+static void call_base64_encode(const uint8_t *secret, size_t len, volatile uint8_t *sink) {
+    char out[96];
+    size_t n = 0;
+    if (ama_base64_encode(out, sizeof out, secret, len, AMA_BASE64_STANDARD_PADDED, &n) !=
+        AMA_SUCCESS)
+        *sink = 0xEE;
+    *sink ^= (uint8_t)out[0];
+}
+
+static void call_aes_sbox(const uint8_t *secret, size_t len, volatile uint8_t *sink) {
+    (void)len;
+    *sink ^= ama_aes_sbox_consttime(secret[0]);
+}
+
+static void call_aes_key_expansion(const uint8_t *secret, size_t len, volatile uint8_t *sink) {
+    uint8_t rk[240];
+    (void)len;
+    ama_aes256_key_expansion_consttime(secret, rk);
+    *sink ^= rk[239];
+}
+
+/* Test: ama_base64_encode -- 48 secret bytes (a PEM line's worth). */
+static dudect_measurement_t test_base64_encode(int iterations) {
+    return claim_lane_fixed_vs_random("ama_base64_encode", 48, call_base64_encode, iterations);
+}
+
+/* Test: ama_aes_sbox_consttime -- one secret byte. */
+static dudect_measurement_t test_aes_sbox_consttime(int iterations) {
+    return claim_lane_fixed_vs_random("ama_aes_sbox_consttime", 1, call_aes_sbox, iterations);
+}
+
+/* Test: ama_aes256_key_expansion_consttime -- a secret 32-byte key. */
+static dudect_measurement_t test_aes_key_expansion_consttime(int iterations) {
+    return claim_lane_fixed_vs_random("ama_aes256_key_expansion_consttime", 32,
+                                      call_aes_key_expansion, iterations);
+}
+
+/* Test: ama_base64_decode.
+ *
+ * The secret is the 48 bytes the 64 characters encode.  Both classes are
+ * encoded every iteration, outside the timer, so the setup is identical work;
+ * only the selected encoding is staged and decoded.  The input length and the
+ * padding count are the same in both classes (48 bytes always encode to 64
+ * characters with no '='), so the two values the codec declassifies are
+ * constant and the only class difference is the characters themselves. */
+static dudect_measurement_t test_base64_decode(int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, "ama_base64_decode", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n", "ama_base64_decode");
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    uint8_t fixed[48], fresh[48], out[48];
+    _Alignas(64) char enc0[64];
+    _Alignas(64) char enc1[64];
+    _Alignas(64) char stage[64];
+    size_t n0 = 0, n1 = 0, n = 0;
+    int rc_mismatches = 0;
+    memset(fixed, 0, sizeof fixed);
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        random_bytes(fresh, sizeof fresh);
+        if (ama_base64_encode(enc0, sizeof enc0, fixed, sizeof fixed,
+                              AMA_BASE64_STANDARD_PADDED, &n0) != AMA_SUCCESS ||
+            ama_base64_encode(enc1, sizeof enc1, fresh, sizeof fresh,
+                              AMA_BASE64_STANDARD_PADDED, &n1) != AMA_SUCCESS ||
+            n0 != sizeof enc0 || n1 != sizeof enc1) {
+            rc_mismatches++;
+            continue;
+        }
+        const char *in = dudect_stage_select(stage, enc0, enc1, sizeof stage, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_base64_decode(out, sizeof out, in, sizeof stage, AMA_BASE64_STANDARD_PADDED, &n);
+        uint64_t end = dudect_get_time_ns();
+        if (rc != AMA_SUCCESS || n != sizeof out) rc_mismatches++;
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    if (rc_mismatches != 0) {
+        fprintf(stderr, "  FAIL: ama_base64_decode lane: %d iteration(s) did not round-trip\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+
+/* Test: ama_aes256_encrypt_block_consttime.
+ *
+ * The secret is the key: class 0 a fixed all-zero key, class 1 a fresh random
+ * key.  Both schedules are expanded every iteration outside the timer (equal
+ * work), the selected 240-byte schedule is staged, and one block of a fixed
+ * plaintext is encrypted inside it. */
+static dudect_measurement_t test_aes_encrypt_block_consttime(int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, "ama_aes256_encrypt_block_consttime", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_aes256_encrypt_block_consttime");
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    uint8_t k0[32], k1[32];
+    _Alignas(64) uint8_t rk0[240];
+    _Alignas(64) uint8_t rk1[240];
+    _Alignas(64) uint8_t stage[240];
+    uint8_t pt[16], ct[16];
+    volatile uint8_t sink = 0;
+    memset(k0, 0, sizeof k0);
+    memset(pt, 0x3C, sizeof pt);
+    ama_aes256_key_expansion_consttime(k0, rk0);
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        random_bytes(k1, sizeof k1);
+        ama_aes256_key_expansion_consttime(k0, rk0);
+        ama_aes256_key_expansion_consttime(k1, rk1);
+        const uint8_t *rk = dudect_stage_select(stage, rk0, rk1, sizeof stage, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        ama_aes256_encrypt_block_consttime(rk, pt, ct);
+        uint64_t end = dudect_get_time_ns();
+        sink ^= ct[0];
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    (void)sink;
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+
+#ifdef AMA_USE_NATIVE_PQC
+/* secp256k1 group order n, big-endian. */
+static const uint8_t SECP256K1_N_BE[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41};
+
+/* A random scalar in [1, n-1]: the top byte is cleared, which puts it below
+ * n, and a zero draw is bumped to 1.  Same distribution class for every
+ * iteration and both lanes that use it. */
+static void secp256k1_lane_scalar(uint8_t k[32]) {
+    random_bytes(k, 32);
+    k[0] &= 0x7F;
+    k[31] |= 0x01;
+}
+
+/* Test: ama_secp256k1_seckey_verify.
+ *
+ * Both classes are VALID keys, so the verdict -- the one value the function
+ * publishes -- is the same: class 0 is n - 1, the largest valid scalar, whose
+ * range-check borrow chain runs to the last limb; class 1 is a fresh random
+ * scalar below 2^255. */
+static dudect_measurement_t test_secp256k1_seckey_verify(int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, "ama_secp256k1_seckey_verify", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n", "ama_secp256k1_seckey_verify");
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    uint8_t k0[32], k1[32];
+    _Alignas(64) uint8_t stage[32];
+    int rc_mismatches = 0;
+    memcpy(k0, SECP256K1_N_BE, 32);
+    k0[31] = (uint8_t)(k0[31] - 1u);
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        secp256k1_lane_scalar(k1);
+        const uint8_t *k = dudect_stage_select(stage, k0, k1, sizeof stage, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc = ama_secp256k1_seckey_verify(k);
+        uint64_t end = dudect_get_time_ns();
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    if (rc_mismatches != 0) {
+        fprintf(stderr, "  FAIL: seckey_verify lane rejected %d valid key(s)\n", rc_mismatches);
+        dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+
+/* Test: ama_secp256k1_seckey_tweak_add (BIP32 CKDpriv).
+ *
+ * Class 0: seckey = n - 1 and tweak = n - 1, so the sum wraps past n and the
+ * conditional subtraction of n takes effect.  Class 1: a fresh random key and
+ * tweak, each below 2^255, whose sum stays below n in almost every draw.  Both
+ * classes succeed, so the verdict is constant and the reduction branch -- the
+ * place a variable-time implementation would differ -- is what is contrasted. */
+static dudect_measurement_t test_secp256k1_seckey_tweak_add(int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, "ama_secp256k1_seckey_tweak_add", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n", "ama_secp256k1_seckey_tweak_add");
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    uint8_t in0[64], in1[64], out[32];
+    _Alignas(64) uint8_t stage[64];
+    int rc_mismatches = 0;
+    memcpy(in0, SECP256K1_N_BE, 32);
+    in0[31] = (uint8_t)(in0[31] - 1u);
+    memcpy(in0 + 32, in0, 32);
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        secp256k1_lane_scalar(in1);
+        secp256k1_lane_scalar(in1 + 32);
+        const uint8_t *in = dudect_stage_select(stage, in0, in1, sizeof stage, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc = ama_secp256k1_seckey_tweak_add(out, in, in + 32);
+        uint64_t end = dudect_get_time_ns();
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    if (rc_mismatches != 0) {
+        fprintf(stderr, "  FAIL: seckey_tweak_add lane refused %d valid sum(s)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+
+/* Test: ama_secp256k1_pubkey_from_privkey.
+ *
+ * Class 0: the key 1 (the lowest Hamming weight); class 1: a fresh random
+ * key.  INFO-ONLY for the reason the scalar-multiplication lane gives (a full
+ * fixed-base multiplication per call is long enough that shared-runner noise
+ * dominates); its blocking counterpart is `--target ecdsa`, whose driver
+ * derives the public key from each class key through this entry point. */
+static dudect_measurement_t test_secp256k1_pubkey_from_privkey(int iterations) {
+    dudect_ctx_t ctx;
+    if (!dudect_ctx_init(&ctx, "ama_secp256k1_pubkey_from_privkey", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_secp256k1_pubkey_from_privkey");
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    uint8_t k0[32], k1[32], pub[33];
+    _Alignas(64) uint8_t stage[32];
+    int rc_mismatches = 0;
+    memset(k0, 0, sizeof k0);
+    k0[31] = 1u;
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        secp256k1_lane_scalar(k1);
+        const uint8_t *k = dudect_stage_select(stage, k0, k1, sizeof stage, class_idx);
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc = ama_secp256k1_pubkey_from_privkey(k, pub);
+        uint64_t end = dudect_get_time_ns();
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+    if (rc_mismatches != 0) {
+        fprintf(stderr, "  FAIL: pubkey_from_privkey lane refused %d valid key(s)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    dudect_print_result(&ctx);
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane;
+}
+#endif /* AMA_USE_NATIVE_PQC */
+
+/* 48: the 28 lanes registered before the claim registry, the eight it added,
+ * and room.  The registration macro below fails closed past it. */
+#define DUDECT_MAX_LANES 48
+/* The verdict accumulator in dudect_rounds.h has its own capacity, and the
+ * two used to disagree only at run time: raising this constant alone let a
+ * full round of measurements finish before dudect_rounds_add() aborted on
+ * the 33rd lane.  Refuse the mismatch at compile time instead. */
+_Static_assert(DUDECT_MAX_LANES <= DUDECT_ROUNDS_MAX_LANES,
+               "DUDECT_MAX_LANES exceeds the verdict accumulator's DUDECT_ROUNDS_MAX_LANES");
 
 /* Capacity-checked lane registration.  Fail-safe BEFORE writing to
  * `results[idx]` so adding more than DUDECT_MAX_LANES lanes can never
@@ -2812,6 +3160,23 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
     DUDECT_REGISTER_LANE(results, idx,
         "ama_consttime_copy",
         test_consttime_copy(iterations), 0);
+    /* Claim-registry lanes: every remaining public function whose header
+     * claims constant time (tools/check_ct_claims.py). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_base64_encode",
+        test_base64_encode(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_base64_decode",
+        test_base64_decode(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_aes_sbox_consttime",
+        test_aes_sbox_consttime(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_aes256_key_expansion_consttime",
+        test_aes_key_expansion_consttime(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_aes256_encrypt_block_consttime",
+        test_aes_encrypt_block_consttime(iterations), 0);
 
     printf("\n--- Cryptographic Primitives ---\n");
     DUDECT_REGISTER_LANE(results, idx,
@@ -2970,6 +3335,16 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
     DUDECT_REGISTER_LANE(results, idx,
         "secp256k1 ECDSA sign (RFC 6979)",
         test_secp256k1_ecdsa_sign(iterations), 1);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_secp256k1_seckey_verify",
+        test_secp256k1_seckey_verify(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_secp256k1_seckey_tweak_add",
+        test_secp256k1_seckey_tweak_add(iterations), 0);
+    /* Info-only; blocking counterpart `--target ecdsa` (see the lane). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_secp256k1_pubkey_from_privkey",
+        test_secp256k1_pubkey_from_privkey(iterations), 1);
 
     printf("\n--- Post-Quantum Cryptography ---\n");
     /* STRICT.  This lane was INFO from 80a05f2d until 2026-09-24, on a claim

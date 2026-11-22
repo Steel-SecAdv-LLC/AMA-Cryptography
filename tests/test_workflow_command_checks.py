@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Collection
 
 import pytest
 import yaml
@@ -60,6 +60,14 @@ def run_checks(source: str, name: str = "test.yml") -> wf.Report:
     wf.check_cmake_build_type(path, document, report)
     wf.check_pytest_prerequisites(path, document, report)
     wf.check_gate_jobs_run_their_payload(path, document, report)
+    return report
+
+
+def floating(source: str, required: Collection[str] = (), name: str = "test.yml") -> wf.Report:
+    """Run only the floating-label check, against a given required-context list."""
+    document = yaml.safe_load(textwrap.dedent(source))
+    report = wf.Report()
+    wf.check_floating_labels(Path(name), document, report, required)
     return report
 
 
@@ -153,6 +161,186 @@ class TestRunnerLabels:
 
     def test_supported_and_retired_sets_are_disjoint(self) -> None:
         assert not (wf.SUPPORTED_LABELS & set(wf.RETIRED_LABELS))
+
+    def test_macos_14_is_retired_with_an_arm64_replacement(self) -> None:
+        # Every macOS 14 image was retired on 2026-11-02.  The table said
+        # supported until 2026-11-08, so a job naming it would have queued to
+        # its timeout with this checker green -- the first historical class.
+        report = run_checks("""
+            jobs:
+              build:
+                runs-on: macos-14
+            """)
+        assert len(report.findings) == 1
+        assert "retired" in report.findings[0].message
+        assert "macos-15" in report.findings[0].remedy
+        assert "macos-26" in report.findings[0].remedy
+
+    def test_the_images_the_tree_pins_are_known(self) -> None:
+        report = run_checks("""
+            jobs:
+              build:
+                strategy:
+                  matrix:
+                    os: [ubuntu-26.04, ubuntu-26.04-arm, windows-2025-vs2026,
+                         macos-26, macos-26-intel]
+                runs-on: ${{ matrix.os }}
+            """)
+        assert report.findings == []
+        assert report.labels_checked == 5
+
+
+class TestFloatingLabels:
+    """A ``*-latest`` label is a finding unless the main ruleset holds it.
+
+    Measured 2026-11-08 on pull request #434's runs: every ``ubuntu-latest``
+    job ran on ``ubuntu-26.04`` while GitHub's table still named 24.04 as the
+    label's target, ``macos-latest`` ran on macOS 26 and ``windows-latest`` on
+    the Visual Studio 2026 image.  The tree pins what it can; the three
+    matrices whose names the ruleset requires are the only hold.
+    """
+
+    def test_a_floating_label_on_a_plain_job_is_reported_with_todays_image(self) -> None:
+        report = floating("""
+            jobs:
+              lint:
+                runs-on: ubuntu-latest
+            """)
+        assert len(report.findings) == 1
+        assert "floats" in report.findings[0].message
+        assert "ubuntu-26.04" in report.findings[0].remedy
+        assert report.labels_floating_bound == []
+
+    def test_a_pinned_label_is_not_reported(self) -> None:
+        report = floating("""
+            jobs:
+              lint:
+                runs-on: ubuntu-26.04
+              wheels:
+                strategy:
+                  matrix:
+                    os: [ubuntu-26.04, windows-2025-vs2026, macos-15]
+                runs-on: ${{ matrix.os }}
+            """)
+        assert report.findings == []
+        assert report.labels_floating_bound == []
+
+    def test_a_label_the_ruleset_binds_is_held_and_listed(self) -> None:
+        report = floating(
+            """
+            jobs:
+              test:
+                name: Test ${{ matrix.os }} / Python ${{ matrix.python }}
+                strategy:
+                  matrix:
+                    os: [ubuntu-latest, windows-latest]
+                    python: ["3.10"]
+                runs-on: ${{ matrix.os }}
+            """,
+            required=["Test ubuntu-latest / Python 3.10", "Test windows-latest / Python 3.10"],
+        )
+        assert report.findings == []
+        assert len(report.labels_floating_bound) == 2
+        assert "test.yml:test: ubuntu-latest is in 1 required" in report.labels_floating_bound[0]
+
+    def test_a_label_in_a_name_the_ruleset_does_not_require_is_reported(self) -> None:
+        # dudect's SIMD sweep rendered ubuntu-latest into its name and no
+        # required context carried it, so nothing held it and it was pinned.
+        report = floating(
+            """
+            jobs:
+              sweep:
+                name: sweep (${{ matrix.os }})
+                strategy:
+                  matrix:
+                    os: [ubuntu-latest, ubuntu-24.04-arm]
+                runs-on: ${{ matrix.os }}
+            """,
+            required=["Lint and Format Check"],
+        )
+        assert len(report.findings) == 1
+        assert "'ubuntu-latest'" in report.findings[0].message
+
+    def test_the_hold_is_this_jobs_own_context_not_the_label_alone(self) -> None:
+        # A required context of another job that happens to contain the label
+        # holds nothing here: the benchmark matrix names its CPU class, not its
+        # label, so its ubuntu-latest row was pinned.
+        report = floating(
+            """
+            jobs:
+              bench:
+                name: Benchmark (${{ matrix.cpu }})
+                strategy:
+                  matrix:
+                    include:
+                      - os: ubuntu-latest
+                        cpu: x86_64
+                runs-on: ${{ matrix.os }}
+            """,
+            required=["Test ubuntu-latest / Python 3.10"],
+        )
+        assert len(report.findings) == 1
+
+    def test_the_hold_lasts_only_while_the_snapshot_names_the_context(self) -> None:
+        # The mechanism that finishes the remainder: once the administrator
+        # renames the contexts and the snapshot is refreshed, the same matrix
+        # is a finding until it is pinned.
+        source = """
+            jobs:
+              test:
+                name: Test ${{ matrix.os }}
+                strategy:
+                  matrix:
+                    os: [ubuntu-latest]
+                runs-on: ${{ matrix.os }}
+            """
+        assert floating(source, required=["Test ubuntu-latest"]).findings == []
+        assert len(floating(source, required=["Test ubuntu-26.04"]).findings) == 1
+
+    def test_a_name_that_cannot_be_rendered_holds_nothing(self) -> None:
+        report = floating(
+            """
+            jobs:
+              test:
+                name: Test ${{ matrix.os }}
+                strategy:
+                  matrix: ${{ fromJSON(inputs.matrix) }}
+                runs-on: ubuntu-latest
+            """,
+            required=["Test ubuntu-latest"],
+        )
+        assert len(report.findings) == 1
+
+    def test_the_sweep_reads_the_snapshot_beside_the_workflows(self, tmp_path: Path) -> None:
+        workflows = tmp_path / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        for i in range(wf.MIN_WORKFLOWS):
+            (workflows / f"ok-{i}.yml").write_text(_valid_workflow(i), encoding="utf-8")
+        (workflows / "test.yml").write_text(
+            textwrap.dedent("""
+                name: t
+                on: [push]
+                jobs:
+                  test:
+                    name: Test ${{ matrix.os }}
+                    strategy:
+                      matrix:
+                        os: [ubuntu-latest]
+                    runs-on: ${{ matrix.os }}
+                    timeout-minutes: 5
+                    steps:
+                      - run: echo t
+                """).lstrip(),
+            encoding="utf-8",
+        )
+        # No snapshot: nothing holds the label.
+        assert any("floats" in f.message for f in wf.sweep(workflows).findings)
+        (tmp_path / ".github" / "required-status-checks.json").write_text(
+            '{"contexts": ["Test ubuntu-latest"]}', encoding="utf-8"
+        )
+        report = wf.sweep(workflows)
+        assert not any("floats" in f.message for f in report.findings), messages(report)
+        assert len(report.labels_floating_bound) == 1
 
 
 class TestInlinePythonPayloads:
@@ -1621,7 +1809,7 @@ def _valid_workflow(index: int) -> str:
         on: [push]
         jobs:
           noop:
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-26.04
             timeout-minutes: 5
             steps:
               - run: echo {index}
@@ -1667,6 +1855,43 @@ class TestRepositoryWorkflows:
 
     def test_repository_workflows_pass(self, report: wf.Report) -> None:
         assert report.ok, messages(report)
+
+    def test_every_floating_label_is_held_by_the_ruleset(self, report: wf.Report) -> None:
+        """Measured 2026-11-08: the main ruleset's 55 required contexts render
+        ubuntu-latest, macos-latest and windows-latest into 24 job names from
+        three matrices.  Those seven (job, label) pairs float because pinning
+        them renames a required context; every other job is pinned."""
+        held = {
+            "ci.yml:test: ubuntu-latest",
+            "ci.yml:test: windows-latest",
+            "ci-build-test.yml:c-library: ubuntu-latest",
+            "ci-build-test.yml:c-library: macos-latest",
+            "ci-build-test.yml:python-package: ubuntu-latest",
+            "ci-build-test.yml:python-package: macos-latest",
+            "ci-build-test.yml:python-package: windows-latest",
+        }
+        assert {entry.split(" is in ")[0] for entry in report.labels_floating_bound} == held
+
+    def test_without_the_ruleset_exactly_those_labels_would_float(self) -> None:
+        """The tolerance is the snapshot and nothing else: with an empty
+        required-context list the same seven pairs, and no other job in the
+        tree, are findings."""
+        report = wf.sweep(REPO_ROOT / ".github" / "workflows", required=[])
+        floats = {
+            f"{f.workflow}:{f.location[5:-1]}: {f.message.split(chr(39))[1]}"
+            for f in report.findings
+            if "floats" in f.message
+        }
+        held = {
+            "ci.yml:test: ubuntu-latest",
+            "ci.yml:test: windows-latest",
+            "ci-build-test.yml:c-library: ubuntu-latest",
+            "ci-build-test.yml:c-library: macos-latest",
+            "ci-build-test.yml:python-package: ubuntu-latest",
+            "ci-build-test.yml:python-package: macos-latest",
+            "ci-build-test.yml:python-package: windows-latest",
+        }
+        assert floats == held, messages(report)
 
     def test_every_runner_label_resolved(self, report: wf.Report) -> None:
         # An unresolved label is an unchecked label.  If one appears, either
@@ -2411,7 +2636,7 @@ class TestTheCommandLineContract:
     ) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "jobs:\n  b:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 5\n"
                 "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
@@ -2421,7 +2646,7 @@ class TestTheCommandLineContract:
     def test_a_directory_with_a_defect_exits_one(self, tmp_path: Path) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "jobs:\n  b:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 5\n"
                 "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
@@ -2436,7 +2661,7 @@ class TestTheCommandLineContract:
     ) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "jobs:\n  b:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 5\n"
                 "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
@@ -2470,36 +2695,70 @@ class TestTheCommandLineContract:
 
 class TestTheCuratedTablesAreWhatTheySay:
     def test_the_supported_runner_labels(self) -> None:
+        # The runner-images README's "Available Images" table on 2026-11-08,
+        # without its preview labels (xcode-27*).
         assert wf.SUPPORTED_LABELS == frozenset(
             {
                 "ubuntu-latest",
+                "ubuntu-26.04",
                 "ubuntu-24.04",
                 "ubuntu-22.04",
+                "ubuntu-slim",
+                "ubuntu-26.04-arm",
                 "ubuntu-24.04-arm",
                 "ubuntu-22.04-arm",
                 "macos-latest",
                 "macos-26",
+                "macos-26-xlarge",
                 "macos-15",
-                "macos-14",
+                "macos-15-xlarge",
+                "macos-latest-large",
                 "macos-26-intel",
+                "macos-26-large",
                 "macos-15-intel",
+                "macos-15-large",
                 "windows-latest",
                 "windows-2025",
+                "windows-2025-vs2026",
                 "windows-2022",
+                "windows-11-arm",
+                "windows-11-vs2026-arm",
             }
         )
 
     def test_the_retired_runner_labels_and_their_replacements(self) -> None:
         macos = "macos-15-intel (Intel x86_64) or macos-15 (Apple Silicon arm64)"
         assert wf.RETIRED_LABELS == {
+            "macos-14": "macos-15 or macos-26 (Apple Silicon arm64)",
+            "macos-14-xlarge": "macos-15-xlarge or macos-26-xlarge (Apple Silicon arm64)",
+            "macos-14-large": "macos-15-intel or macos-26-intel (Intel x86_64)",
             "macos-13": macos,
             "macos-12": macos,
             "macos-11": macos,
-            "ubuntu-20.04": "ubuntu-24.04 or ubuntu-latest",
-            "ubuntu-18.04": "ubuntu-24.04 or ubuntu-latest",
-            "windows-2019": "windows-2025 or windows-latest",
-            "windows-2016": "windows-2025 or windows-latest",
+            "ubuntu-20.04": "ubuntu-26.04 or ubuntu-24.04",
+            "ubuntu-18.04": "ubuntu-26.04 or ubuntu-24.04",
+            "windows-2019": "windows-2025 or windows-2025-vs2026",
+            "windows-2016": "windows-2025 or windows-2025-vs2026",
         }
+
+    def test_no_replacement_is_a_floating_label(self) -> None:
+        """A remedy that said ``ubuntu-latest`` would send the reader straight
+        into the floating-label finding."""
+        for retired, replacement in wf.RETIRED_LABELS.items():
+            assert "-latest" not in replacement, retired
+
+    def test_the_floating_label_images(self) -> None:
+        # Read from the Runner Image group of the job logs on runs 42503992041,
+        # 42503992064 and 42503992236 (pull request #434), 2026-11-08.
+        assert wf.FLOATING_LABEL_IMAGE == {
+            "ubuntu-latest": "ubuntu-26.04",
+            "macos-latest": "macos-26",
+            "macos-latest-large": "macos-26-intel",
+            "windows-latest": "windows-2025-vs2026",
+        }
+        for label, image in wf.FLOATING_LABEL_IMAGE.items():
+            assert wf._is_floating(label), label
+            assert image in wf.SUPPORTED_LABELS and not wf._is_floating(image), image
 
     def test_every_replacement_names_a_supported_label(self) -> None:
         """The remedy has to be actionable: a replacement naming an image that

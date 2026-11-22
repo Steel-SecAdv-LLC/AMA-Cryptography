@@ -228,6 +228,11 @@ def _logical_lines(text: str) -> list[str]:
     return joined
 
 
+#: Tokens that end a simple command in the shell (`shlex.split` keeps them
+#: whole when, as in every workflow here, they are space-separated).
+_SHELL_CONTROL_OPERATORS = frozenset({"||", "&&", ";", "|", "&"})
+
+
 def _gate_argv(line: str) -> Optional[list[str]]:
     """``line`` as argv if it is a command running a ``tools/check_*.py`` gate.
 
@@ -246,6 +251,12 @@ def _gate_argv(line: str) -> Optional[list[str]]:
         return None  # unbalanced quoting from a YAML fragment
     while argv and "=" in argv[0] and not argv[0].startswith("-"):
         argv = argv[1:]  # strip leading VAR=value assignments
+    # The command ends at the first shell control operator.  A step that runs
+    # every target and records failures (`gate --target "$t" || failed=...`)
+    # is one gate invocation followed by an assignment, not one long argv.
+    for index, part in enumerate(argv):
+        if part in _SHELL_CONTROL_OPERATORS:
+            return argv[:index]
     return argv
 
 
@@ -3044,6 +3055,24 @@ class TestTheWorkflowInvokesTheseGatesCorrectly:
             "tools/check_benchmark_claims.py",
         ):
             assert gate in scripts, f"{gate} is not invoked by any workflow"
+
+    def test_a_gate_command_ends_at_the_shell_control_operator(self) -> None:
+        """`gate ... || failed="$failed $t"` is the gate's argv, then a shell
+        assignment; reading the assignment as arguments made a well-formed
+        step fail the flag check.  Each operator ends the command."""
+        for op in ("||", "&&", ";", "|", "&"):
+            line = f'python tools/check_ct_operand.py --target "$t" {op} failed="$failed $t"'
+            assert _gate_argv(line) == [
+                "python",
+                "tools/check_ct_operand.py",
+                "--target",
+                "$t",
+            ], op
+        assert _gate_argv("python tools/check_ct_operand.py --static") == [
+            "python",
+            "tools/check_ct_operand.py",
+            "--static",
+        ]
 
     def test_every_gate_invocation_uses_flags_its_parser_declares(self) -> None:
         """Every ``--flag`` in a workflow line must exist on that gate's parser.

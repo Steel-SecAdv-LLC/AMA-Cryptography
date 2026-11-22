@@ -44,7 +44,7 @@ jobs:
   # failed detection is a failure, never "not relevant".
   changes:
     name: Relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.match.outputs.relevant }}
@@ -75,7 +75,7 @@ jobs:
     if: >-
       always()
       && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Relevance was decided

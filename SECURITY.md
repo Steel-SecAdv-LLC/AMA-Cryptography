@@ -56,8 +56,8 @@ The complete registry — each algorithm with its governing standard and paramet
 - **Post-quantum KEM and signatures:** ML-KEM-512/768/1024 (FIPS 203), ML-DSA-44/65/87 (FIPS 204), SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s (FIPS 205), LMS/HSS verification only (SP 800-208)
 - **Elliptic curves:** ECDSA and ECDH on P-256/384/521 (FIPS 186-5, SP 800-56A r3), secp256k1 (SEC 2), X25519 (RFC 7748), FROST threshold Ed25519 (RFC 9591-style; not ciphersuite-interoperable)
 - **Hashing and key derivation:** SHA-2, SHA-3 and SHAKE, HMAC, HKDF, PBKDF2, Argon2id (RFC 9106), Ascon-Hash256
-- **Hybrid KEM combiner** — IND-CCA2 if either component KEM is IND-CCA2, under the dual-PRF assumption on HKDF-SHA3-256 (Bindel et al., PQCrypto 2019); an informal argument, not independently reviewed
-- **Adaptive cryptographic posture** (runtime threat-level response)
+- **Hybrid KEM combiner** — IND-CCA2 if either component KEM is IND-CCA2, under the dual-PRF assumption on HKDF-SHA3-256 (Bindel et al., PQCrypto 2019); an informal argument, not independently reviewed. Exact claim and where it stops: [docs/DESIGN_NOTES.md §5.2](docs/DESIGN_NOTES.md#52-hybrid-kem-combiner-x25519--ml-kem-1024)
+- **Adaptive cryptographic posture** (runtime threat-level response; a heuristic layer with no security bound — [docs/DESIGN_NOTES.md §5.3](docs/DESIGN_NOTES.md#53-adaptive-posture-system))
 - **Agent-instance key/signature binding** (INVARIANT-30) — see below
 
 ### Agent-Instance Binding (INVARIANT-30)

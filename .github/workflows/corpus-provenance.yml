@@ -38,7 +38,7 @@ jobs:
   # failed detection is a failure, never "not relevant".
   changes:
     name: Relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.match.outputs.relevant }}
@@ -67,7 +67,7 @@ jobs:
     name: Verify corpus against upstream
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -86,7 +86,7 @@ jobs:
     name: Verify key-format corpus against its source documents
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -110,7 +110,7 @@ jobs:
     name: Verify the published test vectors have not been rewritten
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -177,7 +177,7 @@ jobs:
     name: Verify the NIST/Ascon vectors against what upstream published
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -217,7 +217,7 @@ jobs:
       - keyformat-provenance
       - vector-provenance
       - vector-upstream
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     steps:
       - name: Fail unless every lane reached the state this change requires

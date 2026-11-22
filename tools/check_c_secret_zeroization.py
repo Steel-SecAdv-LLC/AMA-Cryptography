@@ -797,13 +797,16 @@ _PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- annotation token, not a pass
 #: explicit compiler barrier on the following lines rather than by
 #: ``ama_secure_memzero``'s volatile stores.
 #:
-#: One site needs it and it is not an exemption: ``ama_secure_stack_wipe()``
-#: zeroes several kilobytes of dead stack after every AEAD call, and the
-#: volatile word loop ``ama_secure_memzero`` uses costs 90-127 ns there
-#: against 29 ns for ``memset`` plus a barrier — on a 16-byte AEAD call the
-#: difference between +50% and +17%.  ``memset`` keeps the wide-store path
-#: while the barrier supplies exactly the property the volatile stores exist
-#: for.
+#: One site uses it and it is not an exemption: the stack wipe
+#: (``src/c/ama_consttime.c``) zeroes kilobytes of dead stack after every
+#: scrubbed entry point, and the volatile word loop ``ama_secure_memzero``
+#: uses was measured at 90-127 ns for the exported 4 KiB wipe against 29 ns
+#: for ``memset`` plus a barrier — on a 16-byte AEAD call the difference
+#: between +50% and +17%.  ``memset`` keeps the wide-store path while the
+#: barrier supplies exactly the property the volatile stores exist for.
+#: Since 2026-11-10 the form is the wipe's branch for GNU C targets other
+#: than x86-64 and AArch64; those two zero the frame in inline assembly,
+#: which holds no ``memset`` for this gate to read.
 #:
 #: The annotation is not taken on trust: :func:`_has_scrub_barrier` requires
 #: a real barrier within :data:`_BARRIER_WINDOW_LINES` after the call, on
@@ -826,7 +829,7 @@ _SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- annotation token, not a 
 #:   ``memset(secret_key, 0, 64)`` after the key was used: the stores are gone.
 #:   ``"" : : "r"(secret_key)`` without ``"memory"`` is also elided by gcc, and
 #:   ``"" ::: "memory"`` without the operand is elided by clang 18.1.3 -O2 for
-#:   a buffer whose address never escapes (``ama_stack_wipe_below``'s frame is
+#:   a buffer whose address never escapes (the stack wipe's frame is
 #:   exactly that).  Only ``"" : : "r"(buf) : "memory"`` kept the stores under
 #:   both compilers, which is the form ``ama_consttime.c`` uses.
 #: * ``#if defined(_MSC_VER) _ReadWriteBarrier(); #endif`` — no barrier at all
@@ -837,8 +840,8 @@ _SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- annotation token, not a 
 #:   -O2/-O3 on an 8 KiB local, compiled the preceding ``memset`` to no store
 #:   at all.  MSVC has no inline asm on x64 or ARM64, so no MSVC spelling
 #:   qualifies: an MSVC site must not be a bare ``memset``
-#:   (``ama_stack_wipe_below`` calls ``memset`` through a ``volatile``
-#:   function pointer there).
+#:   (the stack wipe calls ``memset`` through a ``volatile`` function
+#:   pointer there).
 #: * a COMMENT quoting a barrier, since raw lines include comments.
 _ASM_RE = re.compile(r"\b(?:__asm__|__asm|asm)\s*(?:(?:__volatile__|__volatile|volatile)\s*)?\(")
 

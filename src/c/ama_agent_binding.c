@@ -24,6 +24,10 @@
  * not secrets.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
+#include "internal/ama_ct_declassify.h"
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
@@ -244,9 +248,9 @@ static ama_error_t compute_binding_tag(
 
     if (key == NULL || key_len == 0) {
         ama_secure_memzero(zero_key, sizeof(zero_key));
-        rc = ama_hmac_sha3_256(zero_key, sizeof(zero_key), msg, sizeof(msg), out_tag);
+        rc = ama_hmac_sha3_256_inner(zero_key, sizeof(zero_key), msg, sizeof(msg), out_tag);
     } else {
-        rc = ama_hmac_sha3_256(key, key_len, msg, sizeof(msg), out_tag);
+        rc = ama_hmac_sha3_256_inner(key, key_len, msg, sizeof(msg), out_tag);
     }
 
     ama_secure_memzero(msg, sizeof(msg));
@@ -343,7 +347,20 @@ AMA_API ama_error_t ama_agent_binding_init(
     return AMA_SUCCESS;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_authorize_body(ama_agent_binding_t* b, const uint8_t* authority_key, size_t key_len);
+
 AMA_API ama_error_t ama_agent_binding_authorize(
+    ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len
+) {
+    ama_error_t rc = ama_agent_binding_authorize_body(b, authority_key, key_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_agent_binding_authorize(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_authorize_body(
     ama_agent_binding_t* b,
     const uint8_t* authority_key,
     size_t key_len
@@ -377,7 +394,22 @@ AMA_API ama_error_t ama_agent_binding_authorize(
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_check_body(const ama_agent_binding_t* b, const uint8_t* authority_key, size_t key_len);
+
 AMA_API ama_error_t ama_agent_binding_check(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len
+) {
+    ama_error_t rc = ama_agent_binding_check_body(b, authority_key, key_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_agent_binding_check() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+static ama_error_t ama_agent_binding_check_inner(
     const ama_agent_binding_t* b,
     const uint8_t* authority_key,
     size_t key_len
@@ -429,22 +461,50 @@ AMA_API ama_error_t ama_agent_binding_check(
     return (ama_error_t)(AMA_ERROR_ETHICAL_BINDING * (int)(refuse & 1u));
 }
 
+/* ama_agent_binding_check_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_check_body(const ama_agent_binding_t* b, const uint8_t* authority_key, size_t key_len) {
+    return ama_agent_binding_check_inner(b, authority_key, key_len);
+}
+
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_context_body(const ama_agent_binding_t* b, const uint8_t* authority_key, size_t key_len, uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]);
+
 AMA_API ama_error_t ama_agent_binding_context(
     const ama_agent_binding_t* b,
     const uint8_t* authority_key,
     size_t key_len,
     uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]
 ) {
+    ama_error_t rc = ama_agent_binding_context_body(b, authority_key, key_len, out_ctx);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_agent_binding_context(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_agent_binding_context_body(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len,
+    uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]
+) {
     uint8_t msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + AMA_AGENT_BINDER_BYTES];
+    ama_error_t verdict;
     ama_error_t rc;
 
     if (!b || !out_ctx) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    rc = ama_agent_binding_check(b, authority_key, key_len);
-    if (rc != AMA_SUCCESS) {
-        return rc;
+    verdict = ama_agent_binding_check_inner(b, authority_key, key_len);
+    /* The binding verdict is the code this returns on refusal, exactly what
+     * ama_agent_binding_check() returns for the same arguments: public by
+     * contract (internal/ama_ct_declassify.h).  It is selected
+     * arithmetically from the constant-time tag comparison, which is its
+     * last use of the authority key; the key and the tag stay secret.  It
+     * has its own variable so that the declassified object is never reused
+     * for a later, secret-derived value (tools/check_ct_markers.py). */
+    AMA_CT_DECLASSIFY(&verdict, sizeof(verdict));
+    if (verdict != AMA_SUCCESS) {
+        return verdict;
     }
 
     msg[0] = (uint8_t)AMA_AGENT_SUBDOMAIN_SIG_CTX;
@@ -459,7 +519,7 @@ AMA_API ama_error_t ama_agent_binding_context(
         ama_secure_memzero(out_ctx, (size_t)AMA_AGENT_BINDING_CONTEXT_BYTES);
         return rc;
     }
-    rc = ama_sha3_256(msg, sizeof(msg), out_ctx);
+    rc = ama_sha3_256_inner(msg, sizeof(msg), out_ctx);
     ama_secure_memzero(msg, sizeof(msg));
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(out_ctx, (size_t)AMA_AGENT_BINDING_CONTEXT_BYTES);
@@ -467,7 +527,28 @@ AMA_API ama_error_t ama_agent_binding_context(
     return rc;
 }
 
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_agent_bound_body(const ama_agent_binding_t* b, const uint8_t* authority_key, size_t key_len, const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len, const uint8_t* info, size_t info_len, uint8_t* okm, size_t okm_len);
+
 AMA_API ama_error_t ama_hkdf_agent_bound(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len,
+    const uint8_t* salt,
+    size_t salt_len,
+    const uint8_t* ikm,
+    size_t ikm_len,
+    const uint8_t* info,
+    size_t info_len,
+    uint8_t* okm,
+    size_t okm_len
+) {
+    ama_error_t rc = ama_hkdf_agent_bound_body(b, authority_key, key_len, salt, salt_len, ikm, ikm_len, info, info_len, okm, okm_len);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_KDF_BYTES);
+    return rc;
+}
+
+/* ama_hkdf_agent_bound(), run below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY ama_error_t ama_hkdf_agent_bound_body(
     const ama_agent_binding_t* b,
     const uint8_t* authority_key,
     size_t key_len,
@@ -493,6 +574,7 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
     uint8_t* joined = NULL;
     int joined_on_heap = 0;
     size_t joined_len;
+    ama_error_t verdict;
     ama_error_t rc;
 
     if (!b || !okm) {
@@ -506,9 +588,17 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
         return AMA_ERROR_OVERFLOW;
     }
 
-    rc = ama_agent_binding_check(b, authority_key, key_len);
-    if (rc != AMA_SUCCESS) {
-        return rc;
+    verdict = ama_agent_binding_check_inner(b, authority_key, key_len);
+    /* The binding verdict is the code this returns on refusal, exactly what
+     * ama_agent_binding_check() returns for the same arguments: public by
+     * contract (internal/ama_ct_declassify.h).  It is selected
+     * arithmetically from the constant-time tag comparison, which is its
+     * last use of the authority key; the key and the tag stay secret.  It
+     * has its own variable so that the declassified object is never reused
+     * for a later, secret-derived value (tools/check_ct_markers.py). */
+    AMA_CT_DECLASSIFY(&verdict, sizeof(verdict));
+    if (verdict != AMA_SUCCESS) {
+        return verdict;
     }
 
     encode_unchecked(b, prefix);
@@ -547,7 +637,7 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
         memcpy(joined + sizeof(prefix), info, info_len);
     }
 
-    rc = ama_hkdf(salt, salt_len, ikm, ikm_len, joined, joined_len, okm, okm_len);
+    rc = ama_hkdf_inner(salt, salt_len, ikm, ikm_len, joined, joined_len, okm, okm_len);
 
     ama_secure_memzero(prefix, sizeof(prefix));
     if (joined_on_heap) {

@@ -63,8 +63,10 @@ static uint8_t g_sentinel[32];
  * `movdqa %xmm4,0x70(%rsp)` -- 112 bytes apart, in slots its own exit scrub
  * does not cover.  A contiguous 32-byte needle cannot see that shape at all,
  * so the probe was blind to the exact defect class it exists for; what saves
- * the library there is `ama_secure_stack_wipe()`, and nothing here was
- * measuring whether it did.
+ * the library there is the wipe of the dead stack (`ama_secure_stack_wipe()`
+ * from inside the implementation when this was written; since 2026-11-10 the
+ * entry point's own AMA_STACK_WIPE_BELOW, src/c/internal/ama_stack_wipe.h),
+ * and nothing here was measuring whether it did.
  *
  * Each 16-byte half is therefore searched independently (a whole-key copy
  * contains both).  For AES-256 either half is 128 bits of the key, so a hit

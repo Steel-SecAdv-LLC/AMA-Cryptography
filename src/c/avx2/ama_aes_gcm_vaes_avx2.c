@@ -71,12 +71,14 @@
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
 
+#include "../internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
 #include "../internal/ama_ct_barrier.h"
+#include "../internal/ama_ct_declassify.h"
 
 /* MSVC: leave kernel out, let dispatcher fall back to AVX2 AES-NI. */
 #if defined(_MSC_VER)
@@ -127,7 +129,27 @@ static inline __m128i bswap128(__m128i v) {
  * tag derivation, partial trailing block.  Bulk traffic goes through
  * the YMM VAES path below.
  * ============================================================================ */
-static inline __m128i aes256_encrypt_block_xmm(__m128i block, const __m128i rk[15]) {
+/* The round keys, re-read from `rk` on every call.  Each key use below is
+ * loop-invariant in its caller's block loop, and clang 18 hoisted them out
+ * and spilled them: the 4-block broadcasts with VMOVUPS, the single-block
+ * keys as VMOVAPS stack-to-stack copies (its execution-domain pass puts a
+ * load-to-store chain with no integer neighbour in the FP domain), both
+ * outside Intel's DOIT list on round-key bytes.  An opaque pointer the
+ * compiler must assume changes per call makes each use a fresh load from
+ * `rk` (a VAESENC memory operand, or a VBROADCASTI128 feeding one), with
+ * nothing to spill.  `tools/check_ct_operand.py --static` pins it. */
+static inline const __m128i *vaes_rk_fresh(const __m128i *rk) {
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile("" : "+r"(rk));
+    return rk;
+#else
+    const __m128i *volatile opaque = rk;
+    return opaque;
+#endif
+}
+
+static inline __m128i aes256_encrypt_block_xmm(__m128i block, const __m128i rk_in[15]) {
+    const __m128i *rk = vaes_rk_fresh(rk_in);
     block = _mm_xor_si128(block, rk[0]);
     block = _mm_aesenc_si128(block, rk[1]);
     block = _mm_aesenc_si128(block, rk[2]);
@@ -366,39 +388,51 @@ static inline void ghash_mul_4lanes_ymm(
  * gcm_inc_counter_xmm advances by 1; the ctr_block_4 helper produces
  * 4 consecutive counter blocks packed two-per-YMM, ready for VAES.
  * ============================================================================ */
+/* In integer SIMD only: PSHUFB byte-swaps the big-endian counter dword
+ * (bytes 12..15) into a little-endian lane, PADDD adds 1 to that lane modulo
+ * 2^32 (GCM's inc32), and the same PSHUFB swaps it back; bytes 0..11 pass
+ * through unchanged.  (This comment used to say that the byte-assembly form
+ * this replaces was where CI's gcc 15.2 emitted 36 VSHUFPS.  It was not: CI
+ * on 2cf3cf6 listed the same 36 with this form in place.  They came from the
+ * auto-vectoriser's narrowing of other scalar byte loops in this file, which
+ * now compiles without it; CMakeLists.txt.) */
 static inline __m128i gcm_inc_counter_xmm(__m128i cb) {
-    uint8_t buf[16];
-    _mm_storeu_si128((__m128i *)buf, cb);
-    uint32_t ctr = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16) |
-                   ((uint32_t)buf[14] << 8)  | ((uint32_t)buf[15]);
-    ctr++;
-    buf[12] = (uint8_t)(ctr >> 24);
-    buf[13] = (uint8_t)(ctr >> 16);
-    buf[14] = (uint8_t)(ctr >> 8);
-    buf[15] = (uint8_t)(ctr);
-    return _mm_loadu_si128((const __m128i *)buf);
+    const __m128i swap_ctr = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7,
+                                           8, 9, 10, 11, 15, 14, 13, 12);
+    __m128i le = _mm_shuffle_epi8(cb, swap_ctr);
+    le = _mm_add_epi32(le, _mm_setr_epi32(0, 0, 0, 1));
+    return _mm_shuffle_epi8(le, swap_ctr);
 }
 
 /* Encrypt 4 counter blocks (cb0..cb3) packed in 2 YMMs through 14 VAES
- * AES-256 rounds.  Round keys are broadcast XMM->YMM once per call by
- * the outer encrypt/decrypt routine. */
+ * AES-256 rounds.  Each round key is broadcast XMM->YMM at its use, a single
+ * VBROADCASTI128 load feeding VAESENC.  A YMM copy of the schedule held in a
+ * stack array (the previous layout) was copied between stack slots by clang
+ * 18 with VMOVAPS -- a load-to-store chain with no integer instruction on it,
+ * which its execution-domain pass leaves in the FP domain -- and VMOVAPS is
+ * not on Intel's Data Operand Independent Timing list; the round keys are
+ * secret (tools/check_ct_operand.py --static, AVX-512/VAES lane). */
 static inline void vaes256_encrypt_4blocks(
     __m128i cb0, __m128i cb1, __m128i cb2, __m128i cb3,
-    const __m256i rky[15],
+    const __m128i rk_in[15],
     __m128i *ks0, __m128i *ks1, __m128i *ks2, __m128i *ks3)
 {
+    const __m128i *rk = vaes_rk_fresh(rk_in);
     __m256i a = _mm256_inserti128_si256(_mm256_castsi128_si256(cb0), cb1, 1);
     __m256i b = _mm256_inserti128_si256(_mm256_castsi128_si256(cb2), cb3, 1);
 
-    a = _mm256_xor_si256(a, rky[0]);
-    b = _mm256_xor_si256(b, rky[0]);
+    const __m256i k0 = _mm256_broadcastsi128_si256(rk[0]);
+    a = _mm256_xor_si256(a, k0);
+    b = _mm256_xor_si256(b, k0);
     /* 13 full rounds + 1 final */
     for (int r = 1; r <= 13; r++) {
-        a = _mm256_aesenc_epi128(a, rky[r]);
-        b = _mm256_aesenc_epi128(b, rky[r]);
+        const __m256i kr = _mm256_broadcastsi128_si256(rk[r]);
+        a = _mm256_aesenc_epi128(a, kr);
+        b = _mm256_aesenc_epi128(b, kr);
     }
-    a = _mm256_aesenclast_epi128(a, rky[14]);
-    b = _mm256_aesenclast_epi128(b, rky[14]);
+    const __m256i k14 = _mm256_broadcastsi128_si256(rk[14]);
+    a = _mm256_aesenclast_epi128(a, k14);
+    b = _mm256_aesenclast_epi128(b, k14);
 
     *ks0 = _mm256_castsi256_si128(a);
     *ks1 = _mm256_extracti128_si256(a, 1);
@@ -429,6 +463,43 @@ static inline __m128i gcm_len_block(uint64_t aad_len, uint64_t ct_len) {
  * AAD is generally short (<= 64 bytes in practice) so vectorising past
  * single-block does not pay back the setup cost.
  * ============================================================================ */
+/* Partial blocks, without a libc call and without a staging buffer.
+ *
+ * The variable-length memcpy/memset these replace are calls, and a call
+ * clobbers every vector register: clang spilled the live H, counter and
+ * GHASH accumulator around each one with VMOVAPS, and reloaded the
+ * keystream as VMOVAPS/VXORPS, all outside Intel's DOIT list on key- and
+ * plaintext-derived bytes.  These assemble the block in two general
+ * registers instead.  `n` (< 16) is a public length; every branch here is
+ * on the byte index, never on a byte. */
+static inline __m128i vaes_load_partial(const uint8_t *src, size_t n) {
+    uint64_t lo = 0, hi = 0;
+    for (size_t j = 0; j < n; j++) {
+        const uint64_t b = (uint64_t)src[j];
+        if (j < 8) {
+            lo |= b << (8u * j);
+        } else {
+            hi |= b << (8u * (j - 8u));
+        }
+    }
+    return _mm_set_epi64x((long long)hi, (long long)lo);
+}
+
+static inline void vaes_store_partial(uint8_t *dst, __m128i v, size_t n) {
+    const uint64_t lo = (uint64_t)_mm_cvtsi128_si64(v);
+    const uint64_t hi = (uint64_t)_mm_extract_epi64(v, 1);
+    for (size_t j = 0; j < n; j++) {
+        dst[j] = (uint8_t)(j < 8 ? lo >> (8u * j) : hi >> (8u * (j - 8u)));
+    }
+}
+
+/* All-ones in the low n byte lanes, zero above (n < 16, public). */
+static inline __m128i vaes_low_bytes_mask(size_t n) {
+    const __m128i lane = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7,
+                                       8, 9, 10, 11, 12, 13, 14, 15);
+    return _mm_cmpgt_epi8(_mm_set1_epi8((char)n), lane);
+}
+
 static inline __m128i ghash_aad(const uint8_t *aad, size_t aad_len, __m128i H) {
     __m128i acc = _mm_setzero_si128();
     size_t n = aad_len / 16;
@@ -438,9 +509,7 @@ static inline __m128i ghash_aad(const uint8_t *aad, size_t aad_len, __m128i H) {
     }
     size_t tail = aad_len - n * 16;
     if (tail > 0) {
-        uint8_t pad[16] = {0};
-        memcpy(pad, aad + n * 16, tail);
-        __m128i blk = _mm_loadu_si128((const __m128i *)pad);
+        __m128i blk = vaes_load_partial(aad + n * 16, tail);
         acc = ghash_mul_xmm(_mm_xor_si128(acc, blk), H);
     }
     return acc;
@@ -462,11 +531,6 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
     __m128i rk[15];
     ama_aes256_expand_key_avx2(key, rk);
 
-    /* Broadcast each round key XMM -> YMM (used by the 4-way VAES path). */
-    __m256i rky[15];
-    for (int i = 0; i < 15; i++) {
-        rky[i] = _mm256_broadcastsi128_si256(rk[i]);
-    }
 
     /* H = AES_K(0^128), GCM-domain. */
     __m128i H  = aes256_encrypt_block_xmm(_mm_setzero_si128(), rk);
@@ -494,7 +558,7 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
         __m128i cb3 = cb; cb = gcm_inc_counter_xmm(cb);
 
         __m128i ks0, ks1, ks2, ks3;
-        vaes256_encrypt_4blocks(cb0, cb1, cb2, cb3, rky, &ks0, &ks1, &ks2, &ks3);
+        vaes256_encrypt_4blocks(cb0, cb1, cb2, cb3, rk, &ks0, &ks1, &ks2, &ks3);
 
         __m128i ct0 = _mm_xor_si128(ks0, _mm_loadu_si128((const __m128i *)(plaintext + (i+0)*16)));
         __m128i ct1 = _mm_xor_si128(ks1, _mm_loadu_si128((const __m128i *)(plaintext + (i+1)*16)));
@@ -535,21 +599,16 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
     /* Trailing partial block. */
     size_t remaining = plaintext_len - full_blocks * 16;
     if (remaining > 0) {
-        __m128i ks = aes256_encrypt_block_xmm(cb, rk);
-        uint8_t pad_pt[16] = {0}, pad_ct[16] = {0};
-        memcpy(pad_pt, plaintext + full_blocks * 16, remaining);
-        __m128i pt_block = _mm_loadu_si128((const __m128i *)pad_pt);
-        __m128i ct_block = _mm_xor_si128(ks, pt_block);
-        _mm_storeu_si128((__m128i *)pad_ct, ct_block);
-        memcpy(ciphertext + full_blocks * 16, pad_ct, remaining);
-
-        memset(pad_ct + remaining, 0, 16 - remaining);  // PUBLIC-DATA: pad_ct trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
-        ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
+        /* The input is assembled in registers, so no plaintext staging
+         * buffer exists to scrub.  The keystream bytes above `remaining`
+         * are masked off before GHASH absorbs the block: GCM hashes the
+         * ciphertext zero-padded to the block. */
+        const __m128i pt_block = vaes_load_partial(plaintext + full_blocks * 16, remaining);
+        const __m128i ks = aes256_encrypt_block_xmm(cb, rk);
+        const __m128i ct_block = _mm_and_si128(_mm_xor_si128(ks, pt_block),
+                                               vaes_low_bytes_mask(remaining));
+        vaes_store_partial(ciphertext + full_blocks * 16, ct_block, remaining);
         ghash_acc = ghash_mul_xmm(_mm_xor_si128(ghash_acc, ct_block), H);
-        /* Scrub the plaintext staging copy — the buffer the DECRYPT twin
-         * below already scrubs; encrypt staged the same class of data.
-         * pad_ct is the public ciphertext and needs nothing. */
-        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     /* Length block + tag. */
@@ -565,7 +624,6 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
      * XMM/YMM round-key schedule.  Each is derivable from the AES-256
      * key class via tag forgery if recovered from a stack snapshot. */
     ama_secure_memzero(rk,  sizeof(rk));
-    ama_secure_memzero(rky, sizeof(rky));
     ama_secure_memzero(&H,  sizeof(H));
     ama_secure_memzero(&H2, sizeof(H2));
     ama_secure_memzero(&H3, sizeof(H3));
@@ -597,10 +655,6 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     __m128i rk[15];
     ama_aes256_expand_key_avx2(key, rk);
 
-    __m256i rky[15];
-    for (int i = 0; i < 15; i++) {
-        rky[i] = _mm256_broadcastsi128_si256(rk[i]);
-    }
 
     __m128i H  = aes256_encrypt_block_xmm(_mm_setzero_si128(), rk);
     __m128i H2 = ghash_mul_full(H,  H);
@@ -640,9 +694,7 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     }
     size_t remaining = ciphertext_len - full_blocks * 16;
     if (remaining > 0) {
-        uint8_t pad_ct[16] = {0};
-        memcpy(pad_ct, ciphertext + full_blocks * 16, remaining);
-        __m128i ct = _mm_loadu_si128((const __m128i *)pad_ct);
+        __m128i ct = vaes_load_partial(ciphertext + full_blocks * 16, remaining);
         ghash_acc = ghash_mul_xmm(_mm_xor_si128(ghash_acc, ct), H);
     }
 
@@ -665,6 +717,11 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     uint8_t computed_tag_bytes[16];
     _mm_storeu_si128((__m128i *)computed_tag_bytes, computed_tag);
     int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
+    /* The verdict is the AMA_ERROR_VERIFY_FAILED this returns, and it bounds
+     * the decryption below so a forgery writes no plaintext: public by
+     * contract (internal/ama_ct_declassify.h).  The comparison above is
+     * constant time; the tags and the key stay secret. */
+    AMA_CT_DECLASSIFY(&tag_match, sizeof(tag_match));
     /* Through the value barrier, as in the scalar kernel (ama_aes_gcm.c):
      * at -O2 gcc rewrote `x & (0 - tag_match)` as a conditional move on
      * tag_match, which the Memcheck secret-taint gate reports because
@@ -687,7 +744,7 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
         __m128i cb3 = cb; cb = gcm_inc_counter_xmm(cb);
 
         __m128i ks0, ks1, ks2, ks3;
-        vaes256_encrypt_4blocks(cb0, cb1, cb2, cb3, rky, &ks0, &ks1, &ks2, &ks3);
+        vaes256_encrypt_4blocks(cb0, cb1, cb2, cb3, rk, &ks0, &ks1, &ks2, &ks3);
 
         __m128i pt0 = _mm_xor_si128(ks0, _mm_loadu_si128((const __m128i *)(ciphertext + (i+0)*16)));
         __m128i pt1 = _mm_xor_si128(ks1, _mm_loadu_si128((const __m128i *)(ciphertext + (i+1)*16)));
@@ -708,21 +765,15 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
         _mm_storeu_si128((__m128i *)(plaintext + i * 16), _mm_xor_si128(ks, ct));
     }
     if (bounded_remaining > 0) {
-        __m128i ks = aes256_encrypt_block_xmm(cb, rk);
-        uint8_t pad_ct[16] = {0}, pad_pt[16] = {0};
-        memcpy(pad_ct, ciphertext + full_blocks * 16, bounded_remaining);
-        __m128i ct = _mm_loadu_si128((const __m128i *)pad_ct);
-        __m128i pt = _mm_xor_si128(ks, ct);
-        _mm_storeu_si128((__m128i *)pad_pt, pt);
-        memcpy(plaintext + full_blocks * 16, pad_pt, bounded_remaining);
-        /* Scrub the over-allocated tail of `pad_pt` so partial-block
-         * plaintext bytes do not leak past the caller's slice via a
-         * stack snapshot.  Matches the NEON path's pad_pt scrub. */
-        ama_secure_memzero(pad_pt, sizeof(pad_pt));
+        /* Assembled in registers, as in the encrypt twin: no plaintext
+         * staging buffer exists, so none is left on the stack to scrub. */
+        const __m128i ct = vaes_load_partial(ciphertext + full_blocks * 16, bounded_remaining);
+        const __m128i ks = aes256_encrypt_block_xmm(cb, rk);
+        vaes_store_partial(plaintext + full_blocks * 16, _mm_xor_si128(ks, ct),
+                           bounded_remaining);
     }
 
     ama_secure_memzero(rk,  sizeof(rk));
-    ama_secure_memzero(rky, sizeof(rky));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
     /* Scrub GHASH key H, the H power precompute, and the J0 tag-mask. */
     ama_secure_memzero(&H,  sizeof(H));

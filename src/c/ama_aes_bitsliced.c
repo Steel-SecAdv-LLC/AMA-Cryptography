@@ -21,15 +21,20 @@
  * libsodium, BoringSSL) for small-table lookups.
  *
  * Performance: the state-wide SubBytes scans the 256-entry table once per
- * round rather than once per byte, and its inner loop auto-vectorises
- *   = ~57,000 operations per AES block. Slower than table-based (~2x-5x)
- *   but constant-time on all hardware. For high-throughput use cases,
- *   hardware AES-NI/ARMv8-CE is recommended.
+ * round rather than once per byte, and its inner loop auto-vectorises.  It
+ * is slower than a table lookup but has the same access pattern for every
+ * key and state.  Hosts with AES-NI or the ARMv8 crypto extension dispatch
+ * to the hardware kernels instead.
+ *
+ * The file name is historical: nothing here is bitsliced.
  *
  * When AMA_AES_CONSTTIME is defined at compile time, the AES-GCM
  * implementation uses this constant-time S-box instead of the table lookup.
  */
 
+#include "internal/ama_string_ops.h"  /* first: no vector register holds what memcpy/memset move */
+#include "internal/ama_scrubbed_inner.h"
+#include "internal/ama_stack_wipe.h"
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
@@ -82,14 +87,12 @@ static const uint8_t ct_sbox[256] = {
  */
 static inline uint8_t ct_eq(uint8_t a, uint8_t b) {
     uint32_t diff = (uint32_t)a ^ (uint32_t)b;
-    /* diff == 0 => (diff - 1) has MSB set => shift gives 1 => XOR 1 => 0
-     * Actually: diff == 0 => (0 - 1) = 0xFFFFFFFF => >>31 = 1 => XOR 1 = 0
-     * Wait, we want mask=0xFF when equal. Let me think again:
-     * diff = a XOR b. If equal, diff = 0.
-     * (diff | (0 - diff)) has MSB=1 when diff != 0, MSB=0 when diff == 0.
-     * Shift right 31: 1 when not equal, 0 when equal.
-     * XOR 1: 0 when not equal, 1 when equal.
-     * Negate to get mask: 0xFF when equal, 0x00 when not equal. */
+    /* d = a ^ b is in [0, 255].  For d != 0, d | -d has bit 31 set (the
+     * negation of a nonzero value below 2^31 does); for d == 0 it is 0.  So
+     * the shift yields 1 exactly when a != b, the XOR inverts it, and the
+     * negation widens 1 to 0xFF.  Every input byte is checked by
+     * tests/c/test_aes_bitsliced.c, which compares this S-box with the FIPS
+     * 197 table for all 256 inputs. */
     diff |= (uint32_t)0 - diff;
     diff >>= 31;         /* 1 if not equal, 0 if equal */
     diff ^= 1;           /* 0 if not equal, 1 if equal */
@@ -169,8 +172,19 @@ static const uint8_t rcon_ct[10] = {
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
 };
 
+static AMA_SCRUBBED_BODY void ama_aes256_key_expansion_consttime_body(const uint8_t key[32], uint8_t round_keys[240]);
+
 void ama_aes256_key_expansion_consttime(const uint8_t key[32],
                                          uint8_t round_keys[240]) {
+    ama_aes256_key_expansion_consttime_body(key, round_keys);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AES_BYTES);
+}
+
+/* ama_aes256_key_expansion_consttime() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_aes256_key_expansion_consttime_inner(const uint8_t key[32],
+                                              uint8_t round_keys[240]) {
     uint8_t temp[4];
     int i;
 
@@ -202,10 +216,17 @@ void ama_aes256_key_expansion_consttime(const uint8_t key[32],
     }
 }
 
+/* ama_aes256_key_expansion_consttime_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_aes256_key_expansion_consttime_body(const uint8_t key[32], uint8_t round_keys[240]) {
+    ama_aes256_key_expansion_consttime_inner(key, round_keys);
+}
+
 /* GF(2^8) multiplication by 2 (xtime) — same as table-based version */
 static inline uint8_t xtime_ct(uint8_t x) {
     return (uint8_t)((x << 1) ^ (((x >> 7) & 1) * 0x1b));
 }
+
+static AMA_SCRUBBED_BODY void ama_aes256_encrypt_block_consttime_body(const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]);
 
 /**
  * AES-256 encrypt a single block using the constant-time S-box.
@@ -214,6 +235,16 @@ static inline uint8_t xtime_ct(uint8_t x) {
 void ama_aes256_encrypt_block_consttime(const uint8_t round_keys[240],
                                          const uint8_t in[16],
                                          uint8_t out[16]) {
+    ama_aes256_encrypt_block_consttime_body(round_keys, in, out);
+    AMA_STACK_WIPE_BELOW(AMA_SCRUB_AES_BYTES);
+}
+
+/* ama_aes256_encrypt_block_consttime() as the library's own code calls it: the work, and nothing cleared.
+ * The entry point the caller runs under clears the whole depth
+ * (internal/ama_scrubbed_inner.h). */
+void ama_aes256_encrypt_block_consttime_inner(const uint8_t round_keys[240],
+                                              const uint8_t in[16],
+                                              uint8_t out[16]) {
     uint8_t state[16];
     uint8_t t[16];
     int round;
@@ -259,4 +290,9 @@ void ama_aes256_encrypt_block_consttime(const uint8_t round_keys[240],
     }
 
     memcpy(out, state, 16);
+}
+
+/* ama_aes256_encrypt_block_consttime_inner(), never inlined, below the frame that clears the stack it used. */
+static AMA_SCRUBBED_BODY void ama_aes256_encrypt_block_consttime_body(const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]) {
+    ama_aes256_encrypt_block_consttime_inner(round_keys, in, out);
 }
