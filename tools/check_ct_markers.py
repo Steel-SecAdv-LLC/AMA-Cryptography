@@ -214,10 +214,29 @@ def declassify_sites(path: Path, root: Path) -> list[Site]:
 
 
 _MEMBER_POINTER = re.compile(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)\s*\(([^;{}()]*)\)\s*;")
-_PROTOTYPE = re.compile(
-    r"(?:^|[;}\n])\s*(?:(?:static|inline|extern|AMA_API|AMA_\w+|__attribute__\(\([^)]*\)\))\s+)*"
-    r"[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*\(([^;{}()]*)\)\s*[;{]"
+#: A declaration or definition: a type token, whitespace or `*`, the name and
+#: a parameter list.  Every quantified piece is separated from its neighbour
+#: by a disjoint character class, so a match is linear in the input (the
+#: first spelling of this pattern nested quantifiers, which CodeQL's
+#: py/redos rightly reported as exponential).
+_PROTOTYPE = re.compile(r"\b([A-Za-z_]\w*)[\s*]+([A-Za-z_]\w*)\s*\(([^;{}()]*)\)\s*[;{]")
+#: Tokens that may precede a CALL in the shape above (`return f(x);`).
+_NOT_A_TYPE = frozenset(
+    {"return", "else", "case", "goto", "do", "sizeof", "if", "while", "for", "switch"}
 )
+_DECL_PARAM = re.compile(r"[A-Za-z_][\w\s\*\[\]]*")
+
+
+def _is_declared_parameter(param: str) -> bool:
+    """A type and a name (`const uint8_t *out`, `uint8_t k[32]`), or `void`.
+
+    A call's argument (`buf`, `&x`, `a + b`) is not one, so a call that
+    happens to follow an identifier is never read as a declaration -- which
+    would record its parameters as read-only, the unsafe direction.
+    """
+    return param in ("void", "...") or (
+        _DECL_PARAM.fullmatch(param) is not None and len(re.findall(r"[A-Za-z_]\w*", param)) >= 2
+    )
 
 
 def param_writability(sources: Sequence[Path]) -> dict[str, list[bool]]:
@@ -227,16 +246,23 @@ def param_writability(sources: Sequence[Path]) -> dict[str, list[bool]]:
     table: dict[str, list[bool]] = {}
     for path in sources:
         code = blank_comments(path.read_text(encoding="utf-8", errors="replace"))
-        for match in [*_PROTOTYPE.finditer(code), *_MEMBER_POINTER.finditer(code)]:
-            name, params = match.group(1), match.group(2).strip()
-            if name in ("if", "while", "for", "switch", "return", "sizeof"):
+        hits = [
+            (m.group(2), m.group(3))
+            for m in _PROTOTYPE.finditer(code)
+            if m.group(1) not in _NOT_A_TYPE
+        ] + [(m.group(1), m.group(2)) for m in _MEMBER_POINTER.finditer(code)]
+        for name, raw_params in hits:
+            params = raw_params.strip()
+            if name in _NOT_A_TYPE:
+                continue
+            parts = [p.strip() for p in params.split(",")] if params else []
+            if parts and not all(_is_declared_parameter(p) for p in parts):
                 continue
             if not params or params == "void":
                 flags: list[bool] = []
             else:
                 flags = []
-                for param in params.split(","):
-                    param = param.strip()
+                for param in parts:
                     indirect = "*" in param or "[" in param
                     const_pointee = bool(re.match(r"(?:const\s+\w+|\w+\s+const)\b", param))
                     flags.append(indirect and not const_pointee)
